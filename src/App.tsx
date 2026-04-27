@@ -45,7 +45,7 @@ function ProtectedRoutes() {
         <Route path="/users" element={isAdmin ? <Users /> : <Navigate to="/" replace />} />
         <Route path="/activity-log" element={isAdmin ? <ActivityLog /> : <Navigate to="/" replace />} />
         <Route path="/ledger" element={isAdmin ? <Ledger /> : <Navigate to="/" replace />} />
-        <Route path="/settings" element={<Settings />} />
+        <Route path="/settings" element={isAdmin ? <Settings /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

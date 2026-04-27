@@ -153,27 +153,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </ul>
           </div>
 
-          <div>
-            {!collapsed && (
-              <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                {isAdmin ? 'Admin' : 'System'}
-              </p>
-            )}
-            <ul className="space-y-0.5">
-              {adminNav
-                .filter((item) => {
-                  if (item.path === '/activity-log' || item.path === '/ledger') return isAdmin;
-                  return true;
-                })
-                .map((item) => (
+          {isAdmin && (
+            <div>
+              {!collapsed && (
+                <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                  Admin
+                </p>
+              )}
+              <ul className="space-y-0.5">
+                {adminNav.map((item) => (
                   <li key={item.path}>
                     <NavItem {...item} collapsed={collapsed} />
                   </li>
                 ))}
-            </ul>
-          </div>
+              </ul>
+            </div>
+          )}
 
-          {!collapsed && (
+          {!collapsed && isAdmin && (
             <div className="border-t border-slate-800 pt-4">
               <div className="rounded-lg border border-dashed border-slate-700 p-3">
                 <div className="flex items-center gap-2 text-slate-500">

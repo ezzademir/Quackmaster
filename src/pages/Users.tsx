@@ -168,24 +168,33 @@ export function Users() {
 
   async function handleApproveUser(userId: string) {
     try {
-      const { error } = await supabase
-        .from('pending_registrations')
-        .update({
-          status: 'approved',
-          reviewed_by: (await supabase.auth.getUser()).data.user?.id,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId);
+      const reviewerId = (await supabase.auth.getUser()).data.user?.id;
 
-      if (error) throw error;
-
-      // Update the profile role from pending to staff
+      // Update the profile role first. If this fails, do not mark the registration approved.
       const { error: updateError } = await supabase
         .from('profiles')
         .update({ role: 'staff' })
         .eq('id', userId);
 
       if (updateError) throw updateError;
+
+      const { error } = await supabase
+        .from('pending_registrations')
+        .update({
+          status: 'approved',
+          reviewed_by: reviewerId,
+          reviewed_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId);
+
+      if (error) {
+        // Best-effort rollback to avoid approved status while role remains non-staff.
+        await supabase
+          .from('profiles')
+          .update({ role: 'pending' })
+          .eq('id', userId);
+        throw error;
+      }
 
       await writeLedgerEntry({
         action: 'approved',
