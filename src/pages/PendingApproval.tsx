@@ -75,7 +75,7 @@ export function PendingApproval() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
       <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-lg text-center">
-        <img src="/Quackmaster_Logo.png" alt="Quackmaster" className="mx-auto mb-6 h-16 w-16" />
+        <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="mx-auto mb-6 h-16 w-16" />
 
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Awaiting Approval</h1>
         <p className="text-sm text-gray-600 mb-6">

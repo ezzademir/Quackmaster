@@ -27,7 +27,7 @@ export function Login() {
       <div className="w-full max-w-sm">
         {/* Brand */}
         <div className="mb-8 text-center">
-          <img src="/Quackmaster_Logo.png" alt="Quackmaster" className="mx-auto mb-4 h-16 w-16" />
+          <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="mx-auto mb-4 h-16 w-16" />
           <h1 className="text-2xl font-bold text-gray-900">Quackmaster ERP</h1>
           <p className="mt-1 text-sm text-gray-500">Sign in to your account</p>
         </div>

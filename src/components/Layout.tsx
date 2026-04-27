@@ -106,7 +106,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             collapsed ? 'md:justify-center' : 'gap-3'
           }`}
         >
-          <img src="/Quackmaster_Logo.png" alt="Quackmaster" className="h-9 w-9 flex-shrink-0" />
+          <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="h-9 w-9 flex-shrink-0" />
           {!collapsed && (
             <div>
               <div className="text-sm font-semibold text-white leading-tight">Quackmaster</div>
