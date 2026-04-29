@@ -1,29 +1,41 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
+/** Reflect Origin / requested headers so browser CORS checks pass from gh-pages etc. */
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin");
+  const allowHeaders = req.headers.get("Access-Control-Request-Headers") ??
+    "authorization, content-type, x-client-info, apikey";
+  return {
+    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": allowHeaders,
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+function jsonResponse(body: unknown, req: Request, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders(req),
+      "Content-Type": "application/json",
+    },
+  });
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
-      status: 200,
-      headers: corsHeaders,
+      status: 204,
+      headers: corsHeaders(req),
     });
   }
 
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Missing authorization header" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+      return jsonResponse({ error: "Missing authorization header" }, req, 401);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -38,13 +50,7 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!jwtResponse.ok) {
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+      return jsonResponse({ error: "Unauthorized" }, req, 401);
     }
 
     // Check if user is admin
@@ -61,16 +67,14 @@ Deno.serve(async (req: Request) => {
 
     const adminData = await adminCheckResponse.json();
     if (
-      !adminData ||
+      !Array.isArray(adminData) ||
       adminData.length === 0 ||
       adminData[0].role !== "admin"
     ) {
-      return new Response(
-        JSON.stringify({ error: "Only admins can fetch user emails" }),
-        {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+      return jsonResponse(
+        { error: "Only admins can fetch user emails" },
+        req,
+        403,
       );
     }
 
@@ -98,22 +102,15 @@ Deno.serve(async (req: Request) => {
       }
     );
 
-    return new Response(
-      JSON.stringify({ emails }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    return jsonResponse({ emails }, req);
   } catch (error) {
     console.error("Error:", error);
-    return new Response(
-      JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error",
-      }),
+    return jsonResponse(
       {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      req,
+      500,
     );
   }
 });

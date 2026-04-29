@@ -1,0 +1,10 @@
+# Per-function settings (see https://supabase.com/docs/guides/functions/function-configuration)
+#
+# JWT is verified inside each handler. Disabling gateway JWT lets OPTIONS preflight
+# succeed (browsers don't send Authorization on preflight); without this, CORS fails.
+
+[functions.get_user_emails]
+verify_jwt = false
+
+[functions.force_password_reset]
+verify_jwt = false

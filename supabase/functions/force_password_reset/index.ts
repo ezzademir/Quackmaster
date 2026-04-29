@@ -1,46 +1,50 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin");
+  const allowHeaders = req.headers.get("Access-Control-Request-Headers") ??
+    "authorization, content-type, x-client-info, apikey";
+  return {
+    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": allowHeaders,
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+function jsonResponse(body: unknown, req: Request, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders(req),
+      "Content-Type": "application/json",
+    },
+  });
+}
 
 Deno.serve(async (req: Request) => {
-  try {
-    if (req.method === "OPTIONS") {
-      return new Response(null, {
-        status: 200,
-        headers: corsHeaders,
-      });
-    }
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(req),
+    });
+  }
 
+  try {
     const { userId } = await req.json();
 
     if (!userId) {
-      return new Response(
-        JSON.stringify({ error: "userId is required" }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+      return jsonResponse({ error: "userId is required" }, req, 400);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!supabaseUrl || !supabaseServiceKey) {
-      return new Response(
-        JSON.stringify({ error: "Missing Supabase configuration" }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+      return jsonResponse({ error: "Missing Supabase configuration" }, req, 500);
     }
 
-    // Update profiles to set password_reset_required flag
     const response = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}`, {
       method: "PATCH",
       headers: {
@@ -56,29 +60,19 @@ Deno.serve(async (req: Request) => {
 
     if (!response.ok) {
       const error = await response.text();
-      return new Response(
-        JSON.stringify({ error: `Failed to update profile: ${error}` }),
-        {
-          status: response.status,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+      return jsonResponse(
+        { error: `Failed to update profile: ${error}` },
+        req,
+        response.status,
       );
     }
 
-    return new Response(
-      JSON.stringify({ success: true, message: "Password reset required flag set" }),
-      {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    return jsonResponse({
+      success: true,
+      message: "Password reset required flag set",
+    }, req);
   } catch (error) {
-    return new Response(
-      JSON.stringify({ error: `Server error: ${error.message}` }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonResponse({ error: `Server error: ${message}` }, req, 500);
   }
 });
