@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 /** Reflect Origin / requested headers so browser CORS checks pass from gh-pages etc. */
 function corsHeaders(req: Request): Record<string, string> {
@@ -24,6 +25,34 @@ function jsonResponse(body: unknown, req: Request, status = 200) {
   });
 }
 
+/** auth.users is NOT exposed via PostgREST; use Auth Admin API with service role. */
+async function listAllUserEmails(
+  serviceUrl: string,
+  serviceKey: string,
+): Promise<Record<string, string>> {
+  const admin = createClient(serviceUrl, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const emails: Record<string, string> = {};
+  let page = 1;
+  const perPage = 1000;
+
+  for (;;) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    const batch = data.users ?? [];
+    if (batch.length === 0) break;
+    for (const u of batch) {
+      emails[u.id] = u.email ?? "";
+    }
+    if (batch.length < perPage) break;
+    page += 1;
+  }
+
+  return emails;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -40,12 +69,14 @@ Deno.serve(async (req: Request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !supabaseKey) {
+      return jsonResponse({ error: "Missing Supabase configuration" }, req, 500);
+    }
 
-    // Verify JWT and get user
     const jwtResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
       headers: {
         Authorization: authHeader,
-        apikey: supabaseKey!,
+        apikey: supabaseKey,
       },
     });
 
@@ -53,24 +84,23 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Unauthorized" }, req, 401);
     }
 
-    // Check if user is admin
-    const supabaseAdminUrl = `${supabaseUrl}/rest/v1/profiles?id=eq.${
-      (await jwtResponse.json()).id
-    }&select=role`;
-
-    const adminCheckResponse = await fetch(supabaseAdminUrl, {
-      headers: {
-        apikey: supabaseKey!,
-        Authorization: authHeader,
-      },
+    const jwtUser = (await jwtResponse.json()) as { id?: string };
+    const adminClient = createClient(supabaseUrl, supabaseKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const adminData = await adminCheckResponse.json();
-    if (
-      !Array.isArray(adminData) ||
-      adminData.length === 0 ||
-      adminData[0].role !== "admin"
-    ) {
+    const { data: profile, error: profileErr } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", jwtUser.id ?? "")
+      .maybeSingle();
+
+    if (profileErr) {
+      console.error("profile lookup:", profileErr);
+      return jsonResponse({ error: "Failed to verify admin" }, req, 500);
+    }
+
+    if (profile?.role !== "admin") {
       return jsonResponse(
         { error: "Only admins can fetch user emails" },
         req,
@@ -78,30 +108,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get all user emails from auth.users
-    const usersResponse = await fetch(
-      `${supabaseUrl}/rest/v1/auth.users?select=id,email`,
-      {
-        headers: {
-          apikey: supabaseKey!,
-          Authorization: `Bearer ${supabaseKey}`,
-        },
-      }
-    );
-
-    if (!usersResponse.ok) {
-      throw new Error("Failed to fetch users from auth.users");
-    }
-
-    const users = await usersResponse.json();
-    const emails: { [key: string]: string } = {};
-
-    users.forEach(
-      (user: { id: string; email: string }) => {
-        emails[user.id] = user.email;
-      }
-    );
-
+    const emails = await listAllUserEmails(supabaseUrl, supabaseKey);
     return jsonResponse({ emails }, req);
   } catch (error) {
     console.error("Error:", error);
