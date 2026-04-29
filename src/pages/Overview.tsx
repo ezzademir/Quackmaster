@@ -49,18 +49,22 @@ export function Overview() {
       try {
         const [
           { data: hubRaw },
+          { data: hubProducts },
           { data: openPOs },
           { data: runs },
           { data: outlets },
           { data: pos },
           { data: prodRuns },
           { data: supplies },
-          { data: supplyOrders },
         ] = await Promise.all([
           supabase
             .from('hub_inventory')
             .select('quantity_on_hand, material:raw_material_id(cost_price, reorder_level, unit_of_measure, name)')
             .not('raw_material_id', 'is', null),
+          supabase
+            .from('hub_inventory')
+            .select('available_quantity, quantity_on_hand, reserved_quantity')
+            .is('raw_material_id', null),
           supabase
             .from('purchase_orders')
             .select('id')
@@ -88,9 +92,6 @@ export function Overview() {
             .select('id, supply_order_number, status, created_at, outlet:outlet_id(name)')
             .order('created_at', { ascending: false })
             .limit(4),
-          supabase
-            .from('supply_orders')
-            .select('total_quantity'),
         ]);
 
         // Raw material value
@@ -99,10 +100,16 @@ export function Overview() {
           return acc + row.quantity_on_hand * (mat?.cost_price ?? 0);
         }, 0);
 
-        // Hub product stock = Total Generated - Total Dispatched
-        const totalGenerated = (prodRuns || []).reduce((sum, run) => sum + (run.actual_output || 0), 0);
-        const totalDispatched = (supplyOrders || []).reduce((sum, so) => sum + (so.total_quantity || 0), 0);
-        const productStock = Math.max(0, totalGenerated - totalDispatched);
+        // Finished goods at hub: sum available quantity (matches Inventory — excludes reservations)
+        const productStock = (hubProducts ?? []).reduce((sum, row) => {
+          const reserved = row.reserved_quantity ?? 0;
+          const onHand = row.quantity_on_hand ?? 0;
+          const avail =
+            row.available_quantity != null && Number.isFinite(Number(row.available_quantity))
+              ? Number(row.available_quantity)
+              : Math.max(0, onHand - reserved);
+          return sum + avail;
+        }, 0);
 
         // Low stock items
         const lowItems: LowStockItem[] = (hubRaw || [])
