@@ -241,8 +241,7 @@ export interface QCReport {
 export function createQCReport(
   productionRunId: string,
   qcResult: QCCheckResult,
-  actions: QCAction,
-  _isAdmin: boolean
+  actions: QCAction
 ): QCReport {
   return {
     productionRunId,

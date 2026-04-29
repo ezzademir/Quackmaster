@@ -1,7 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 
-/** Matches `base` in vite.config — required for GitHub Pages (`/Quackmaster/`). */
-const ROUTER_BASENAME = import.meta.env.BASE_URL.replace(/\/$/, '');
+/** GitHub Pages only serves real files; deep links like `/Quackmaster/login` return HTTP 404 for the document. Hash routing keeps navigation in the `#/…` fragment so the browser only loads `/Quackmaster/` (index.html) with a 200. */
 import { AuthProvider, useAuth } from './utils/auth';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
@@ -64,7 +63,7 @@ function AuthRoutes() {
 
 function App() {
   return (
-    <BrowserRouter basename={ROUTER_BASENAME}>
+    <HashRouter>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<><AuthRoutes /><Login /></>} />
@@ -72,7 +71,7 @@ function App() {
           <Route path="/*" element={<ProtectedRoutes />} />
         </Routes>
       </AuthProvider>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
-import { DateFilter, type DateFilterType } from '../components/DateFilter';
+import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
 import { writeLedgerEntry } from '../utils/ledger';
@@ -162,7 +162,7 @@ export function Inventory() {
 
   useEffect(() => { loadOutletInventory(selectedOutlet || undefined); }, [selectedOutlet]);
 
-  const handleDateFilterChange = (range: DateRange | null, _newFilterType: DateFilterType) => {
+  const handleDateFilterChange = (range: DateRange | null) => {
     setDateRange(range);
   };
 

@@ -2,7 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- Relative href respects Vite base (/Quackmaster/) so the favicon works on GitHub Pages -->
+    <link rel="icon" type="image/png" href="./Quackmaster_Logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=0" />
     <title>Quackmaster ERP Dashboard</title>
     <meta property="og:image" content="https://bolt.new/static/og_default.png" />
@@ -10,6 +11,21 @@
     <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />
   </head>
   <body>
+    <!-- GitHub Pages: pathname URLs like /Quackmaster/login 404; send clients to hash routes -->
+    <script>
+      (function () {
+        if (location.hash.replace(/^#\/?/, '').length > 0) return;
+        var base = '/Quackmaster';
+        var path = location.pathname.replace(/\/$/, '');
+        if (path === '' || path === base) return;
+        if (!path.startsWith(base + '/')) return;
+        var tail = path.slice(base.length);
+        if (!tail || tail.startsWith('/assets/')) return;
+        var leaf = tail.split('/').pop() || '';
+        if (/\.[a-zA-Z0-9]+$/.test(leaf)) return;
+        location.replace(location.origin + base + '/' + location.search + '#' + tail + location.hash);
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

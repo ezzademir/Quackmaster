@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
-import { DateFilter, type DateFilterType } from '../components/DateFilter';
+import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
@@ -347,13 +347,26 @@ export function Distribution() {
     // Hub Available = Total Generated - Total Dispatched
     const currentAvailable = Math.max(0, totalGenerated - totalDispatched);
 
-    // Build outlet inventory breakdown
-    const outletInventoryBreakdown = (outletInv ?? [])
-      .map((inv) => ({
-        outletId: (inv.outlet as any)?.id ?? '',
-        outletName: (inv.outlet as any)?.name ?? '—',
-        quantity: inv.quantity_on_hand,
-      }))
+    type OutletJoinRow = { quantity_on_hand: number; outlet: unknown };
+
+    const outletInventoryBreakdown = ((outletInv ?? []) as OutletJoinRow[])
+      .map((inv) => {
+        const o = inv.outlet;
+        let id = '';
+        let label = '—';
+        if (o && typeof o === 'object') {
+          const row = Array.isArray(o) ? o[0] : o;
+          if (row && typeof row === 'object' && row !== null && 'id' in row && 'name' in row) {
+            id = String((row as { id: unknown }).id);
+            label = String((row as { name: unknown }).name);
+          }
+        }
+        return {
+          outletId: id,
+          outletName: label || '—',
+          quantity: inv.quantity_on_hand,
+        };
+      })
       .sort((a, b) => a.outletName.localeCompare(b.outletName));
 
     setOrders(orders);
@@ -370,7 +383,7 @@ export function Distribution() {
 
   useEffect(() => { loadAll(); }, []);
 
-  const handleDateFilterChange = (range: DateRange | null, _newFilterType: DateFilterType) => {
+  const handleDateFilterChange = (range: DateRange | null) => {
     setDateRange(range);
   };
 

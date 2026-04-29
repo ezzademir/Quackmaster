@@ -207,8 +207,7 @@ export interface ConflictResolutionStrategy {
 }
 
 export async function manageConcurrentOperations<T>(
-  operations: Array<{ id: string; fn: () => Promise<T> }>,
-  _strategy: ConflictResolutionStrategy = { strategy: 'first-wins' }
+  operations: Array<{ id: string; fn: () => Promise<T> }>
 ): Promise<{ results: Map<string, T>; conflicts: string[] }> {
   const results = new Map<string, T>();
   const conflicts: string[] = [];

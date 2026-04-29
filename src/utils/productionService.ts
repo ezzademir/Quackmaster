@@ -72,7 +72,7 @@ export async function completeProductionRun(
     const qcActions = determineQCActions(qcResult, params.isAdmin);
 
     // Create QC report for audit trail
-    const qcReport = createQCReport(params.productionRunId, qcResult, qcActions, params.isAdmin);
+    const qcReport = createQCReport(params.productionRunId, qcResult, qcActions);
 
     // Log QC results to ledger
     await writeLedgerEntry({
