@@ -1,4 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+
+/** Matches `base` in vite.config — required for GitHub Pages (`/Quackmaster/`). */
+const ROUTER_BASENAME = import.meta.env.BASE_URL.replace(/\/$/, '');
 import { AuthProvider, useAuth } from './utils/auth';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
@@ -61,7 +64,7 @@ function AuthRoutes() {
 
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASENAME}>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<><AuthRoutes /><Login /></>} />
