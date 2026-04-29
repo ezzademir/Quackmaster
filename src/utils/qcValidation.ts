@@ -138,7 +138,7 @@ export function determineQCActions(qcResult: QCCheckResult, isAdmin: boolean): Q
 }
 
 /**
- * Standard QC criteria by product type (examples)
+ * Built-in presets when no DB row exists (tests / offline). Production loads thresholds from `qc_audit_settings` via `fetchQCAuditCriteria`.
  */
 export function getStandardQCCriteria(productType: string): YieldCriteria {
   const criteria: Record<string, YieldCriteria> = {

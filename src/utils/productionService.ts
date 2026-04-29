@@ -9,10 +9,10 @@ import { logActivity } from './activityLog';
 import {
   evaluateProductionQC,
   determineQCActions,
-  getStandardQCCriteria,
   createQCReport,
   type QCReport,
 } from './qcValidation';
+import { fetchQCAuditCriteria } from './qcSettings';
 import { retryWithBackoff } from './errorHandling';
 
 export interface ProductionCompletionParams {
@@ -56,8 +56,8 @@ export async function completeProductionRun(
       };
     }
 
-    // Perform QC evaluation
-    const qcCriteria = getStandardQCCriteria('standard');
+    // Perform QC evaluation using admin-configured thresholds (fallback if row missing)
+    const qcCriteria = await fetchQCAuditCriteria();
     const qcResult = evaluateProductionQC(
       {
         plannedOutput: params.plannedOutput,
@@ -73,6 +73,13 @@ export async function completeProductionRun(
 
     // Create QC report for audit trail
     const qcReport = createQCReport(params.productionRunId, qcResult, qcActions);
+
+    await retryWithBackoff(async () =>
+      supabase
+        .from('production_runs')
+        .update({ yield_percentage: qcResult.yieldPercentage })
+        .eq('id', params.productionRunId)
+    );
 
     // Log QC results to ledger
     await writeLedgerEntry({
