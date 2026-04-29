@@ -34,7 +34,8 @@ function ProtectedRoutes() {
 
   if (!session) return <Navigate to="/login" replace />;
 
-  if (profile?.role === 'pending') return <PendingApproval />;
+  const role = profile?.role?.toLowerCase?.()?.trim();
+  if (role === 'pending') return <PendingApproval />;
 
   return (
     <Layout>

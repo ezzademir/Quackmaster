@@ -41,30 +41,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .maybeSingle();
     if (error) {
       console.error('Profile fetch error:', error);
+      setProfile(null);
     } else {
-      console.log('Profile fetched:', data);
       setProfile(data as Profile | null);
     }
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session?.user) fetchProfile(session.user.id);
-      setLoading(false);
-    });
+    let mounted = true;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    async function init() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!mounted) return;
       setSession(session);
       if (session?.user) {
-        (async () => { await fetchProfile(session.user.id); })();
+        await fetchProfile(session.user.id);
       } else {
         setProfile(null);
       }
-      if (event === 'SIGNED_OUT') setLoading(false);
+      if (mounted) setLoading(false);
+    }
+
+    void init();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setSession(session);
+      if (session?.user) {
+        await fetchProfile(session.user.id);
+      } else {
+        setProfile(null);
+      }
+      setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function signOut() {
@@ -82,7 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       session,
       user: session?.user ?? null,
       profile,
-      isAdmin: profile?.role === 'admin',
+      isAdmin: profile?.role?.toLowerCase?.()?.trim() === 'admin',
       loading,
       signOut,
       refetchProfile,

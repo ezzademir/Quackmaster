@@ -12,7 +12,14 @@ import { useAuth } from '../utils/auth';
 
 type Tab = 'orders' | 'outlets';
 
+/** Normalize DB status so delete visibility matches RPC (pending/cancelled only). */
+function supplyOrderAllowsAdminHardDelete(status: string | undefined): boolean {
+  const s = String(status ?? '').toLowerCase().trim();
+  return s === 'pending' || s === 'cancelled';
+}
+
 function StatusBadge({ status }: { status: string }) {
+  const key = String(status ?? '').toLowerCase().trim();
   const map: Record<string, string> = {
     pending: 'bg-blue-100 text-blue-700',
     dispatched: 'bg-amber-100 text-amber-700',
@@ -20,8 +27,8 @@ function StatusBadge({ status }: { status: string }) {
     cancelled: 'bg-gray-100 text-gray-700',
   };
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[status] ?? 'bg-gray-100 text-gray-700'}`}>
-      {status}
+    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[key] ?? 'bg-gray-100 text-gray-700'}`}>
+      {key.replace(/_/g, ' ') || '—'}
     </span>
   );
 }
@@ -278,12 +285,13 @@ function SODetailModal({
   executeAdminDelete: (order: SOWithOutlet) => Promise<boolean>;
 }) {
   const [saving, setSaving] = useState(false);
-  const canHardDelete = isAdmin && (so.status === 'pending' || so.status === 'cancelled');
+  const canHardDelete = isAdmin && supplyOrderAllowsAdminHardDelete(so.status);
 
   async function askAdminDelete() {
     if (!canHardDelete) return;
+    const stNorm = String(so.status ?? '').toLowerCase().trim();
     const detail =
-      so.status === 'pending'
+      stNorm === 'pending'
         ? 'Reserved hub stock will be released.'
         : 'This removes the cancelled record from the list.';
     if (!confirm(`Permanently delete supply order ${so.supply_order_number}?\n\n${detail}\n\nThis cannot be undone.`)) return;
@@ -548,9 +556,10 @@ export function Distribution() {
   }
 
   async function handleDeleteSupplyOrderRow(so: SOWithOutlet) {
-    if (!isAdmin || (so.status !== 'pending' && so.status !== 'cancelled')) return;
+    if (!isAdmin || !supplyOrderAllowsAdminHardDelete(so.status)) return;
+    const stNorm = String(so.status ?? '').toLowerCase().trim();
     const detail =
-      so.status === 'pending'
+      stNorm === 'pending'
         ? 'Reserved hub stock will be released.'
         : 'This removes the cancelled record from the list.';
     if (
@@ -691,7 +700,7 @@ export function Distribution() {
                             >
                               View <ChevronRight size={14} />
                             </button>
-                            {isAdmin && (so.status === 'pending' || so.status === 'cancelled') && (
+                            {isAdmin && supplyOrderAllowsAdminHardDelete(so.status) && (
                               <button
                                 type="button"
                                 onClick={() => void handleDeleteSupplyOrderRow(so)}
