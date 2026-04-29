@@ -203,23 +203,38 @@ function RecipeModal({
 // ---- New Production Run Modal ----
 interface RunMaterial { raw_material_id: string; quantity_consumed: string; required: number; material_name: string; unit: string; available_qty?: number; }
 
+function parseRunSequence(runNumber: string): number | null {
+  const m = /^RUN-(\d+)$/i.exec(String(runNumber).trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Next RUN-nnnn based on current rows (numeric suffix only). */
 function nextRunNumber(existing: string[]): string {
-  const nums = existing.map((n) => parseInt(n.replace('RUN-', ''), 10)).filter(Boolean);
+  const nums = existing.map(parseRunSequence).filter((n): n is number => n !== null);
   const max = nums.length > 0 ? Math.max(...nums) : 0;
   return `RUN-${String(max + 1).padStart(4, '0')}`;
+}
+
+async function allocateNextRunNumber(): Promise<string> {
+  const { data, error } = await supabase.rpc('next_production_run_number');
+  if (!error && typeof data === 'string') return data;
+
+  const { data: rows, error: selErr } = await supabase.from('production_runs').select('run_number');
+  if (selErr) throw selErr;
+  return nextRunNumber((rows ?? []).map((r) => r.run_number));
 }
 
 type RecipeWithIngredients = Recipe & { ingredients?: (RecipeIngredient & { material?: RawMaterial })[] };
 
 function NewRunModal({
   recipes,
-  existingNumbers,
   onClose,
   onSave,
   profile,
 }: {
   recipes: RecipeWithIngredients[];
-  existingNumbers: string[];
   onClose: () => void;
   onSave: () => void;
   profile: { role: 'admin' | 'staff' | 'pending' } | null;
@@ -336,30 +351,60 @@ function NewRunModal({
     try {
       const plannedOutput = parseFloat(planned_output) || 0;
       const actualOutputQty = parseFloat(actual_output);
-      const run_number = nextRunNumber(existingNumbers);
-      
-      // First, create production run in in_progress status
-      const { data: run, error: runErr } = await supabase
-        .from('production_runs')
-        .insert({
-          run_number,
-          recipe_id,
-          production_date,
-          planned_output: plannedOutput,
-          actual_output: actualOutputQty,
-          status: 'in_progress',
-          notes: notes || null,
-        })
-        .select()
-        .single();
 
-      if (runErr || !run) {
-        setError(runErr?.message ?? 'Failed to create production run');
+      let run: {
+        id: string;
+        run_number: string;
+        recipe_id: string;
+        production_date: string;
+        planned_output: number;
+        actual_output: number;
+        status: string;
+        notes: string | null;
+      } | null = null;
+      let run_number = '';
+
+      const maxAttempts = 12;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        run_number = await allocateNextRunNumber();
+
+        const { data: created, error: runErr } = await supabase
+          .from('production_runs')
+          .insert({
+            run_number,
+            recipe_id,
+            production_date,
+            planned_output: plannedOutput,
+            actual_output: actualOutputQty,
+            status: 'in_progress',
+            notes: notes || null,
+          })
+          .select()
+          .single();
+
+        if (!runErr && created) {
+          run = created;
+          break;
+        }
+
+        const msg = runErr?.message ?? '';
+        const dup =
+          runErr?.code === '23505' ||
+          msg.includes('production_runs_run_number_key') ||
+          msg.includes('duplicate key');
+
+        if (!dup) {
+          setError(runErr?.message ?? 'Failed to create production run');
+          setSaving(false);
+          return;
+        }
+      }
+
+      if (!run) {
+        setError('Could not allocate a unique run number. Please try again.');
         setSaving(false);
         return;
       }
-
-      // Save material consumption
       if (runMaterials.length > 0) {
         await supabase.from('production_run_materials').insert(
           runMaterials.map((m) => ({
@@ -802,7 +847,6 @@ export function Production() {
       {showNewRun && (
         <NewRunModal
           recipes={recipes}
-          existingNumbers={runs.map((r) => r.run_number)}
           onClose={() => setShowNewRun(false)}
           onSave={() => { setShowNewRun(false); loadAll(); }}
           profile={profile}
