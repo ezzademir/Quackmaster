@@ -1,6 +1,7 @@
 import { BarChart3, Users, ShoppingBag, Star, Shield, RefreshCw, Check, X } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { supabase } from '../utils/supabase';
 import type { PendingRegistration } from '../types';
 import { Modal } from '../components/Modal';
@@ -9,6 +10,7 @@ import { fetchQCAuditCriteria, saveQCAuditCriteria } from '../utils/qcSettings';
 
 export function Settings() {
   const { refetchProfile, isAdmin } = useAuth();
+  const location = useLocation();
   const [refreshing, setRefreshing] = useState(false);
   const [pendingUsers, setPendingUsers] = useState<PendingRegistration[]>([]);
   const [loadingApprovals, setLoadingApprovals] = useState(false);
@@ -17,7 +19,7 @@ export function Settings() {
   const [qcMin, setQcMin] = useState('85');
   const [qcMax, setQcMax] = useState('110');
   const [qcVariance, setQcVariance] = useState('5');
-  const [qcLoading, setQcLoading] = useState(false);
+  const [qcLoading, setQcLoading] = useState(true);
   const [qcSaving, setQcSaving] = useState(false);
   const [qcNotice, setQcNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
 
@@ -45,6 +47,14 @@ export function Settings() {
         setQcMax(String(c.maxYieldPercentage));
         setQcVariance(String(c.allowableVariance));
       })
+      .catch(() => {
+        if (!cancelled) {
+          setQcNotice({
+            tone: 'err',
+            text: 'Could not load QC settings from the server. Using defaults; save may fail until the database migration is applied.',
+          });
+        }
+      })
       .finally(() => {
         if (!cancelled) setQcLoading(false);
       });
@@ -52,6 +62,13 @@ export function Settings() {
       cancelled = true;
     };
   }, [isAdmin]);
+
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    if (q.get('section') !== 'qc') return;
+    const el = document.getElementById('qc-audit-settings');
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [location.search]);
 
   async function fetchPendingUsers() {
     setLoadingApprovals(true);
@@ -212,10 +229,16 @@ export function Settings() {
       )}
 
       {isAdmin && (
-        <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-6 shadow-sm">
-          <h2 className="mb-1 font-semibold text-gray-900 flex items-center gap-2">
+        <div
+          id="qc-audit-settings"
+          className="scroll-mt-24 rounded-xl border border-indigo-200 bg-indigo-50/40 p-6 shadow-sm"
+        >
+          <h2 className="mb-1 font-semibold text-gray-900 flex flex-wrap items-center gap-2">
             <Shield size={20} className="text-indigo-600" />
             QC audit parameters
+            {qcLoading && (
+              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-normal text-indigo-800">Loading…</span>
+            )}
           </h2>
           <p className="mb-5 text-sm text-gray-600">
             Thresholds used when completing production runs: yields outside min/max are rejected; deviation from the recipe target yield beyond allowable variance triggers a warning (staff may need admin approval).
@@ -234,64 +257,62 @@ export function Settings() {
             </div>
           )}
 
-          {qcLoading ? (
-            <p className="text-sm text-gray-500">Loading QC settings…</p>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Minimum yield (%)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={200}
-                  step={0.1}
-                  value={qcMin}
-                  onChange={(e) => setQcMin(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-                <p className="mt-1 text-xs text-gray-500">Below this is rejected</p>
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Maximum yield (%)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={200}
-                  step={0.1}
-                  value={qcMax}
-                  onChange={(e) => setQcMax(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-                <p className="mt-1 text-xs text-gray-500">Above this is rejected</p>
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Allowable variance from target (%)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.1}
-                  value={qcVariance}
-                  onChange={(e) => setQcVariance(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-                <p className="mt-1 text-xs text-gray-500">Beyond recipe target yield triggers warning</p>
-              </div>
+          <div className={`grid gap-4 sm:grid-cols-3 ${qcLoading ? 'opacity-70' : ''}`}>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Minimum yield (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={200}
+                step={0.1}
+                value={qcMin}
+                onChange={(e) => setQcMin(e.target.value)}
+                disabled={qcLoading}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
+              />
+              <p className="mt-1 text-xs text-gray-500">Below this is rejected</p>
             </div>
-          )}
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Maximum yield (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={200}
+                step={0.1}
+                value={qcMax}
+                onChange={(e) => setQcMax(e.target.value)}
+                disabled={qcLoading}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
+              />
+              <p className="mt-1 text-xs text-gray-500">Above this is rejected</p>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Allowable variance from target (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={qcVariance}
+                onChange={(e) => setQcVariance(e.target.value)}
+                disabled={qcLoading}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
+              />
+              <p className="mt-1 text-xs text-gray-500">Beyond recipe target yield triggers warning</p>
+            </div>
+          </div>
 
-          {!qcLoading && (
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={saveQCSettings}
-                disabled={qcSaving}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 transition-colors"
-              >
-                {qcSaving ? 'Saving…' : 'Save QC parameters'}
-              </button>
-            </div>
-          )}
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={saveQCSettings}
+              disabled={qcLoading || qcSaving}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 transition-colors"
+            >
+              {qcSaving ? 'Saving…' : 'Save QC parameters'}
+            </button>
+            <span className="text-xs text-gray-500">Admin only · applies to new production run completions</span>
+          </div>
         </div>
       )}
 

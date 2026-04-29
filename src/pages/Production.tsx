@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
@@ -10,6 +11,21 @@ import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
 type Tab = 'runs' | 'recipes';
+
+/** Persisted QC yield, or derived from planned/actual when older rows never saved yield_percentage */
+function effectiveRunYieldPct(run: {
+  planned_output: number;
+  actual_output: number;
+  yield_percentage?: number | null;
+}): number | null {
+  if (run.yield_percentage != null && Number.isFinite(run.yield_percentage)) {
+    return run.yield_percentage;
+  }
+  if (run.planned_output > 0) {
+    return (run.actual_output / run.planned_output) * 100;
+  }
+  return null;
+}
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
@@ -616,6 +632,7 @@ type RunWithDetails = ProductionRun & {
 
 function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => void }) {
   const variants = run.planned_output - run.actual_output;
+  const yieldPct = effectiveRunYieldPct(run);
 
   return (
     <Modal isOpen onClose={onClose} title={`Production Run: ${run.run_number}`} size="lg">
@@ -633,7 +650,7 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
               {variants.toFixed(2)} {run.recipe?.batch_unit}
             </p>
           </div>
-          <div><p className="text-xs text-gray-500">Yield</p>{run.yield_percentage != null ? <YieldBar value={run.yield_percentage} /> : <p className="text-gray-400">—</p>}</div>
+          <div><p className="text-xs text-gray-500">Yield</p>{yieldPct != null ? <YieldBar value={yieldPct} /> : <p className="text-gray-400">—</p>}</div>
           {run.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{run.notes}</p></div>}
         </div>
         {(run.materials ?? []).length > 0 && (
@@ -669,7 +686,7 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
 
 // ---- Main Production Page ----
 export function Production() {
-  const { profile } = useAuth();
+  const { profile, isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>('runs');
   const [runs, setRuns] = useState<RunWithDetails[]>([]);
   const [recipes, setRecipes] = useState<RecipeWithIngredients[]>([]);
@@ -733,10 +750,19 @@ export function Production() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Production</h1>
           <p className="mt-1 text-sm text-gray-500">Manage recipes and production runs with yield tracking</p>
+          {isAdmin && (
+            <Link
+              to="/settings?section=qc"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-50 transition-colors"
+            >
+              <Shield size={14} className="text-indigo-600" aria-hidden />
+              QC audit parameters
+            </Link>
+          )}
         </div>
         {tab === 'runs' && (
           <button onClick={() => setShowNewRun(true)}
@@ -798,7 +824,9 @@ export function Production() {
                       </td>
                     </tr>
                   ) : (
-                    filteredRuns.map((run) => (
+                    filteredRuns.map((run) => {
+                      const yieldPct = effectiveRunYieldPct(run);
+                      return (
                       <tr key={run.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{run.run_number}</td>
                         <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{run.recipe?.name ?? '—'}</td>
@@ -808,7 +836,7 @@ export function Production() {
                         <td className="hidden md:table-cell px-4 md:px-6 py-4">
                           <VariantsBadge planned={run.planned_output} actual={run.actual_output} />
                         </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4">{run.yield_percentage != null ? <YieldBar value={run.yield_percentage} /> : <span className="text-gray-400">—</span>}</td>
+                        <td className="hidden md:table-cell px-4 md:px-6 py-4">{yieldPct != null ? <YieldBar value={yieldPct} /> : <span className="text-gray-400">—</span>}</td>
                         <td className="px-4 md:px-6 py-4"><StatusBadge status={run.status} /></td>
                         <td className="px-4 md:px-6 py-4">
                           <button onClick={() => setViewRun(run)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800">
@@ -816,7 +844,8 @@ export function Production() {
                           </button>
                         </td>
                       </tr>
-                    ))
+                    );
+                    })
                   )}
                 </tbody>
               </table>
