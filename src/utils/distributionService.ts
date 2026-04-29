@@ -10,6 +10,7 @@ import {
   checkInventoryAvailability,
   reserveInventory,
   releaseReservation,
+  fulfillReservation,
 } from './inventory';
 import { retryWithBackoff } from './errorHandling';
 
@@ -33,6 +34,52 @@ export interface SupplyOrderCreationResult {
   errors: string[];
 }
 
+/** Credit outlet_inventory after Hub confirms shipment delivered */
+async function bumpOutletStock(
+  outletId: string,
+  productBatch: string,
+  qty: number
+): Promise<{ success: boolean; error?: string }> {
+  const { data: existing, error: selErr } = await supabase
+    .from('outlet_inventory')
+    .select('id, quantity_on_hand, reserved_quantity')
+    .eq('outlet_id', outletId)
+    .eq('product_batch', productBatch)
+    .maybeSingle();
+
+  if (selErr) return { success: false, error: selErr.message };
+
+  const iso = new Date().toISOString();
+
+  if (existing) {
+    const newQoh = Number(existing.quantity_on_hand) + qty;
+    const reserved = Number(existing.reserved_quantity ?? 0);
+    const { error } = await supabase
+      .from('outlet_inventory')
+      .update({
+        quantity_on_hand: newQoh,
+        available_quantity: newQoh - reserved,
+        last_updated: iso,
+        updated_at: iso,
+      })
+      .eq('id', existing.id);
+    if (error) return { success: false, error: error.message };
+  } else {
+    const { error } = await supabase.from('outlet_inventory').insert({
+      outlet_id: outletId,
+      product_batch: productBatch,
+      quantity_on_hand: qty,
+      reserved_quantity: 0,
+      available_quantity: qty,
+      last_updated: iso,
+      updated_at: iso,
+    });
+    if (error) return { success: false, error: error.message };
+  }
+
+  return { success: true };
+}
+
 /**
  * Create supply order with atomic reservation of inventory
  * Ensures all items are available before creating the order
@@ -44,7 +91,6 @@ export async function createSupplyOrder(
   const reservations: SupplyOrderCreationResult['reservations'] = [];
 
   try {
-    // Pre-check: Validate all items are available
     for (const item of params.items) {
       const check = await checkInventoryAvailability(item.hubInventoryId, item.quantity);
       if (!check.canReserve) {
@@ -56,7 +102,6 @@ export async function createSupplyOrder(
       return { success: false, reservations: [], errors };
     }
 
-    // Create supply order
     const { data: supplyOrder, error: orderErr } = await retryWithBackoff(async () => await
       supabase
         .from('supply_orders')
@@ -76,7 +121,6 @@ export async function createSupplyOrder(
       throw new Error(`Failed to create supply order: ${orderErr?.message}`);
     }
 
-    // Attempt to reserve all items
     for (const item of params.items) {
       try {
         const result = await retryWithBackoff(async () => await
@@ -101,22 +145,39 @@ export async function createSupplyOrder(
       }
     }
 
-    // If any reservations failed, rollback and delete the order
     if (errors.length > 0) {
-      // Release successful reservations
       for (const res of reservations) {
         if (res.reserved) {
           await releaseReservation(res.item.hubInventoryId, res.item.quantity, supplyOrder.id);
         }
       }
-
-      // Delete incomplete order
       await supabase.from('supply_orders').delete().eq('id', supplyOrder.id);
-
       return { success: false, reservations, errors };
     }
 
-    // Log activity and ledger
+    const { error: linesErr } = await supabase.from('supply_order_lines').insert(
+      params.items.map((item) => ({
+        supply_order_id: supplyOrder.id,
+        hub_inventory_id: item.hubInventoryId,
+        product_batch: item.product_batch,
+        quantity: item.quantity,
+      }))
+    );
+
+    if (linesErr) {
+      for (const res of reservations) {
+        if (res.reserved) {
+          await releaseReservation(res.item.hubInventoryId, res.item.quantity, supplyOrder.id);
+        }
+      }
+      await supabase.from('supply_orders').delete().eq('id', supplyOrder.id);
+      return {
+        success: false,
+        reservations,
+        errors: [`Failed to save order lines: ${linesErr.message}`],
+      };
+    }
+
     await logActivity({
       action: 'created',
       entityType: 'supply_order',
@@ -158,14 +219,13 @@ export async function createSupplyOrder(
 }
 
 /**
- * Dispatch supply order and convert reservations to actual deductions
+ * Dispatch supply order — fulfill hub reservations (goods leave Hub toward outlets)
  */
 export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    // Get supply order and items
     const { data: order, error: orderErr } = await supabase
       .from('supply_orders')
-      .select('id, status, dispatch_date')
+      .select('id, status')
       .eq('id', supplyOrderId)
       .single();
 
@@ -177,7 +237,24 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
       return { success: false, error: `Cannot dispatch order with status: ${order.status}` };
     }
 
-    // Update status to dispatched
+    const { data: lines } = await supabase
+      .from('supply_order_lines')
+      .select('hub_inventory_id, quantity')
+      .eq('supply_order_id', supplyOrderId);
+
+    if (lines?.length) {
+      for (const line of lines) {
+        const result = await fulfillReservation(
+          line.hub_inventory_id,
+          Number(line.quantity),
+          supplyOrderId
+        );
+        if (!result.success) {
+          return { success: false, error: result.error ?? 'Failed to fulfill hub reservation' };
+        }
+      }
+    }
+
     await retryWithBackoff(async () => await
       supabase
         .from('supply_orders')
@@ -209,11 +286,10 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
 }
 
 /**
- * Confirm receipt at outlet and convert hub inventory to outlet inventory
+ * Confirm receipt at outlet — credit outlet_inventory
  */
 export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    // Get supply order
     const { data: order, error: orderErr } = await supabase
       .from('supply_orders')
       .select('id, outlet_id, status')
@@ -228,8 +304,24 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
       return { success: false, error: `Cannot receive order with status: ${order.status}` };
     }
 
-    // TODO: In full implementation, would fetch supply_order_items to get quantities
-    // For now, just update the status
+    const { data: lines } = await supabase
+      .from('supply_order_lines')
+      .select('product_batch, quantity')
+      .eq('supply_order_id', supplyOrderId);
+
+    if (lines?.length) {
+      for (const line of lines) {
+        const bumped = await bumpOutletStock(
+          order.outlet_id,
+          line.product_batch,
+          Number(line.quantity)
+        );
+        if (!bumped.success) {
+          return { success: false, error: bumped.error ?? 'Failed to update outlet inventory' };
+        }
+      }
+    }
+
     await retryWithBackoff(async () => await
       supabase
         .from('supply_orders')
@@ -260,14 +352,13 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
 }
 
 /**
- * Cancel supply order and release reservations
+ * Cancel pending supply order and release hub reservations
  */
 export async function cancelSupplyOrder(
   supplyOrderId: string,
   reason: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Get supply order
     const { data: order } = await supabase
       .from('supply_orders')
       .select('id, status')
@@ -278,9 +369,26 @@ export async function cancelSupplyOrder(
       return { success: false, error: 'Cannot cancel received orders' };
     }
 
-    // Get reserved items to release
-    // Note: This assumes we track reservations separately; adjust based on your schema
-    // For now, just update the order status
+    if (order.status === 'pending') {
+      const { data: lines } = await supabase
+        .from('supply_order_lines')
+        .select('hub_inventory_id, quantity')
+        .eq('supply_order_id', supplyOrderId);
+
+      if (lines?.length) {
+        for (const line of lines) {
+          const result = await releaseReservation(
+            line.hub_inventory_id,
+            Number(line.quantity),
+            supplyOrderId
+          );
+          if (!result.success) {
+            return { success: false, error: result.error ?? 'Failed to release reservation' };
+          }
+        }
+      }
+    }
+
     await retryWithBackoff(async () => await
       supabase.from('supply_orders').update({ status: 'cancelled' }).eq('id', supplyOrderId)
     );
@@ -308,9 +416,6 @@ export async function cancelSupplyOrder(
   }
 }
 
-/**
- * Generate supply order number
- */
 function generateSupplyOrderNumber(): string {
   const timestamp = Date.now().toString().slice(-8);
   return `SO-${timestamp}`;

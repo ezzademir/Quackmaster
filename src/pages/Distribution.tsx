@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
@@ -16,6 +16,7 @@ function StatusBadge({ status }: { status: string }) {
     pending: 'bg-blue-100 text-blue-700',
     dispatched: 'bg-amber-100 text-amber-700',
     received: 'bg-emerald-100 text-emerald-700',
+    cancelled: 'bg-gray-100 text-gray-700',
   };
   return (
     <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[status] ?? 'bg-gray-100 text-gray-700'}`}>
@@ -369,14 +370,14 @@ export function Distribution() {
   const [showOutletModal, setShowOutletModal] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
 
-  async function loadAll() {
-    setLoading(true);
+  const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     const [{ data: sos }, { data: outs }, { data: prodRuns }, { data: outletInv }, { data: hubProducts }] =
       await Promise.all([
       supabase.from('supply_orders').select(`*, outlet:outlet_id(*)`).order('created_at', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
       supabase.from('production_runs').select('actual_output').eq('status', 'completed'),
-      supabase.from('outlet_inventory').select(`quantity_on_hand, outlet:outlet_id(id, name)`),
+      supabase.from('outlet_inventory').select('outlet_id, quantity_on_hand'),
       supabase
         .from('hub_inventory')
         .select('id, product_batch, available_quantity, quantity_on_hand, reserved_quantity, last_updated')
@@ -411,26 +412,20 @@ export function Distribution() {
     // Hub available = actual finished-goods stock (matches Overview / Inventory)
     const currentAvailable = hubLines.reduce((sum, r) => sum + Math.max(0, r.available), 0);
 
-    type OutletJoinRow = { quantity_on_hand: number; outlet: unknown };
+    const qtyByOutlet = new Map<string, number>();
+    for (const inv of outletInv ?? []) {
+      const oid = (inv as { outlet_id: string }).outlet_id;
+      if (!oid) continue;
+      const q = Number((inv as { quantity_on_hand: number }).quantity_on_hand ?? 0);
+      qtyByOutlet.set(oid, (qtyByOutlet.get(oid) ?? 0) + q);
+    }
 
-    const outletInventoryBreakdown = ((outletInv ?? []) as OutletJoinRow[])
-      .map((inv) => {
-        const o = inv.outlet;
-        let id = '';
-        let label = '—';
-        if (o && typeof o === 'object') {
-          const row = Array.isArray(o) ? o[0] : o;
-          if (row && typeof row === 'object' && row !== null && 'id' in row && 'name' in row) {
-            id = String((row as { id: unknown }).id);
-            label = String((row as { name: unknown }).name);
-          }
-        }
-        return {
-          outletId: id,
-          outletName: label || '—',
-          quantity: inv.quantity_on_hand,
-        };
-      })
+    const outletInventoryBreakdown = outlets_list
+      .map((o) => ({
+        outletId: o.id,
+        outletName: o.name,
+        quantity: qtyByOutlet.get(o.id) ?? 0,
+      }))
       .sort((a, b) => a.outletName.localeCompare(b.outletName));
 
     setOrders(orders);
@@ -444,9 +439,40 @@ export function Distribution() {
       outletInventory: outletInventoryBreakdown,
     });
     setLoading(false);
-  }
+  }, []);
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    void loadAll();
+
+    const channel = supabase
+      .channel('distribution-hub-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'hub_inventory' },
+        () => void loadAll({ silent: true })
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'supply_orders' },
+        () => void loadAll({ silent: true })
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'outlet_inventory' },
+        () => void loadAll({ silent: true })
+      )
+      .subscribe();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadAll({ silent: true });
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      void supabase.removeChannel(channel);
+    };
+  }, [loadAll]);
 
   const handleDateFilterChange = (range: DateRange | null) => {
     setDateRange(range);
@@ -513,7 +539,7 @@ export function Distribution() {
         <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
           <p className="text-xs font-medium uppercase text-teal-600">Hub Available</p>
           <p className="mt-2 text-2xl font-bold text-teal-900">{displayMetrics.currentAvailable.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-teal-600">in hand</p>
+          <p className="mt-1 text-xs text-teal-600">Available (after reservations)</p>
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <p className="text-xs font-medium uppercase text-emerald-600">At Outlets</p>

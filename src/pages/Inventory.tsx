@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
@@ -114,8 +114,8 @@ export function Inventory() {
   const [adjustRow, setAdjustRow] = useState<HubRow | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
 
-  async function loadAll() {
-    setLoading(true);
+  const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     const [{ data: hubInv }, { data: outs }] = await Promise.all([
       supabase.from('hub_inventory').select(`*, material:raw_material_id(*)`).order('last_updated', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
@@ -140,9 +140,9 @@ export function Inventory() {
     });
     setHubRows(rows);
     setLoading(false);
-  }
+  }, []);
 
-  async function loadOutletInventory(outletId?: string) {
+  const loadOutletInventory = useCallback(async (outletId?: string) => {
     const query = supabase.from('outlet_inventory').select(`*, outlet:outlet_id(*)`).order('last_updated', { ascending: false });
     if (outletId) query.eq('outlet_id', outletId);
     const { data } = await query;
@@ -156,11 +156,45 @@ export function Inventory() {
       last_updated: inv.last_updated,
     }));
     setOutletRows(rows);
-  }
+  }, []);
 
-  useEffect(() => { loadAll(); loadOutletInventory(); }, []);
+  useEffect(() => {
+    void loadAll();
+    void loadOutletInventory();
+  }, [loadAll, loadOutletInventory]);
 
-  useEffect(() => { loadOutletInventory(selectedOutlet || undefined); }, [selectedOutlet]);
+  useEffect(() => {
+    void loadOutletInventory(selectedOutlet || undefined);
+  }, [selectedOutlet, loadOutletInventory]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('inventory-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'hub_inventory' },
+        () => void loadAll({ silent: true })
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'outlet_inventory' },
+        () => void loadOutletInventory(selectedOutlet || undefined)
+      )
+      .subscribe();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void loadAll({ silent: true });
+        void loadOutletInventory(selectedOutlet || undefined);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      void supabase.removeChannel(channel);
+    };
+  }, [loadAll, loadOutletInventory, selectedOutlet]);
 
   const handleDateFilterChange = (range: DateRange | null) => {
     setDateRange(range);
@@ -190,7 +224,7 @@ export function Inventory() {
           <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
           <p className="mt-1 text-sm text-gray-500">Hub (Quackmaster) and Outlet (Quackteow) stock levels</p>
         </div>
-        <button onClick={() => { loadAll(); loadOutletInventory(selectedOutlet || undefined); }}
+        <button onClick={() => { void loadAll(); void loadOutletInventory(selectedOutlet || undefined); }}
           className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
           <RefreshCw size={16} /> Refresh
         </button>
@@ -376,7 +410,7 @@ export function Inventory() {
         <AdjustModal
           row={adjustRow}
           onClose={() => setAdjustRow(null)}
-          onSave={() => { setAdjustRow(null); loadAll(); }}
+          onSave={() => { setAdjustRow(null); void loadAll(); }}
         />
       )}
     </div>

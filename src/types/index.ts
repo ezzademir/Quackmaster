@@ -137,7 +137,7 @@ export interface SupplyOrder {
   outlet_id: string;
   dispatch_date: string;
   received_date?: string;
-  status: 'pending' | 'dispatched' | 'received';
+  status: 'pending' | 'dispatched' | 'received' | 'cancelled';
   total_quantity: number;
   notes?: string;
   created_at: string;
