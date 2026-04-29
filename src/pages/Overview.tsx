@@ -134,10 +134,10 @@ export function Overview() {
 
         setLowStock(lowItems);
 
-        // Average yield
+        // Average yield (Postgres numeric may arrive as string — coerce for math)
         const yieldVals = (runs || [])
-          .map((r) => r.yield_percentage)
-          .filter((v): v is number => v !== null);
+          .map((r) => Number(r.yield_percentage))
+          .filter((n): n is number => Number.isFinite(n));
         const avgYield =
           yieldVals.length > 0
             ? yieldVals.reduce((a, b) => a + b, 0) / yieldVals.length
@@ -166,11 +166,15 @@ export function Overview() {
         }
         for (const run of prodRuns ?? []) {
           const recipe = run.recipe as unknown as { name: string } | null;
+          const yRaw = run.yield_percentage;
+          const yNum =
+            yRaw != null && yRaw !== '' ? Number(yRaw) : NaN;
+          const yieldLabel = Number.isFinite(yNum) ? `${yNum.toFixed(1)}` : '—';
           items.push({
             id: `run-${run.id}`,
             type: 'production',
             label: run.run_number,
-            detail: `Production run · ${recipe?.name ?? 'Unknown recipe'} · Yield ${run.yield_percentage?.toFixed(1) ?? '—'}%`,
+            detail: `Production run · ${recipe?.name ?? 'Unknown recipe'} · Yield ${yieldLabel}%`,
             time: run.created_at,
           });
         }
@@ -209,8 +213,11 @@ export function Overview() {
   };
 
   function timeAgo(iso: string) {
-    const diff = Date.now() - new Date(iso).getTime();
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return '—';
+    const diff = Date.now() - t;
     const mins = Math.floor(diff / 60000);
+    if (mins < 0) return 'just now';
     if (mins < 60) return `${mins}m ago`;
     const hrs = Math.floor(mins / 60);
     if (hrs < 24) return `${hrs}h ago`;
@@ -267,7 +274,7 @@ export function Overview() {
             color: 'bg-teal-50 text-teal-600',
             label: 'Avg Production Yield',
             value:
-              kpis?.avgYield != null
+              kpis?.avgYield != null && Number.isFinite(kpis.avgYield)
                 ? `${kpis.avgYield.toFixed(1)}%`
                 : '—',
             sub: 'Last 30 completed runs',

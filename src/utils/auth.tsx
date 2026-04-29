@@ -51,17 +51,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     async function init() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!mounted) return;
-      setSession(session);
-      if (session?.user) {
-        await fetchProfile(session.user.id);
-      } else {
-        setProfile(null);
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!mounted) return;
+        setSession(session);
+        if (session?.user) {
+          try {
+            await fetchProfile(session.user.id);
+          } catch (e) {
+            console.error('Profile load failed:', e);
+            setProfile(null);
+          }
+        } else {
+          setProfile(null);
+        }
+      } finally {
+        if (mounted) setLoading(false);
       }
-      if (mounted) setLoading(false);
     }
 
     void init();
@@ -70,12 +78,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
-      if (session?.user) {
-        await fetchProfile(session.user.id);
-      } else {
+      try {
+        if (session?.user) {
+          await fetchProfile(session.user.id);
+        } else {
+          setProfile(null);
+        }
+      } catch (e) {
+        console.error('Profile load failed:', e);
         setProfile(null);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => {
