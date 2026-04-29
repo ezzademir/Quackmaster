@@ -420,3 +420,47 @@ function generateSupplyOrderNumber(): string {
   const timestamp = Date.now().toString().slice(-8);
   return `SO-${timestamp}`;
 }
+
+/** Hard-delete a supply order (admin RPC). Pending orders release hub reservations first. */
+export async function adminDeleteSupplyOrder(options: {
+  supplyOrderId: string;
+  supplyOrderNumber: string;
+  status: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.rpc('admin_delete_supply_order', {
+      p_supply_order_id: options.supplyOrderId,
+    });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    await writeLedgerEntry({
+      action: 'deleted',
+      entityType: 'supply_order',
+      entityId: options.supplyOrderId,
+      module: 'distribution',
+      operation: 'delete',
+      beforeData: {
+        supply_order_number: options.supplyOrderNumber,
+        status: options.status,
+      },
+    });
+
+    await logActivity({
+      action: 'deleted',
+      entityType: 'supply_order',
+      entityId: options.supplyOrderId,
+      entityLabel: options.supplyOrderNumber,
+      details: { status: options.status },
+    });
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to delete supply order',
+    };
+  }
+}

@@ -5,9 +5,10 @@ import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
-import { dispatchSupplyOrder, confirmSupplyOrderReceipt, createSupplyOrder } from '../utils/distributionService';
+import { dispatchSupplyOrder, confirmSupplyOrderReceipt, createSupplyOrder, adminDeleteSupplyOrder } from '../utils/distributionService';
 import { validateSupplyOrder } from '../utils/validation';
 import type { Outlet, SupplyOrder } from '../types';
+import { useAuth } from '../utils/auth';
 
 type Tab = 'orders' | 'outlets';
 
@@ -263,8 +264,40 @@ function NewSupplyOrderModal({
 // ---- Supply Order Detail Modal ----
 type SOWithOutlet = SupplyOrder & { outlet?: Outlet };
 
-function SODetailModal({ so, onClose, onStatusChange }: { so: SOWithOutlet; onClose: () => void; onStatusChange: () => void }) {
+function SODetailModal({
+  so,
+  onClose,
+  onStatusChange,
+  isAdmin,
+  executeAdminDelete,
+}: {
+  so: SOWithOutlet;
+  onClose: () => void;
+  onStatusChange: () => void;
+  isAdmin: boolean;
+  executeAdminDelete: (order: SOWithOutlet) => Promise<boolean>;
+}) {
   const [saving, setSaving] = useState(false);
+  const canHardDelete = isAdmin && (so.status === 'pending' || so.status === 'cancelled');
+
+  async function askAdminDelete() {
+    if (!canHardDelete) return;
+    const detail =
+      so.status === 'pending'
+        ? 'Reserved hub stock will be released.'
+        : 'This removes the cancelled record from the list.';
+    if (!confirm(`Permanently delete supply order ${so.supply_order_number}?\n\n${detail}\n\nThis cannot be undone.`)) return;
+    setSaving(true);
+    try {
+      const ok = await executeAdminDelete(so);
+      if (ok) {
+        onClose();
+        onStatusChange();
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function markDispatched() {
     setSaving(true);
@@ -318,8 +351,18 @@ function SODetailModal({ so, onClose, onStatusChange }: { so: SOWithOutlet; onCl
           {so.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{so.notes}</p></div>}
         </div>
       </div>
-      <div className="mt-6 flex flex-wrap justify-between gap-3">
-        <div className="flex gap-2">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          {canHardDelete && (
+            <button
+              type="button"
+              onClick={() => void askAdminDelete()}
+              disabled={saving}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60 transition-colors"
+            >
+              {saving ? 'Deleting…' : 'Delete order'}
+            </button>
+          )}
           {so.status === 'pending' && (
             <button onClick={markDispatched} disabled={saving}
               className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60 transition-colors">
@@ -333,7 +376,7 @@ function SODetailModal({ so, onClose, onStatusChange }: { so: SOWithOutlet; onCl
             </button>
           )}
         </div>
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
+        <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
       </div>
     </Modal>
   );
@@ -348,6 +391,7 @@ interface StockMetrics {
 }
 
 export function Distribution() {
+  const { isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>('orders');
   const [orders, setOrders] = useState<SOWithOutlet[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
@@ -490,6 +534,36 @@ export function Distribution() {
     outletInventory: stockMetrics.outletInventory,
   };
 
+  async function executeAdminDeleteSupplyOrder(so: SOWithOutlet): Promise<boolean> {
+    const result = await adminDeleteSupplyOrder({
+      supplyOrderId: so.id,
+      supplyOrderNumber: so.supply_order_number,
+      status: so.status,
+    });
+    if (!result.success) {
+      alert(result.error ?? 'Could not delete supply order');
+      return false;
+    }
+    return true;
+  }
+
+  async function handleDeleteSupplyOrderRow(so: SOWithOutlet) {
+    if (!isAdmin || (so.status !== 'pending' && so.status !== 'cancelled')) return;
+    const detail =
+      so.status === 'pending'
+        ? 'Reserved hub stock will be released.'
+        : 'This removes the cancelled record from the list.';
+    if (
+      !confirm(`Permanently delete supply order ${so.supply_order_number}?\n\n${detail}\n\nThis cannot be undone.`)
+    ) {
+      return;
+    }
+    if (await executeAdminDeleteSupplyOrder(so)) {
+      if (viewSO?.id === so.id) setViewSO(null);
+      void loadAll();
+    }
+  }
+
   async function deleteOutlet(id: string) {
     if (!confirm('Delete this outlet?')) return;
     const o = outlets.find((x) => x.id === id);
@@ -588,13 +662,13 @@ export function Distribution() {
                     <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
                     <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                    <th className="w-12 px-4 md:px-6 py-3" />
+                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center">
+                      <td colSpan={8} className="px-6 py-12 text-center">
                         <Truck className="mx-auto mb-3 text-gray-300" size={40} />
                         <p className="text-gray-400">No supply orders yet</p>
                       </td>
@@ -609,9 +683,26 @@ export function Distribution() {
                         <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs">{so.received_date ? new Date(so.received_date).toLocaleDateString() : '—'}</td>
                         <td className="px-4 md:px-6 py-4"><StatusBadge status={so.status} /></td>
                         <td className="px-4 md:px-6 py-4">
-                          <button onClick={() => setViewSO(so)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800">
-                            View <ChevronRight size={14} />
-                          </button>
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setViewSO(so)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                            >
+                              View <ChevronRight size={14} />
+                            </button>
+                            {isAdmin && (so.status === 'pending' || so.status === 'cancelled') && (
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteSupplyOrderRow(so)}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
+                                title="Delete supply order (admin)"
+                              >
+                                <Trash2 size={14} aria-hidden />
+                                Delete
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -676,6 +767,8 @@ export function Distribution() {
           so={viewSO}
           onClose={() => setViewSO(null)}
           onStatusChange={() => { setViewSO(null); loadAll(); }}
+          isAdmin={isAdmin}
+          executeAdminDelete={executeAdminDeleteSupplyOrder}
         />
       )}
       {showOutletModal && (
