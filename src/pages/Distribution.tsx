@@ -106,15 +106,47 @@ function OutletModal({
   );
 }
 
+/** Split requested qty across hub product batches (FIFO by last_updated). */
+function allocateHubProductItems(
+  batches: { id: string; product_batch: string | null; available: number; last_updated?: string }[],
+  quantity: number
+): { product_batch: string; hubInventoryId: string; quantity: number }[] | null {
+  const sorted = [...batches]
+    .filter((b) => b.available > 0)
+    .sort(
+      (a, b) =>
+        new Date(a.last_updated ?? 0).getTime() - new Date(b.last_updated ?? 0).getTime()
+    );
+  let remaining = quantity;
+  const items: { product_batch: string; hubInventoryId: string; quantity: number }[] = [];
+
+  for (const b of sorted) {
+    const take = Math.min(remaining, b.available);
+    if (take <= 0) continue;
+    items.push({
+      product_batch: b.product_batch ?? 'PRODUCT',
+      hubInventoryId: b.id,
+      quantity: take,
+    });
+    remaining -= take;
+    if (remaining <= 1e-9) break;
+  }
+
+  if (remaining > 1e-6) return null;
+  return items.length > 0 ? items : null;
+}
+
 // ---- New Supply Order Modal ----
 function NewSupplyOrderModal({
   outlets,
   hubProductQty,
+  hubProductLines,
   onClose,
   onSave,
 }: {
   outlets: Outlet[];
   hubProductQty: number;
+  hubProductLines: { id: string; product_batch: string | null; available: number; last_updated?: string }[];
   onClose: () => void;
   onSave: () => void;
 }) {
@@ -147,9 +179,16 @@ function NewSupplyOrderModal({
     setSaving(true);
 
     try {
-      // This is a simplified call; in a real app, you'd track individual batch IDs.
-      // For now, we assume a single 'HUB_PRODUCT' batch.
-      const items = [{ product_batch: 'HUB_PRODUCT', hubInventoryId: 'hardcoded_hub_product_id', quantity: qty }];
+      const items = allocateHubProductItems(hubProductLines, qty);
+      if (!items?.length) {
+        setError(
+          hubProductQty <= 0
+            ? 'No finished goods in hub inventory. Complete a production run first.'
+            : `Insufficient hub stock (${hubProductQty} units available across batches)`
+        );
+        setSaving(false);
+        return;
+      }
 
       const result = await createSupplyOrder({
         outletId: outlet_id,
@@ -312,6 +351,10 @@ export function Distribution() {
   const [orders, setOrders] = useState<SOWithOutlet[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [hubProductQty, setHubProductQty] = useState(0);
+  /** Finished-goods hub rows for reservations (real UUIDs). */
+  const [hubProductLines, setHubProductLines] = useState<
+    { id: string; product_batch: string | null; available: number; last_updated?: string }[]
+  >([]);
   const [stockMetrics, setStockMetrics] = useState<StockMetrics>({
     totalGenerated: 0,
     totalDispatched: 0,
@@ -328,11 +371,17 @@ export function Distribution() {
 
   async function loadAll() {
     setLoading(true);
-    const [{ data: sos }, { data: outs }, { data: prodRuns }, { data: outletInv }] = await Promise.all([
+    const [{ data: sos }, { data: outs }, { data: prodRuns }, { data: outletInv }, { data: hubProducts }] =
+      await Promise.all([
       supabase.from('supply_orders').select(`*, outlet:outlet_id(*)`).order('created_at', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
       supabase.from('production_runs').select('actual_output').eq('status', 'completed'),
       supabase.from('outlet_inventory').select(`quantity_on_hand, outlet:outlet_id(id, name)`),
+      supabase
+        .from('hub_inventory')
+        .select('id, product_batch, available_quantity, quantity_on_hand, reserved_quantity, last_updated')
+        .is('raw_material_id', null)
+        .order('last_updated', { ascending: true }),
     ]);
 
     const orders = sos as SOWithOutlet[] ?? [];
@@ -344,8 +393,23 @@ export function Distribution() {
     // Calculate total dispatched (pending + dispatched + received)
     const totalDispatched = orders.reduce((sum, so) => sum + (so.total_quantity || 0), 0);
 
-    // Hub Available = Total Generated - Total Dispatched
-    const currentAvailable = Math.max(0, totalGenerated - totalDispatched);
+    const hubLines = (hubProducts ?? []).map((row) => {
+      const reserved = row.reserved_quantity ?? 0;
+      const onHand = row.quantity_on_hand ?? 0;
+      const avail =
+        row.available_quantity != null && Number.isFinite(Number(row.available_quantity))
+          ? Number(row.available_quantity)
+          : Math.max(0, onHand - reserved);
+      return {
+        id: row.id,
+        product_batch: row.product_batch,
+        available: avail,
+        last_updated: row.last_updated,
+      };
+    });
+
+    // Hub available = actual finished-goods stock (matches Overview / Inventory)
+    const currentAvailable = hubLines.reduce((sum, r) => sum + Math.max(0, r.available), 0);
 
     type OutletJoinRow = { quantity_on_hand: number; outlet: unknown };
 
@@ -371,6 +435,7 @@ export function Distribution() {
 
     setOrders(orders);
     setOutlets(outlets_list);
+    setHubProductLines(hubLines);
     setHubProductQty(currentAvailable);
     setStockMetrics({
       totalGenerated,
@@ -575,6 +640,7 @@ export function Distribution() {
         <NewSupplyOrderModal
           outlets={outlets}
           hubProductQty={hubProductQty}
+          hubProductLines={hubProductLines}
           onClose={() => setShowNewSO(false)}
           onSave={() => { setShowNewSO(false); loadAll(); }}
         />
