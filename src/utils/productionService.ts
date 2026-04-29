@@ -245,6 +245,47 @@ export async function completeProductionRun(
 /**
  * Reject production run (manual override by QC inspector)
  */
+/** Permanently delete a production run (admin RPC). Reverses hub inventory when completed. */
+export async function deleteProductionRun(options: {
+  runId: string;
+  runNumber: string;
+  status: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.rpc('admin_delete_production_run', {
+      p_run_id: options.runId,
+    });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    await writeLedgerEntry({
+      action: 'deleted',
+      entityType: 'production_run',
+      entityId: options.runId,
+      module: 'production',
+      operation: 'delete',
+      beforeData: { run_number: options.runNumber, status: options.status },
+    });
+
+    await logActivity({
+      action: 'deleted',
+      entityType: 'production_run',
+      entityId: options.runId,
+      entityLabel: options.runNumber,
+      details: { status: options.status },
+    });
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to delete production run',
+    };
+  }
+}
+
 export async function rejectProductionRun(
   productionRunId: string,
   reason: string

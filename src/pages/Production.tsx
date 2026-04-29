@@ -6,7 +6,7 @@ import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
-import { completeProductionRun } from '../utils/productionService';
+import { completeProductionRun, deleteProductionRun } from '../utils/productionService';
 import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
@@ -737,6 +737,32 @@ export function Production() {
     loadAll();
   }
 
+  async function handleDeleteProductionRun(run: RunWithDetails) {
+    if (!isAdmin) return;
+    const detail =
+      run.status === 'completed'
+        ? 'This will remove the hub finished-goods batch (if present), restore consumed raw materials to hub stock, and delete the run record.'
+        : 'This will delete the run and its material lines.';
+    if (
+      !confirm(
+        `Permanently delete production run ${run.run_number}?\n\n${detail}\n\nThis cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    const result = await deleteProductionRun({
+      runId: run.id,
+      runNumber: run.run_number,
+      status: run.status,
+    });
+    if (!result.success) {
+      alert(result.error ?? 'Could not delete production run');
+      return;
+    }
+    if (viewRun?.id === run.id) setViewRun(null);
+    loadAll();
+  }
+
   function openEditRecipe(recipe: RecipeWithIngredients) {
     setEditRecipe(recipe);
     setEditIngredients(recipe.ingredients ?? []);
@@ -839,9 +865,26 @@ export function Production() {
                         <td className="hidden md:table-cell px-4 md:px-6 py-4">{yieldPct != null ? <YieldBar value={yieldPct} /> : <span className="text-gray-400">—</span>}</td>
                         <td className="px-4 md:px-6 py-4"><StatusBadge status={run.status} /></td>
                         <td className="px-4 md:px-6 py-4">
-                          <button onClick={() => setViewRun(run)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800">
-                            View <ChevronRight size={14} />
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setViewRun(run)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                            >
+                              View <ChevronRight size={14} />
+                            </button>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProductionRun(run)}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
+                                title="Delete production run (admin)"
+                              >
+                                <Trash2 size={14} aria-hidden />
+                                Delete
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
