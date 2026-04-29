@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
+import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
 import { completeProductionRun } from '../utils/productionService';
 import { useAuth } from '../utils/auth';
@@ -679,6 +681,15 @@ export function Production() {
   const [editRecipe, setEditRecipe] = useState<Recipe | null>(null);
   const [editIngredients, setEditIngredients] = useState<RecipeIngredient[]>([]);
   const [showRecipeModal, setShowRecipeModal] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
+
+  const handleDateFilterChange = (range: DateRange | null) => {
+    setDateRange(range);
+  };
+
+  const filteredRuns = dateRange
+    ? runs.filter((run) => isDateInRange(run.production_date, dateRange))
+    : runs;
 
   async function loadAll() {
     setLoading(true);
@@ -742,9 +753,12 @@ export function Production() {
       </div>
 
       <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          <button className={tabClass('runs')} onClick={() => setTab('runs')}>Production Runs</button>
-          <button className={tabClass('recipes')} onClick={() => setTab('recipes')}>Recipes</button>
+        <nav className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+          <div className="flex gap-6">
+            <button className={tabClass('runs')} onClick={() => setTab('runs')}>Production Runs</button>
+            <button className={tabClass('recipes')} onClick={() => setTab('recipes')}>Recipes</button>
+          </div>
+          {tab === 'runs' && <DateFilter onFilterChange={handleDateFilterChange} />}
         </nav>
       </div>
 
@@ -776,8 +790,15 @@ export function Production() {
                         <p className="text-gray-400">No production runs yet</p>
                       </td>
                     </tr>
+                  ) : filteredRuns.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="px-6 py-12 text-center">
+                        <p className="text-gray-500">No runs match this date range.</p>
+                        <p className="mt-1 text-sm text-gray-400">Try All time or adjust the filter.</p>
+                      </td>
+                    </tr>
                   ) : (
-                    runs.map((run) => (
+                    filteredRuns.map((run) => (
                       <tr key={run.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{run.run_number}</td>
                         <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{run.recipe?.name ?? '—'}</td>
