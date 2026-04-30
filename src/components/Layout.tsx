@@ -85,7 +85,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     : (user?.email?.[0] ?? 'U').toUpperCase();
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-dvh min-h-0 max-h-dvh bg-gray-50">
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div
@@ -96,7 +96,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Sidebar */}
       <aside
-        className={`fixed md:relative z-40 flex flex-col bg-slate-900 transition-all duration-300 ease-in-out flex-shrink-0 h-screen ${
+        className={`fixed md:relative z-40 flex min-h-0 flex-col bg-slate-900 transition-all duration-300 ease-in-out flex-shrink-0 h-dvh max-h-dvh ${
           sidebarOpen ? 'w-60' : '-translate-x-full'
         } md:translate-x-0 md:w-60 ${collapsed ? 'md:w-[72px]' : ''}`}
       >
@@ -122,7 +122,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        <nav className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-4 space-y-5">
           <div>
             {!collapsed && (
               <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
@@ -200,7 +200,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="flex h-16 flex-shrink-0 items-center justify-between md:justify-end gap-4 border-b border-gray-200 bg-white px-4 md:px-6">
           <button
@@ -258,7 +258,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Content */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y">
           <div className="mx-auto max-w-7xl px-4 md:px-6 py-6 md:py-8">{children}</div>
         </main>
       </div>
