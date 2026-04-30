@@ -49,6 +49,10 @@ export function truncateId(id: string | undefined | null, head = 10): string {
   return `${s.slice(0, head)}…`;
 }
 
+export function humanizeKey(key: string): string {
+  return key.replace(/_/g, ' ');
+}
+
 /** One-line + bullet facts for Activity Log `details` JSON */
 export function summarizeActivityDetails(
   action: string,
