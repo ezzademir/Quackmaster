@@ -15,6 +15,11 @@ import {
 import { validateSupplyOrder } from '../utils/validation';
 import type { Outlet, SupplyOrder } from '../types';
 import { useAuth } from '../utils/auth';
+import {
+  aggregateFinishedGoodsHubTotals,
+  hubRowAvailableQuantity,
+  type FinishedHubTotals,
+} from '../utils/hubInventoryMath';
 
 type Tab = 'orders' | 'outlets';
 
@@ -33,6 +38,19 @@ function formatSupplyCalendarDate(value: string | undefined | null): string {
   const d = new Date(trimmed);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString();
+}
+
+/** Calendar `date` / ISO string compared in local noon to avoid timezone drift */
+function calendarDateAtNoon(value: string | undefined | null): string {
+  if (value == null || value === '') return '';
+  const t = String(value).trim();
+  return t.includes('T') ? t : `${t}T12:00:00`;
+}
+
+function isCalendarInRange(value: string | undefined | null, range: DateRange): boolean {
+  const d = calendarDateAtNoon(value);
+  if (!d) return false;
+  return isDateInRange(d, range);
 }
 
 /** Admin hard-delete is allowed for these statuses (RPC reverses inventory when applicable). */
@@ -212,6 +230,13 @@ function NewSupplyOrderModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const qtyParsed = parseFloat(quantity);
+  const allocationPreview = useMemo(() => {
+    const q = parseFloat(quantity);
+    if (!Number.isFinite(q) || q <= 0) return null;
+    return allocateHubProductItems(hubProductLines, q);
+  }, [quantity, hubProductLines]);
+
   async function handleSave() {
     const qty = parseFloat(quantity);
 
@@ -265,7 +290,7 @@ function NewSupplyOrderModal({
   }
 
   return (
-    <Modal isOpen onClose={onClose} title="New Supply Order" size="md">
+    <Modal isOpen onClose={onClose} title="New Supply Order" size="lg">
       {error && (
         <div className="mb-4 flex items-start gap-3 rounded-lg bg-red-50 p-3">
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0 text-red-600" />
@@ -297,6 +322,25 @@ function NewSupplyOrderModal({
           <label className="mb-1 block text-sm font-medium text-gray-700">Quantity *</label>
           <input type="number" min="0" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          {allocationPreview != null && allocationPreview.length > 0 && (
+            <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">FIFO allocation preview</p>
+              <p className="mt-1 text-xs text-gray-500">Same batches as on submit (oldest hub rows first).</p>
+              <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm">
+                {allocationPreview.map((line, i) => (
+                  <li key={`${line.hubInventoryId}-${i}`} className="flex justify-between gap-3 border-b border-gray-100 pb-1 text-gray-700 last:border-0">
+                    <span className="truncate font-medium">{line.product_batch}</span>
+                    <span className="flex-shrink-0 font-semibold tabular-nums text-gray-900">{line.quantity}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {Number.isFinite(qtyParsed) && qtyParsed > 0 && allocationPreview === null && (
+            <p className="mt-2 text-xs text-amber-700">
+              This quantity cannot be covered by FIFO allocation across current hub batches (insufficient available).
+            </p>
+          )}
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
@@ -453,12 +497,14 @@ function supplyOrderDateForRangeFilter(so: SOWithOutlet): string {
 interface OutletStockRow {
   outletId: string;
   outletName: string;
-  /** outlet_inventory — credited when the outlet confirms receipt */
+  /** Period view: units received in range; all-time view: on-hand at outlet */
   onHand: number;
   /** Dispatched, not yet received — in transit; not included in on hand until receipt */
   awaitingReceiptQty: number;
   /** Pending supply orders — hub reserved only */
   pendingSupplyQty: number;
+  /** Live outlet_inventory total (only when date filter is active) */
+  currentOnHandSnapshot?: number;
 }
 
 interface StockMetrics {
@@ -471,6 +517,8 @@ interface StockMetrics {
   outletInventory: OutletStockRow[];
 }
 
+type CompletedProdRun = { actual_output: number | null; production_date: string };
+
 export function Distribution() {
   const { isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>('orders');
@@ -481,6 +529,11 @@ export function Distribution() {
   const [hubProductLines, setHubProductLines] = useState<
     { id: string; product_batch: string | null; available: number; last_updated?: string }[]
   >([]);
+  const [hubFinishedAtp, setHubFinishedAtp] = useState<FinishedHubTotals>({
+    onHand: 0,
+    reserved: 0,
+    available: 0,
+  });
   const [stockMetrics, setStockMetrics] = useState<StockMetrics>({
     totalGenerated: 0,
     totalDispatched: 0,
@@ -503,6 +556,7 @@ export function Distribution() {
   const [editOutlet, setEditOutlet] = useState<Outlet | null>(null);
   const [showOutletModal, setShowOutletModal] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const [completedProductionRuns, setCompletedProductionRuns] = useState<CompletedProdRun[]>([]);
 
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -510,7 +564,7 @@ export function Distribution() {
       await Promise.all([
       supabase.from('supply_orders').select(`*, outlet:outlet_id(*)`).order('created_at', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
-      supabase.from('production_runs').select('actual_output').eq('status', 'completed'),
+      supabase.from('production_runs').select('actual_output, production_date').eq('status', 'completed'),
       supabase.from('outlet_inventory').select('outlet_id, quantity_on_hand'),
       supabase
         .from('hub_inventory')
@@ -521,6 +575,7 @@ export function Distribution() {
 
     const orders = sos as SOWithOutlet[] ?? [];
     const outlets_list = outs ?? [];
+    setCompletedProductionRuns((prodRuns ?? []) as CompletedProdRun[]);
 
     // Calculate total generated from production runs
     const totalGenerated = (prodRuns ?? []).reduce((sum, run) => sum + (run.actual_output || 0), 0);
@@ -549,12 +604,9 @@ export function Distribution() {
     }
 
     const hubLines = (hubProducts ?? []).map((row) => {
-      const reserved = row.reserved_quantity ?? 0;
-      const onHand = row.quantity_on_hand ?? 0;
-      const avail =
-        row.available_quantity != null && Number.isFinite(Number(row.available_quantity))
-          ? Number(row.available_quantity)
-          : Math.max(0, onHand - reserved);
+      const reserved = Number(row.reserved_quantity ?? 0);
+      const onHand = Number(row.quantity_on_hand ?? 0);
+      const avail = hubRowAvailableQuantity(onHand, reserved, row.available_quantity);
       return {
         id: row.id,
         product_batch: row.product_batch,
@@ -562,6 +614,8 @@ export function Distribution() {
         last_updated: row.last_updated,
       };
     });
+
+    setHubFinishedAtp(aggregateFinishedGoodsHubTotals(hubProducts ?? []));
 
     // Hub available = actual finished-goods stock (matches Overview / Inventory)
     const currentAvailable = hubLines.reduce((sum, r) => sum + Math.max(0, r.available), 0);
@@ -581,6 +635,7 @@ export function Distribution() {
         onHand: qtyByOutlet.get(o.id) ?? 0,
         awaitingReceiptQty: awaitingReceiptByOutlet.get(o.id) ?? 0,
         pendingSupplyQty: pendingQtyByOutlet.get(o.id) ?? 0,
+        currentOnHandSnapshot: undefined,
       }))
       .sort((a, b) => a.outletName.localeCompare(b.outletName));
 
@@ -618,6 +673,11 @@ export function Distribution() {
         { event: '*', schema: 'public', table: 'outlet_inventory' },
         () => void loadAll({ silent: true })
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'production_runs' },
+        () => void loadAll({ silent: true })
+      )
       .subscribe();
 
     const onVisible = () => {
@@ -639,16 +699,98 @@ export function Distribution() {
     ? orders.filter((o) => isDateInRange(supplyOrderDateForRangeFilter(o), dateRange))
     : orders;
 
-  // Cards always show actual current state (all-time), not filtered
-  const displayMetrics = {
-    totalGenerated: stockMetrics.totalGenerated,
-    totalDispatched: stockMetrics.totalDispatched,
-    currentAvailable: stockMetrics.currentAvailable,
-    pendingSupplyUnits: stockMetrics.pendingSupplyUnits,
-    outletInventory: stockMetrics.outletInventory,
-  };
-  const totalOutletOnHand = displayMetrics.outletInventory.reduce((sum, o) => sum + o.onHand, 0);
-  const totalAwaitingReceipt = displayMetrics.outletInventory.reduce((sum, o) => sum + o.awaitingReceiptQty, 0);
+  const snapshotOutletOnHandById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const row of stockMetrics.outletInventory) {
+      m.set(row.outletId, row.onHand);
+    }
+    return m;
+  }, [stockMetrics.outletInventory]);
+
+  const distributionDisplay = useMemo(() => {
+    if (!dateRange) {
+      const totalAwaiting = stockMetrics.outletInventory.reduce((s, o) => s + o.awaitingReceiptQty, 0);
+      const totalOnHand = stockMetrics.outletInventory.reduce((s, o) => s + o.onHand, 0);
+      return {
+        isFiltered: false as const,
+        totalGenerated: stockMetrics.totalGenerated,
+        totalDispatched: stockMetrics.totalDispatched,
+        hubAvailableNow: stockMetrics.currentAvailable,
+        pendingSupplyUnits: stockMetrics.pendingSupplyUnits,
+        totalOutletReceivedPeriod: totalOnHand,
+        totalOutletOnHandNow: totalOnHand,
+        totalAwaitingReceipt: totalAwaiting,
+        outletInventory: stockMetrics.outletInventory,
+      };
+    }
+
+    const totalGenerated = completedProductionRuns.reduce((sum, r) => {
+      if (!isCalendarInRange(r.production_date, dateRange)) return sum;
+      return sum + Number(r.actual_output ?? 0);
+    }, 0);
+
+    const ordersInPeriod = orders.filter((o) =>
+      isDateInRange(supplyOrderDateForRangeFilter(o), dateRange)
+    );
+
+    const totalDispatched = ordersInPeriod.reduce((sum, so) => {
+      const st = normalizeSOStatus(so.status);
+      if (st !== 'dispatched' && st !== 'received') return sum;
+      return sum + Number(so.total_quantity ?? 0);
+    }, 0);
+
+    const pendingSupplyUnits = ordersInPeriod.reduce((sum, so) => {
+      if (normalizeSOStatus(so.status) !== 'pending') return sum;
+      return sum + Number(so.total_quantity ?? 0);
+    }, 0);
+
+    const awaitingReceiptByOutlet = new Map<string, number>();
+    const pendingQtyByOutlet = new Map<string, number>();
+    const receivedInPeriodByOutlet = new Map<string, number>();
+
+    for (const so of ordersInPeriod) {
+      const st = normalizeSOStatus(so.status);
+      const oid = so.outlet_id;
+      if (!oid) continue;
+      const q = Number(so.total_quantity ?? 0);
+
+      if (st === 'dispatched') {
+        awaitingReceiptByOutlet.set(oid, (awaitingReceiptByOutlet.get(oid) ?? 0) + q);
+      }
+      if (st === 'pending') {
+        pendingQtyByOutlet.set(oid, (pendingQtyByOutlet.get(oid) ?? 0) + q);
+      }
+      if (st === 'received' && isCalendarInRange(so.received_date, dateRange)) {
+        receivedInPeriodByOutlet.set(oid, (receivedInPeriodByOutlet.get(oid) ?? 0) + q);
+      }
+    }
+
+    const outletsSorted = outlets.slice().sort((a, b) => a.name.localeCompare(b.name));
+    const outletInventory: OutletStockRow[] = outletsSorted.map((o) => ({
+      outletId: o.id,
+      outletName: o.name,
+      onHand: receivedInPeriodByOutlet.get(o.id) ?? 0,
+      awaitingReceiptQty: awaitingReceiptByOutlet.get(o.id) ?? 0,
+      pendingSupplyQty: pendingQtyByOutlet.get(o.id) ?? 0,
+      currentOnHandSnapshot: snapshotOutletOnHandById.get(o.id) ?? 0,
+    }));
+
+    const totalOutletReceivedPeriod = outletInventory.reduce((s, o) => s + o.onHand, 0);
+    const totalOutletOnHandNow = outletInventory.reduce((s, o) => s + (o.currentOnHandSnapshot ?? 0), 0);
+    const totalAwaitingReceipt = outletInventory.reduce((s, o) => s + o.awaitingReceiptQty, 0);
+
+    return {
+      isFiltered: true as const,
+      totalGenerated,
+      totalDispatched,
+      hubAvailableNow: stockMetrics.currentAvailable,
+      pendingSupplyUnits,
+      totalOutletReceivedPeriod,
+      totalOutletOnHandNow,
+      totalAwaitingReceipt,
+      outletInventory,
+    };
+  }, [dateRange, orders, outlets, completedProductionRuns, stockMetrics, snapshotOutletOnHandById]);
 
   async function executeAdminDeleteSupplyOrder(so: SOWithOutlet): Promise<boolean> {
     const result = await adminDeleteSupplyOrder({
@@ -722,59 +864,160 @@ export function Distribution() {
         )}
       </div>
 
+      <div className="border-b border-gray-200">
+        <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div className="flex gap-6">
+            <button type="button" className={tabClass('orders')} onClick={() => setTab('orders')}>Supply Orders</button>
+            <button type="button" className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlets</button>
+          </div>
+          <DateFilter onFilterChange={handleDateFilterChange} />
+        </nav>
+      </div>
+
+      {dateRange && (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
+          Summary cards and outlet breakdown follow the date filter. Hub available and outlet “on hand now” are live snapshots.
+        </p>
+      )}
+
+      <div className="rounded-lg border border-teal-100 bg-teal-50/90 px-4 py-3 text-sm text-teal-900">
+        <span className="font-semibold text-teal-800">Hub finished goods (ATP)</span>
+        <span className="mx-2 text-teal-600">|</span>
+        On hand <strong className="tabular-nums">{hubFinishedAtp.onHand.toLocaleString()}</strong>
+        <span className="mx-2 text-teal-600">·</span>
+        Reserved <strong className="tabular-nums">{hubFinishedAtp.reserved.toLocaleString()}</strong>
+        <span className="mx-2 text-teal-600">·</span>
+        Available <strong className="tabular-nums">{hubFinishedAtp.available.toLocaleString()}</strong>
+        <span className="mt-1 block text-xs font-normal text-teal-700">
+          Matches Overview hub finished-goods KPI and Inventory hub strip (available after reservations).
+        </span>
+      </div>
+
       {/* Stock Summary Cards */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
           <p className="text-xs font-medium uppercase text-blue-600">Total Generated</p>
-          <p className="mt-2 text-2xl font-bold text-blue-900">{displayMetrics.totalGenerated.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-blue-600">from production runs</p>
+          <p className="mt-2 text-2xl font-bold text-blue-900">{distributionDisplay.totalGenerated.toLocaleString()}</p>
+          <p className="mt-1 text-xs text-blue-600">
+            {distributionDisplay.isFiltered
+              ? 'Completed runs with production date in range'
+              : 'from production runs'}
+          </p>
         </div>
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-xs font-medium uppercase text-amber-600">Total Dispatched</p>
-          <p className="mt-2 text-2xl font-bold text-amber-900">{displayMetrics.totalDispatched.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-amber-600">units left hub (dispatched or received orders)</p>
+          <p className="mt-2 text-2xl font-bold text-amber-900">{distributionDisplay.totalDispatched.toLocaleString()}</p>
+          <p className="mt-1 text-xs text-amber-600">
+            {distributionDisplay.isFiltered
+              ? 'Units on filtered orders (dispatched or received)'
+              : 'units left hub (dispatched or received orders)'}
+          </p>
         </div>
         <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
           <p className="text-xs font-medium uppercase text-teal-600">Hub Available</p>
-          <p className="mt-2 text-2xl font-bold text-teal-900">{displayMetrics.currentAvailable.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-teal-600">
-            Available (after reservations)
-            {displayMetrics.pendingSupplyUnits > 0 && (
-              <>
-                {' '}
-                · {displayMetrics.pendingSupplyUnits.toLocaleString()} reserved on pending orders
-              </>
-            )}
-          </p>
+          {distributionDisplay.isFiltered ? (
+            <>
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs font-medium text-teal-700">Available now</p>
+                  <p className="text-xl font-bold tabular-nums text-teal-900">{distributionDisplay.hubAvailableNow.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-teal-700">Pending (range)</p>
+                  <p className="text-xl font-bold tabular-nums text-teal-900">{distributionDisplay.pendingSupplyUnits.toLocaleString()}</p>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-teal-600">Pending = hub reservations from filtered pending orders.</p>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-2xl font-bold text-teal-900">{distributionDisplay.hubAvailableNow.toLocaleString()}</p>
+              <p className="mt-1 text-xs text-teal-600">
+                Available (after reservations)
+                {distributionDisplay.pendingSupplyUnits > 0 && (
+                  <>
+                    {' '}
+                    · {distributionDisplay.pendingSupplyUnits.toLocaleString()} reserved on pending orders
+                  </>
+                )}
+              </p>
+            </>
+          )}
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <p className="text-xs font-medium uppercase text-emerald-600">At Outlets</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-900">{totalOutletOnHand.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-emerald-600">
-            {displayMetrics.outletInventory.length} outlets · on-hand updates when receipt is confirmed
-            {totalAwaitingReceipt > 0
-              ? ` · ${totalAwaitingReceipt.toLocaleString()} dispatched, awaiting outlet receipt`
-              : ''}
-          </p>
+          {distributionDisplay.isFiltered ? (
+            <>
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs font-medium text-emerald-700">Received (range)</p>
+                  <p className="text-xl font-bold tabular-nums text-emerald-900">{distributionDisplay.totalOutletReceivedPeriod.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-emerald-700">On hand now</p>
+                  <p className="text-xl font-bold tabular-nums text-emerald-900">{distributionDisplay.totalOutletOnHandNow.toLocaleString()}</p>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-emerald-600">
+                {distributionDisplay.outletInventory.length} outlets
+                {distributionDisplay.totalAwaitingReceipt > 0
+                  ? ` · ${distributionDisplay.totalAwaitingReceipt.toLocaleString()} in transit (filtered orders)`
+                  : ''}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-2xl font-bold text-emerald-900">{distributionDisplay.totalOutletOnHandNow.toLocaleString()}</p>
+              <p className="mt-1 text-xs text-emerald-600">
+                {distributionDisplay.outletInventory.length} outlets · on-hand updates when receipt is confirmed
+                {distributionDisplay.totalAwaitingReceipt > 0
+                  ? ` · ${distributionDisplay.totalAwaitingReceipt.toLocaleString()} dispatched, awaiting outlet receipt`
+                  : ''}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
       {/* Outlet Inventory Breakdown */}
-      {displayMetrics.outletInventory.length > 0 && (
+      {outlets.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="mb-1 text-sm font-semibold text-gray-900">Outlet Stock Levels</h3>
           <p className="mb-4 text-xs text-gray-500">
-            On-hand totals update when the outlet <strong className="font-medium text-gray-700">confirms receipt</strong>. Dispatch removes stock from the hub; outlet inventory increases only after receive.
+            {distributionDisplay.isFiltered ? (
+              <>
+                Pending and in-transit lines follow filtered supply orders. The large figure is{' '}
+                <strong className="font-medium text-gray-700">units received</strong> with receipt date in range.{' '}
+                <strong className="font-medium text-gray-700">On hand now</strong> is live inventory.
+              </>
+            ) : (
+              <>
+                On-hand totals update when the outlet <strong className="font-medium text-gray-700">confirms receipt</strong>.
+                Dispatch removes stock from the hub; outlet inventory increases only after receive.
+              </>
+            )}
           </p>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-            {displayMetrics.outletInventory.map((inv) => (
+            {distributionDisplay.outletInventory.map((inv) => (
               <div key={inv.outletId} className="flex flex-col gap-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-gray-700">{inv.outletName}</span>
                   <span className="text-lg font-bold text-gray-900">{inv.onHand.toLocaleString()}</span>
                 </div>
                 <p className="text-xs text-gray-500">
-                  On hand at outlet
+                  {distributionDisplay.isFiltered ? (
+                    <>
+                      Received in range
+                      {inv.currentOnHandSnapshot != null && (
+                        <span className="mt-0.5 block text-gray-600">
+                          On hand now:{' '}
+                          <span className="font-semibold tabular-nums text-gray-800">{inv.currentOnHandSnapshot.toLocaleString()}</span>
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>On hand at outlet</>
+                  )}
                   {inv.pendingSupplyQty > 0 && (
                     <span className="text-blue-800">
                       {' '}
@@ -793,16 +1036,6 @@ export function Distribution() {
           </div>
         </div>
       )}
-
-      <div className="border-b border-gray-200">
-        <nav className="flex items-center justify-between gap-6 mb-4">
-          <div className="flex gap-6">
-            <button className={tabClass('orders')} onClick={() => setTab('orders')}>Supply Orders</button>
-            <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlets</button>
-          </div>
-          {tab === 'orders' && <DateFilter onFilterChange={handleDateFilterChange} />}
-        </nav>
-      </div>
 
       {loading ? (
         <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>

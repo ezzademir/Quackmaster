@@ -11,6 +11,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
+import { aggregateFinishedGoodsHubTotals } from '../utils/hubInventoryMath';
 
 interface KPIs {
   rawMaterialValue: number;
@@ -100,16 +101,8 @@ export function Overview() {
           return acc + row.quantity_on_hand * (mat?.cost_price ?? 0);
         }, 0);
 
-        // Finished goods at hub: sum available quantity (matches Inventory — excludes reservations)
-        const productStock = (hubProducts ?? []).reduce((sum, row) => {
-          const reserved = row.reserved_quantity ?? 0;
-          const onHand = row.quantity_on_hand ?? 0;
-          const avail =
-            row.available_quantity != null && Number.isFinite(Number(row.available_quantity))
-              ? Number(row.available_quantity)
-              : Math.max(0, onHand - reserved);
-          return sum + avail;
-        }, 0);
+        // Finished goods at hub: ATP total (aligned with Inventory hub KPI and Distribution hub strip)
+        const productStock = aggregateFinishedGoodsHubTotals(hubProducts ?? []).available;
 
         // Low stock items
         const lowItems: LowStockItem[] = (hubRaw || [])

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
+import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { logActivity } from '../utils/activityLog';
 import { writeLedgerEntry } from '../utils/ledger';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
@@ -52,36 +53,65 @@ function AdjustModal({
   const [qty, setQty] = useState(row.quantity_on_hand.toString());
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   async function handleSave() {
-    setSaving(true);
+    setError('');
     const newQty = parseFloat(qty);
-    await supabase
-      .from('hub_inventory')
-      .update({ quantity_on_hand: newQty, available_quantity: newQty, last_updated: new Date().toISOString() })
-      .eq('id', row.id);
-    await writeLedgerEntry({
-      action: 'updated',
-      entityType: row.type === 'material' ? 'hub_inventory_material' : 'hub_inventory_product',
-      entityId: row.id,
-      module: 'inventory',
-      operation: 'update',
-      beforeData: { quantity_on_hand: row.quantity_on_hand, available_quantity: row.available_quantity },
-      afterData: { quantity_on_hand: newQty, available_quantity: newQty },
-      deltaData: { quantity_on_hand: newQty - row.quantity_on_hand },
-      metadata: { reason },
-    });
-    await logActivity({ action: 'updated', entityType: 'inventory_adjustment', entityId: row.id, entityLabel: row.name, details: { from: row.quantity_on_hand, to: newQty, reason } });
-    setSaving(false);
-    onSave();
+    if (!Number.isFinite(newQty) || newQty < 0) {
+      setError('Enter a valid non-negative quantity.');
+      return;
+    }
+    const reserved = row.reserved_quantity ?? 0;
+    if (newQty < reserved) {
+      setError(
+        `On hand cannot be below reserved (${reserved}). Release reservations (e.g. cancel or fulfill pending supply lines) before reducing stock.`
+      );
+      return;
+    }
+    const newAvailable = Math.max(0, newQty - reserved);
+    setSaving(true);
+    try {
+      await supabase
+        .from('hub_inventory')
+        .update({
+          quantity_on_hand: newQty,
+          available_quantity: newAvailable,
+          last_updated: new Date().toISOString(),
+        })
+        .eq('id', row.id);
+      await writeLedgerEntry({
+        action: 'updated',
+        entityType: row.type === 'material' ? 'hub_inventory_material' : 'hub_inventory_product',
+        entityId: row.id,
+        module: 'inventory',
+        operation: 'update',
+        beforeData: { quantity_on_hand: row.quantity_on_hand, available_quantity: row.available_quantity },
+        afterData: { quantity_on_hand: newQty, available_quantity: newAvailable },
+        deltaData: { quantity_on_hand: newQty - row.quantity_on_hand },
+        metadata: { reason },
+      });
+      await logActivity({ action: 'updated', entityType: 'inventory_adjustment', entityId: row.id, entityLabel: row.name, details: { from: row.quantity_on_hand, to: newQty, reason } });
+      onSave();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <Modal isOpen onClose={onClose} title="Adjust Stock" size="sm">
       <div className="space-y-4">
+        {error && (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        )}
         <div>
           <p className="text-sm font-medium text-gray-700">{row.name}</p>
-          <p className="text-xs text-gray-400">Current: {row.quantity_on_hand} {row.unit}</p>
+          <p className="text-xs text-gray-400">
+            Current on hand: {row.quantity_on_hand} {row.unit}
+            {row.reserved_quantity > 0 && (
+              <> · Reserved: {row.reserved_quantity} · Available: {row.available_quantity}</>
+            )}
+          </p>
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">New Quantity ({row.unit})</label>
@@ -131,7 +161,11 @@ export function Inventory() {
         unit: mat?.unit_of_measure ?? 'units',
         quantity_on_hand: inv.quantity_on_hand,
         reserved_quantity: inv.reserved_quantity ?? 0,
-        available_quantity: inv.available_quantity ?? inv.quantity_on_hand,
+        available_quantity: hubRowAvailableQuantity(
+          inv.quantity_on_hand,
+          inv.reserved_quantity ?? 0,
+          inv.available_quantity
+        ),
         reorder_level: mat?.reorder_level ?? undefined,
         last_updated: inv.last_updated,
         raw_material_id: inv.raw_material_id ?? undefined,
@@ -152,7 +186,11 @@ export function Inventory() {
       product_batch: inv.product_batch,
       quantity_on_hand: inv.quantity_on_hand,
       reserved_quantity: inv.reserved_quantity ?? 0,
-      available_quantity: inv.available_quantity ?? inv.quantity_on_hand,
+      available_quantity: hubRowAvailableQuantity(
+        inv.quantity_on_hand,
+        inv.reserved_quantity ?? 0,
+        inv.available_quantity
+      ),
       last_updated: inv.last_updated,
     }));
     setOutletRows(rows);
@@ -208,13 +246,22 @@ export function Inventory() {
     ? outletRows.filter((r) => isDateInRange(r.last_updated, dateRange))
     : outletRows;
 
+  const hubFinishedAtpAll = useMemo(
+    () => aggregateFinishedGoodsHubTotals(hubRows.filter((r) => r.type === 'product')),
+    [hubRows]
+  );
+
+  const filteredFinishedTotals = useMemo(
+    () => aggregateFinishedGoodsHubTotals(filteredHubRows.filter((r) => r.type === 'product')),
+    [filteredHubRows]
+  );
+
   const tabClass = (t: Tab) =>
     `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
       tab === t ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700'
     }`;
 
   const lowStockCount = filteredHubRows.filter((r) => r.type === 'material' && r.quantity_on_hand <= (r.reorder_level ?? 10)).length;
-  const totalProductHub = filteredHubRows.filter((r) => r.type === 'product').reduce((a, r) => a + r.quantity_on_hand, 0);
   const totalOutletStock = filteredOutletRows.reduce((a, r) => a + r.quantity_on_hand, 0);
 
   return (
@@ -236,8 +283,15 @@ export function Inventory() {
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-amber-50 p-2 text-amber-600"><PackageCheck size={20} /></div>
             <div>
-              <p className="text-xs text-gray-500">Hub Product Stock</p>
-              <p className="text-xl font-bold text-gray-900">{totalProductHub.toLocaleString()} units</p>
+              <p className="text-xs text-gray-500">Hub finished goods · available (ATP)</p>
+              <p className="text-xl font-bold text-gray-900">{filteredFinishedTotals.available.toLocaleString()} units</p>
+              <p className="mt-0.5 text-xs text-gray-500">
+                On hand {filteredFinishedTotals.onHand.toLocaleString()}
+                {filteredFinishedTotals.reserved > 0 && <> · Reserved {filteredFinishedTotals.reserved.toLocaleString()}</>}
+              </p>
+              {dateRange && (
+                <p className="mt-1 text-xs text-amber-700">Table rows filtered by last updated — totals reflect visible rows only.</p>
+              )}
             </div>
           </div>
         </div>
@@ -256,18 +310,39 @@ export function Inventory() {
             <div>
               <p className="text-xs text-gray-500">Total Outlet Stock</p>
               <p className="text-xl font-bold text-gray-900">{totalOutletStock.toLocaleString()} units</p>
+              {dateRange && (
+                <p className="mt-1 text-xs text-amber-700">Filtered by row last updated (not supply or receipt dates).</p>
+              )}
             </div>
           </div>
         </div>
       </div>
 
+      <div className="rounded-lg border border-teal-100 bg-teal-50/90 px-4 py-3 text-sm text-teal-900">
+        <span className="font-semibold text-teal-800">Hub finished goods (all batches)</span>
+        <span className="mx-2 text-teal-600">|</span>
+        On hand <strong className="tabular-nums">{hubFinishedAtpAll.onHand.toLocaleString()}</strong>
+        <span className="mx-2 text-teal-600">·</span>
+        Reserved <strong className="tabular-nums">{hubFinishedAtpAll.reserved.toLocaleString()}</strong>
+        <span className="mx-2 text-teal-600">·</span>
+        Available <strong className="tabular-nums">{hubFinishedAtpAll.available.toLocaleString()}</strong>
+        <span className="mt-1 block text-xs font-normal text-teal-700">
+          Same ATP logic as Overview and Distribution (stored available, else on hand minus reserved).
+        </span>
+      </div>
+
       <div className="border-b border-gray-200">
-        <nav className="flex items-center justify-between gap-6 mb-4">
+        <nav className="flex flex-wrap items-center justify-between gap-6 mb-4">
           <div className="flex gap-6">
             <button className={tabClass('hub')} onClick={() => setTab('hub')}>Hub Inventory</button>
             <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
           </div>
-          <DateFilter onFilterChange={handleDateFilterChange} />
+          <div className="flex flex-col items-end gap-1">
+            <DateFilter onFilterChange={handleDateFilterChange} />
+            <p className="max-w-xs text-right text-xs text-gray-500">
+              Filter applies to each row&apos;s <strong className="font-medium text-gray-600">last updated</strong> timestamp — not supply dates or production periods.
+            </p>
+          </div>
         </nav>
       </div>
 
