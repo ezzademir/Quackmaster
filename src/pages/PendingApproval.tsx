@@ -43,8 +43,6 @@ export function PendingApproval() {
       .eq('user_id', profile.id)
       .maybeSingle();
 
-    
-
     if (data?.status === 'approved') {
       // Log approval to ledger
       await writeLedgerEntry({
