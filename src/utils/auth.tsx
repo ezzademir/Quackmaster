@@ -37,40 +37,55 @@ const AuthContext = createContext<AuthContextValue>({
 
 const SESSION_INIT_TIMEOUT_MS = 30000;
 
+/** Yield so Supabase Auth can finish _recoverAndRefresh / locks before REST runs (avoids stale stalls). */
+function defer(ms = 100): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  const PROFILE_FETCH_MS = 15000;
+  const PROFILE_FETCH_MS = 20000;
 
-  async function fetchProfile(userId: string) {
-    const query = supabase
-      .from('profiles')
-      .select('id, full_name, role')
-      .eq('id', userId)
-      .maybeSingle();
+  async function fetchProfile(userId: string): Promise<void> {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const query = supabase
+        .from('profiles')
+        .select('id, full_name, role')
+        .eq('id', userId)
+        .maybeSingle();
 
-    const outcome = await Promise.race([
-      query.then((r) => ({ ok: true as const, r })),
-      new Promise<{ ok: false }>((resolve) => {
-        window.setTimeout(() => resolve({ ok: false }), PROFILE_FETCH_MS);
-      }),
-    ]);
+      const outcome = await Promise.race([
+        query.then((r) => ({ ok: true as const, r })),
+        new Promise<{ ok: false }>((resolve) => {
+          window.setTimeout(() => resolve({ ok: false }), PROFILE_FETCH_MS);
+        }),
+      ]);
 
-    if (!outcome.ok) {
-      console.error('Profile fetch timed out — check Supabase URL, RLS on `profiles`, and network.');
+      if (outcome.ok) {
+        const { data, error } = outcome.r;
+        if (error) {
+          console.error('Profile fetch error:', error);
+          setProfile(null);
+        } else {
+          setProfile(data as Profile | null);
+        }
+        return;
+      }
+
+      if (attempt === 1) {
+        console.warn('[Quackmaster] Profile fetch slow; retrying after auth settles…');
+        await defer(400);
+        continue;
+      }
+
+      console.error(
+        'Profile fetch timed out — check Supabase URL, RLS on `profiles`, extensions blocking REST, or network.'
+      );
       setProfile(null);
-      return;
-    }
-
-    const { data, error } = outcome.r;
-    if (error) {
-      console.error('Profile fetch error:', error);
-      setProfile(null);
-    } else {
-      setProfile(data as Profile | null);
     }
   }
 
@@ -88,6 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (next?.user) {
       setProfileLoading(true);
       try {
+        await defer(80);
         await fetchProfile(next.user.id);
       } catch (e) {
         console.error('Profile load failed:', e);
@@ -108,7 +124,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.warn(
         '[Quackmaster] Auth bootstrap is taking unusually long. If the app works, you can ignore this. Otherwise check Supabase URL/key, network, or Safari storage / extensions.'
       );
-      // Only unblock UI — do not clear session (getSession may be slow; onAuthStateChange may already have set it).
       setLoading(false);
       setProfileLoading(false);
     }, SESSION_INIT_TIMEOUT_MS);
@@ -116,6 +131,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async function loadProfileForUser(userId: string) {
       setProfileLoading(true);
       try {
+        await defer(80);
+        if (!mounted) return;
         await fetchProfile(userId);
       } catch (e) {
         console.error('Profile load failed:', e);
@@ -158,24 +175,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      // Always cancel slow-bootstrap timer once GoTrue has signaled (INITIAL_SESSION / SIGNED_IN / …).
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       window.clearTimeout(timer);
-      setSession(session);
+      setSession(nextSession);
       setLoading(false);
-      try {
-        if (session?.user) {
-          setProfileLoading(true);
-          await fetchProfile(session.user.id);
-        } else {
-          setProfile(null);
-        }
-      } catch (e) {
-        console.error('Profile load failed:', e);
+
+      if (!nextSession?.user) {
         setProfile(null);
-      } finally {
         setProfileLoading(false);
+        return;
       }
+
+      // Important: keep this listener synchronous — async work deadlocks some auth refresh paths.
+      setProfileLoading(true);
+      const uid = nextSession.user.id;
+      void (async () => {
+        await defer(120);
+        if (!mounted) return;
+        try {
+          await fetchProfile(uid);
+        } catch (e) {
+          console.error('Profile load failed:', e);
+          setProfile(null);
+        } finally {
+          if (mounted) setProfileLoading(false);
+        }
+      })();
     });
 
     return () => {
@@ -191,6 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function refetchProfile() {
     if (session?.user) {
+      await defer(0);
       await fetchProfile(session.user.id);
     }
   }
