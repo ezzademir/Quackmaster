@@ -67,6 +67,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           setProfile(null);
         }
+      } catch (e) {
+        console.error('Auth init failed:', e);
+        if (mounted) {
+          setSession(null);
+          setProfile(null);
+        }
       } finally {
         if (mounted) setLoading(false);
       }

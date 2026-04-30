@@ -1,6 +1,6 @@
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 
-/** GitHub Pages only serves real files; deep links like `/Quackmaster/login` return HTTP 404 for the document. Hash routing keeps navigation in the `#/…` fragment so the browser only loads `/Quackmaster/` (index.html) with a 200. */
+/** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
@@ -16,22 +16,57 @@ import { Ledger } from './pages/Ledger';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
 
-function ProtectedRoutes() {
-  const { session, loading, profile, isAdmin } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-xl font-bold text-white">
-            Q
-          </div>
-          <p className="text-sm text-gray-500">Loading…</p>
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-xl font-bold text-white">
+          Q
         </div>
+        <p className="text-sm text-gray-500">Loading…</p>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
+function LoginRoute() {
+  const { session, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (session) return <Navigate to="/" replace />;
+  return <Login />;
+}
+
+function RegisterRoute() {
+  const { session, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (session) return <Navigate to="/" replace />;
+  return <Register />;
+}
+
+function UsersGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Users /> : <Navigate to="/" replace />;
+}
+
+function ActivityLogGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <ActivityLog /> : <Navigate to="/" replace />;
+}
+
+function LedgerGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Ledger /> : <Navigate to="/" replace />;
+}
+
+function SettingsGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Settings /> : <Navigate to="/" replace />;
+}
+
+function ProtectedShell() {
+  const { session, loading, profile } = useAuth();
+
+  if (loading) return <LoadingScreen />;
   if (!session) return <Navigate to="/login" replace />;
 
   const role = profile?.role?.toLowerCase?.()?.trim();
@@ -39,27 +74,9 @@ function ProtectedRoutes() {
 
   return (
     <Layout>
-      <Routes>
-        <Route path="/" element={<Overview />} />
-        <Route path="/procurement/*" element={<Procurement />} />
-        <Route path="/production/*" element={<Production />} />
-        <Route path="/inventory/*" element={<Inventory />} />
-        <Route path="/distribution/*" element={<Distribution />} />
-        <Route path="/users" element={isAdmin ? <Users /> : <Navigate to="/" replace />} />
-        <Route path="/activity-log" element={isAdmin ? <ActivityLog /> : <Navigate to="/" replace />} />
-        <Route path="/ledger" element={isAdmin ? <Ledger /> : <Navigate to="/" replace />} />
-        <Route path="/settings" element={isAdmin ? <Settings /> : <Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Outlet />
     </Layout>
   );
-}
-
-function AuthRoutes() {
-  const { session, loading } = useAuth();
-  if (loading) return null;
-  if (session) return <Navigate to="/" replace />;
-  return null;
 }
 
 function App() {
@@ -67,9 +84,20 @@ function App() {
     <HashRouter>
       <AuthProvider>
         <Routes>
-          <Route path="/login" element={<><AuthRoutes /><Login /></>} />
-          <Route path="/register" element={<><AuthRoutes /><Register /></>} />
-          <Route path="/*" element={<ProtectedRoutes />} />
+          <Route path="/login" element={<LoginRoute />} />
+          <Route path="/register" element={<RegisterRoute />} />
+          <Route element={<ProtectedShell />}>
+            <Route index element={<Overview />} />
+            <Route path="/procurement/*" element={<Procurement />} />
+            <Route path="/production/*" element={<Production />} />
+            <Route path="/inventory/*" element={<Inventory />} />
+            <Route path="/distribution/*" element={<Distribution />} />
+            <Route path="/users" element={<UsersGate />} />
+            <Route path="/activity-log" element={<ActivityLogGate />} />
+            <Route path="/ledger" element={<LedgerGate />} />
+            <Route path="/settings" element={<SettingsGate />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
         </Routes>
       </AuthProvider>
     </HashRouter>

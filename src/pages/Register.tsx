@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { supabase } from '../utils/supabase';
+import { supabase, isSupabaseConfigured } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 
 export function Register() {
@@ -24,6 +24,10 @@ export function Register() {
     }
     if (form.password.length < 6) {
       setError('Password must be at least 6 characters');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then rebuild.');
       return;
     }
     setLoading(true);
@@ -120,6 +124,13 @@ export function Register() {
             </div>
           ) : (
             <>
+              {!isSupabaseConfigured && (
+                <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Missing Supabase env at build time. Configure{' '}
+                  <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_URL</code> and{' '}
+                  <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code>, then redeploy.
+                </div>
+              )}
               {error && (
                 <div className="mb-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
                   {error}
@@ -176,7 +187,7 @@ export function Register() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !isSupabaseConfigured}
               className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
             >
               {loading ? 'Creating account…' : 'Create Account'}
