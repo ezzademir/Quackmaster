@@ -43,12 +43,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
 
+  const PROFILE_FETCH_MS = 15000;
+
   async function fetchProfile(userId: string) {
-    const { data, error } = await supabase
+    const query = supabase
       .from('profiles')
       .select('id, full_name, role')
       .eq('id', userId)
       .maybeSingle();
+
+    const outcome = await Promise.race([
+      query.then((r) => ({ ok: true as const, r })),
+      new Promise<{ ok: false }>((resolve) => {
+        window.setTimeout(() => resolve({ ok: false }), PROFILE_FETCH_MS);
+      }),
+    ]);
+
+    if (!outcome.ok) {
+      console.error('Profile fetch timed out — check Supabase URL, RLS on `profiles`, and network.');
+      setProfile(null);
+      return;
+    }
+
+    const { data, error } = outcome.r;
     if (error) {
       console.error('Profile fetch error:', error);
       setProfile(null);
