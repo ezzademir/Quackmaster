@@ -19,6 +19,8 @@ interface AuthContextValue {
   profileLoading: boolean;
   signOut: () => Promise<void>;
   refetchProfile: () => Promise<void>;
+  /** Call after sign-in/sign-up so context matches Supabase before navigating to protected routes */
+  syncAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -30,6 +32,7 @@ const AuthContext = createContext<AuthContextValue>({
   profileLoading: false,
   signOut: async () => {},
   refetchProfile: async () => {},
+  syncAuth: async () => {},
 });
 
 const SESSION_INIT_TIMEOUT_MS = 15000;
@@ -51,6 +54,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setProfile(null);
     } else {
       setProfile(data as Profile | null);
+    }
+  }
+
+  /** Keeps React auth state in sync with the Supabase client (avoids navigating before session exists in context). */
+  async function syncAuth() {
+    const {
+      data: { session: next },
+      error,
+    } = await supabase.auth.getSession();
+    if (error) {
+      console.error('syncAuth getSession error:', error);
+    }
+    setSession(next ?? null);
+    setLoading(false);
+    if (next?.user) {
+      setProfileLoading(true);
+      try {
+        await fetchProfile(next.user.id);
+      } catch (e) {
+        console.error('Profile load failed:', e);
+        setProfile(null);
+      } finally {
+        setProfileLoading(false);
+      }
+    } else {
+      setProfile(null);
+      setProfileLoading(false);
     }
   }
 
@@ -159,6 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profileLoading,
       signOut,
       refetchProfile,
+      syncAuth,
     }}>
       {children}
     </AuthContext.Provider>

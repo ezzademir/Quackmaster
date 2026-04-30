@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
+import { useAuth } from '../utils/auth';
 
 export function Login() {
+  const { syncAuth } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,17 +19,21 @@ export function Login() {
       return;
     }
     setLoading(true);
-    const emailTrimmed = email.trim();
-    const { error: err } = await supabase.auth.signInWithPassword({
-      email: emailTrimmed,
-      password,
-    });
-    if (err) {
-      setError(err.message);
+    try {
+      const emailTrimmed = email.trim();
+      const { error: err } = await supabase.auth.signInWithPassword({
+        email: emailTrimmed,
+        password,
+      });
+      if (err) {
+        setError(err.message);
+        return;
+      }
+      await syncAuth();
+      navigate('/', { replace: true });
+    } finally {
       setLoading(false);
-      return;
     }
-    navigate('/');
   }
 
   return (
