@@ -35,7 +35,7 @@ const AuthContext = createContext<AuthContextValue>({
   syncAuth: async () => {},
 });
 
-const SESSION_INIT_TIMEOUT_MS = 15000;
+const SESSION_INIT_TIMEOUT_MS = 30000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -86,17 +86,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
-    let timedOut = false;
     const timer = window.setTimeout(() => {
-      timedOut = true;
       if (!mounted) return;
       console.warn(
-        '[Quackmaster] Auth session check timed out. Verify Supabase URL/key, network, or try disabling browser extensions that inject into pages.'
+        '[Quackmaster] Auth bootstrap is taking unusually long. If the app works, you can ignore this. Otherwise check Supabase URL/key, network, or Safari storage / extensions.'
       );
-      setSession(null);
-      setProfile(null);
-      setProfileLoading(false);
+      // Only unblock UI — do not clear session (getSession may be slow; onAuthStateChange may already have set it).
       setLoading(false);
+      setProfileLoading(false);
     }, SESSION_INIT_TIMEOUT_MS);
 
     async function loadProfileForUser(userId: string) {
@@ -117,7 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           data: { session },
         } = await supabase.auth.getSession();
         window.clearTimeout(timer);
-        if (!mounted || timedOut) return;
+        if (!mounted) return;
 
         setSession(session);
         setLoading(false);
@@ -131,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (e) {
         window.clearTimeout(timer);
         console.error('Auth init failed:', e);
-        if (mounted && !timedOut) {
+        if (mounted) {
           setSession(null);
           setProfile(null);
           setProfileLoading(false);
@@ -145,6 +142,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      // Always cancel slow-bootstrap timer once GoTrue has signaled (INITIAL_SESSION / SIGNED_IN / …).
+      window.clearTimeout(timer);
       setSession(session);
       setLoading(false);
       try {
