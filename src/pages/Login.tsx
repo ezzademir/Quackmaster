@@ -17,7 +17,11 @@ export function Login() {
       return;
     }
     setLoading(true);
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+    const emailTrimmed = email.trim();
+    const { error: err } = await supabase.auth.signInWithPassword({
+      email: emailTrimmed,
+      password,
+    });
     if (err) {
       setError(err.message);
       setLoading(false);
