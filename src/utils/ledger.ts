@@ -2,6 +2,9 @@ import { supabase } from './supabase';
 
 export type LedgerOperation = 'insert' | 'update' | 'delete' | 'event';
 
+/** Result of attempting to append a ledger row (no session = skipped, treated as ok). */
+export type LedgerWriteResult = { ok: true } | { ok: false; error: string };
+
 interface LedgerParams {
   action: string;
   entityType: string;
@@ -15,13 +18,13 @@ interface LedgerParams {
   metadata?: Record<string, unknown> | null;
 }
 
-export async function writeLedgerEntry(params: LedgerParams) {
+export async function writeLedgerEntry(params: LedgerParams): Promise<LedgerWriteResult> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  if (!session) return;
+  if (!session) return { ok: true };
 
-  await supabase.from('data_ledger').insert({
+  const { error } = await supabase.from('data_ledger').insert({
     user_id: session.user.id,
     user_email: session.user.email ?? '',
     action: params.action,
@@ -35,4 +38,10 @@ export async function writeLedgerEntry(params: LedgerParams) {
     delta_data: params.deltaData ?? null,
     metadata: params.metadata ?? null,
   });
+
+  if (error) {
+    console.error('[data_ledger]', error.message);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
 }

@@ -38,16 +38,7 @@ const OP_COLORS: Record<string, string> = {
   event: 'bg-amber-100 text-amber-700',
 };
 
-const MODULE_OPTIONS = [
-  'activity',
-  'auth',
-  'users',
-  'settings',
-  'inventory',
-  'procurement',
-  'production',
-  'distribution',
-];
+const MODULE_OPTIONS = ['procurement', 'production', 'distribution', 'inventory', 'auth', 'users', 'settings'];
 
 function prettyTime(iso: string) {
   const d = new Date(iso);
@@ -160,7 +151,7 @@ export function Ledger() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Data Ledger</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Structured audit of data changes: actor, purpose, and values before/delta/after
+            Canonical audit trail: actor, module, labels (metadata), and values before/delta/after
           </p>
         </div>
         <button

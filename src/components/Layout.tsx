@@ -10,7 +10,6 @@ import {
   Menu,
   ChevronRight,
   Plus,
-  ScrollText,
   BookOpenText,
   LogOut,
   ChevronDown,
@@ -31,7 +30,6 @@ const opsNav = [
 
 const adminNav = [
   { path: '/users', label: 'Users', icon: Users, exact: false },
-  { path: '/activity-log', label: 'Activity Log', icon: ScrollText, exact: false },
   { path: '/ledger', label: 'Data Ledger', icon: BookOpenText, exact: false },
   { path: '/settings', label: 'Settings', icon: Settings, exact: false },
 ];

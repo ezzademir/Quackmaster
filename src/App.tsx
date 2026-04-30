@@ -11,7 +11,6 @@ import { Procurement } from './pages/Procurement';
 import { Production } from './pages/Production';
 import { Inventory } from './pages/Inventory';
 import { Distribution } from './pages/Distribution';
-import { ActivityLog } from './pages/ActivityLog';
 import { Ledger } from './pages/Ledger';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
@@ -47,11 +46,6 @@ function RegisterRoute() {
 function UsersGate() {
   const { isAdmin } = useAuth();
   return isAdmin ? <Users /> : <Navigate to="/" replace />;
-}
-
-function ActivityLogGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <ActivityLog /> : <Navigate to="/" replace />;
 }
 
 function LedgerGate() {
@@ -99,7 +93,6 @@ function App() {
             <Route path="/inventory/*" element={<Inventory />} />
             <Route path="/distribution/*" element={<Distribution />} />
             <Route path="/users" element={<UsersGate />} />
-            <Route path="/activity-log" element={<ActivityLogGate />} />
             <Route path="/ledger" element={<LedgerGate />} />
             <Route path="/settings" element={<SettingsGate />} />
             <Route path="*" element={<Navigate to="/" replace />} />

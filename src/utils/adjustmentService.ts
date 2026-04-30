@@ -5,7 +5,6 @@
 
 import { supabase } from './supabase';
 import { writeLedgerEntry } from './ledger';
-import { logActivity } from './activityLog';
 import { validateInventoryAdjustment } from './validation';
 import { retryWithBackoff } from './errorHandling';
 
@@ -131,16 +130,23 @@ export async function createInventoryAdjustment(
       await applyInventoryAdjustment(adjustment.id, session.user.id);
     }
 
-    // Log activity
-    await logActivity({
+    await writeLedgerEntry({
       action: 'created',
       entityType: 'inventory_adjustment',
       entityId: adjustment.id,
-      entityLabel: `${params.adjustmentType} - ${params.adjustmentReason}`,
-      details: {
-        quantity: params.adjustedQuantity,
-        reason: params.adjustmentReason,
+      module: 'inventory',
+      operation: 'insert',
+      referenceId: params.hubInventoryId,
+      afterData: {
+        adjustment_type: params.adjustmentType,
+        adjusted_quantity: params.adjustedQuantity,
+        adjustment_reason: params.adjustmentReason,
         status,
+        hub_inventory_id: params.hubInventoryId,
+        notes: params.notes ?? null,
+      },
+      metadata: {
+        entity_label: `${params.adjustmentType} adjustment (${params.adjustmentReason})`,
       },
     });
 
@@ -240,19 +246,9 @@ export async function applyInventoryAdjustment(
       metadata: {
         adjustment_reason: adjustment.adjustment_reason,
         adjustment_notes: adjustment.notes,
-      },
-    });
-
-    // Log activity
-    await logActivity({
-      action: 'completed',
-      entityType: 'inventory_adjustment',
-      entityId: adjustmentId,
-      entityLabel: `${adjustment.adjustment_type} - ${adjustment.adjustment_reason}`,
-      details: {
-        new_quantity: newQuantity,
+        entity_label: `${adjustment.adjustment_type} applied — ${adjustment.adjustment_reason}`,
         previous_quantity: inventory.quantity_on_hand,
-        delta: adjustment.adjustment_type === 'addition' ? adjustment.adjusted_quantity : -adjustment.adjusted_quantity,
+        new_quantity: newQuantity,
       },
     });
 
@@ -286,12 +282,17 @@ export async function rejectInventoryAdjustment(
         .eq('id', adjustmentId)
     );
 
-    await logActivity({
+    await writeLedgerEntry({
       action: 'cancelled',
       entityType: 'inventory_adjustment',
       entityId: adjustmentId,
-      entityLabel: 'Adjustment Rejected',
-      details: { reason: rejectionReason },
+      module: 'inventory',
+      operation: 'update',
+      afterData: { status: 'rejected' },
+      metadata: {
+        entity_label: 'Adjustment rejected',
+        rejection_reason: rejectionReason,
+      },
     });
 
     return { success: true };

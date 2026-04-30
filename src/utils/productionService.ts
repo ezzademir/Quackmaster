@@ -5,7 +5,6 @@
 
 import { supabase } from './supabase';
 import { writeLedgerEntry } from './ledger';
-import { logActivity } from './activityLog';
 import {
   evaluateProductionQC,
   determineQCActions,
@@ -213,17 +212,21 @@ export async function completeProductionRun(
       }
     }
 
-    // Log activity
-    await logActivity({
+    await writeLedgerEntry({
       action: 'completed',
       entityType: 'production_run',
       entityId: params.productionRunId,
-      entityLabel: `Batch ${batchId}`,
-      details: {
+      module: 'production',
+      operation: 'event',
+      referenceId: params.productionRunId,
+      afterData: {
         yield_percentage: qcResult.yieldPercentage,
         qc_status: qcResult.status,
         output_quantity: params.actualOutput,
+        product_batch: batchId,
+        hub_inventory_id: hubBatch.id,
       },
+      metadata: { entity_label: `Production completed · ${batchId}`, summary: 'production_completed' },
     });
 
     return {
@@ -267,14 +270,7 @@ export async function deleteProductionRun(options: {
       module: 'production',
       operation: 'delete',
       beforeData: { run_number: options.runNumber, status: options.status },
-    });
-
-    await logActivity({
-      action: 'deleted',
-      entityType: 'production_run',
-      entityId: options.runId,
-      entityLabel: options.runNumber,
-      details: { status: options.status },
+      metadata: { entity_label: options.runNumber, prior_status: options.status },
     });
 
     return { success: true };
@@ -301,15 +297,8 @@ export async function rejectProductionRun(
       entityId: productionRunId,
       module: 'production',
       operation: 'update',
-      metadata: { rejection_reason: reason },
-    });
-
-    await logActivity({
-      action: 'cancelled',
-      entityType: 'production_run',
-      entityId: productionRunId,
-      entityLabel: productionRunId,
-      details: { reason },
+      afterData: { status: 'cancelled' },
+      metadata: { entity_label: 'Production run rejected/cancelled', rejection_reason: reason },
     });
 
     return { success: true };

@@ -1,5 +1,4 @@
-import { supabase } from './supabase';
-import { writeLedgerEntry } from './ledger';
+import { writeLedgerEntry, type LedgerWriteResult } from './ledger';
 
 type Action = 'created' | 'updated' | 'deleted' | 'received' | 'dispatched' | 'completed' | 'cancelled';
 
@@ -21,26 +20,37 @@ interface LogParams {
   details?: Record<string, unknown>;
 }
 
-export async function logActivity(params: LogParams) {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) return; // Only log when authenticated
+function ledgerModuleForEntity(entityType: EntityType): string {
+  switch (entityType) {
+    case 'supplier':
+    case 'raw_material':
+    case 'recipe':
+    case 'purchase_order':
+      return 'procurement';
+    case 'production_run':
+      return 'production';
+    case 'outlet':
+    case 'supply_order':
+      return 'distribution';
+    case 'inventory_adjustment':
+      return 'inventory';
+    default:
+      return 'app';
+  }
+}
 
-  await supabase.from('activity_logs').insert({
-    user_id: session.user.id,
-    user_email: session.user.email ?? '',
-    action: params.action,
-    entity_type: params.entityType,
-    entity_id: params.entityId,
-    entity_label: params.entityLabel,
-    details: params.details ?? null,
-  });
-
-  await writeLedgerEntry({
+/**
+ * Append a narrative ledger row (`operation: event`). Prefer one merged `writeLedgerEntry`
+ * per mutation where you already record insert/update/delete — use this for event-only trails.
+ */
+export async function logActivity(params: LogParams): Promise<LedgerWriteResult> {
+  return writeLedgerEntry({
     action: params.action,
     entityType: params.entityType,
     entityId: params.entityId,
-    module: 'activity',
+    module: ledgerModuleForEntity(params.entityType),
     operation: 'event',
     afterData: params.details ?? null,
+    metadata: { entity_label: params.entityLabel },
   });
 }

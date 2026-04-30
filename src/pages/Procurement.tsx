@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Plus, Search, CreditCard as Edit2, Trash2, ChevronRight, PackagePlus, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
-import { logActivity } from '../utils/activityLog';
 import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, formatValidationErrors } from '../utils/validation';
 import { retryWithBackoff } from '../utils/errorHandling';
@@ -88,13 +87,6 @@ function SupplierModal({
         return;
       }
 
-      await logActivity({
-        action: supplier ? 'updated' : 'created',
-        entityType: 'supplier',
-        entityId: createdSupplierId,
-        entityLabel: form.name,
-      });
-
       await writeLedgerEntry({
         action: supplier ? 'updated' : 'created',
         entityType: 'supplier',
@@ -102,6 +94,7 @@ function SupplierModal({
         module: 'procurement',
         operation: supplier ? 'update' : 'insert',
         afterData: form,
+        metadata: { entity_label: form.name },
       });
 
       onSave();
@@ -207,13 +200,6 @@ function MaterialModal({
         return;
       }
 
-      await logActivity({
-        action: material ? 'updated' : 'created',
-        entityType: 'raw_material',
-        entityId: createdMaterialId,
-        entityLabel: form.name,
-      });
-
       await writeLedgerEntry({
         action: material ? 'updated' : 'created',
         entityType: 'raw_material',
@@ -221,6 +207,7 @@ function MaterialModal({
         module: 'procurement',
         operation: material ? 'update' : 'insert',
         afterData: payload,
+        metadata: { entity_label: form.name },
       });
 
       onSave();
@@ -397,14 +384,6 @@ function NewPOModal({
         return;
       }
 
-      await logActivity({
-        action: 'created',
-        entityType: 'purchase_order',
-        entityId: po.id,
-        entityLabel: order_number,
-        details: { supplier_id, total, item_count: items.length },
-      });
-
       await writeLedgerEntry({
         action: 'created',
         entityType: 'purchase_order',
@@ -416,8 +395,9 @@ function NewPOModal({
           supplier_id,
           status: 'draft',
           total_amount: total,
-          items: items.length,
+          item_count: items.length,
         },
+        metadata: { entity_label: order_number },
       });
 
       onSave();
@@ -681,12 +661,18 @@ function PODetailModal({
           .eq('id', po.id)
       );
 
-      await logActivity({
+      await writeLedgerEntry({
         action: nextStatus === 'received' ? 'received' : 'updated',
         entityType: 'purchase_order',
         entityId: po.id,
-        entityLabel: po.order_number,
-        details: { status: nextStatus, received_total: receivedTotal, ordered_total: orderedTotal },
+        module: 'procurement',
+        operation: 'update',
+        afterData: {
+          status: nextStatus,
+          received_total: receivedTotal,
+          ordered_total: orderedTotal,
+        },
+        metadata: { entity_label: po.order_number },
       });
 
       setSaving(false);
@@ -704,12 +690,14 @@ function PODetailModal({
         supabase.from('purchase_orders').update({ status }).eq('id', po.id)
       );
 
-      await logActivity({
+      await writeLedgerEntry({
         action: 'updated',
         entityType: 'purchase_order',
         entityId: po.id,
-        entityLabel: po.order_number,
-        details: { status },
+        module: 'procurement',
+        operation: 'update',
+        afterData: { status },
+        metadata: { entity_label: po.order_number },
       });
 
       setSaving(false);
@@ -836,7 +824,15 @@ export function Procurement() {
     if (!confirm('Delete this supplier?')) return;
     const s = suppliers.find((x) => x.id === id);
     await supabase.from('suppliers').delete().eq('id', id);
-    await logActivity({ action: 'deleted', entityType: 'supplier', entityId: id, entityLabel: s?.name ?? id });
+    await writeLedgerEntry({
+      action: 'deleted',
+      entityType: 'supplier',
+      entityId: id,
+      module: 'procurement',
+      operation: 'delete',
+      beforeData: s ? { name: s.name } : {},
+      metadata: { entity_label: s?.name ?? id },
+    });
     loadAll();
   }
 
@@ -844,7 +840,15 @@ export function Procurement() {
     if (!confirm('Delete this raw material?')) return;
     const m = materials.find((x) => x.id === id);
     await supabase.from('raw_materials').delete().eq('id', id);
-    await logActivity({ action: 'deleted', entityType: 'raw_material', entityId: id, entityLabel: m?.name ?? id });
+    await writeLedgerEntry({
+      action: 'deleted',
+      entityType: 'raw_material',
+      entityId: id,
+      module: 'procurement',
+      operation: 'delete',
+      beforeData: m ? { name: m.name } : {},
+      metadata: { entity_label: m?.name ?? id },
+    });
     loadAll();
   }
 

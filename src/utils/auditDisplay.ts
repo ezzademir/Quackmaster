@@ -1,4 +1,4 @@
-/** Human-readable formatting for Activity Log and Data Ledger rows */
+/** Human-readable formatting for Data Ledger rows */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -53,80 +53,6 @@ export function humanizeKey(key: string): string {
   return key.replace(/_/g, ' ');
 }
 
-/** One-line + bullet facts for Activity Log `details` JSON */
-export function summarizeActivityDetails(
-  action: string,
-  entityType: string,
-  entityLabel: string,
-  entityId: string,
-  details: Record<string, unknown> | null
-): { headline: string; bullets: string[] } {
-  const bullets: string[] = [];
-  const recordName =
-    entityLabel?.trim() ||
-    entityId?.trim() ||
-    (details && typeof details.name === 'string' ? details.name : '') ||
-    '—';
-
-  if (!details) {
-    return {
-      headline: `${humanizeKey(entityType)} · ${recordName}`,
-      bullets: [`Action: ${action}`],
-    };
-  }
-
-  const reason = details.reason ?? details.notes ?? details.note;
-  if (reason != null && String(reason).trim()) {
-    bullets.push(`Purpose / notes: ${formatPrimitive(reason)}`);
-  }
-
-  if ('from' in details || 'to' in details) {
-    bullets.push(`Adjusted: ${formatPrimitive(details.from)} → ${formatPrimitive(details.to)}`);
-  }
-
-  if (details.total_quantity != null) {
-    bullets.push(`Total quantity: ${formatPrimitive(details.total_quantity)}`);
-  }
-  if (details.item_count != null) {
-    bullets.push(`Line items: ${formatPrimitive(details.item_count)}`);
-  }
-  if (details.outlet_id != null) {
-    bullets.push(`Outlet ID: ${formatPrimitive(details.outlet_id)}`);
-  }
-  if (details.dispatch_date != null) {
-    bullets.push(`Dispatch date: ${formatPrimitive(details.dispatch_date)}`);
-  }
-  if (details.status != null) {
-    bullets.push(`Status: ${formatPrimitive(details.status)}`);
-  }
-
-  const handled = new Set([
-    'reason',
-    'notes',
-    'note',
-    'from',
-    'to',
-    'total_quantity',
-    'item_count',
-    'outlet_id',
-    'dispatch_date',
-    'status',
-    'name',
-  ]);
-
-  for (const [k, v] of Object.entries(details)) {
-    if (handled.has(k)) continue;
-    if (v === undefined) continue;
-    bullets.push(`${humanizeKey(k)}: ${formatPrimitive(v)}`);
-    if (bullets.length >= 12) break;
-  }
-
-  return {
-    headline: `${humanizeKey(entityType)} · ${recordName}`,
-    bullets: bullets.length ? bullets : [`Action: ${action}`],
-  };
-}
-
 function metaRecord(meta: unknown): Record<string, unknown> | null {
   return isPlainObject(meta) ? meta : null;
 }
@@ -140,12 +66,17 @@ export function ledgerPurposeLine(entry: {
   metadata: Record<string, unknown> | null;
 }): string {
   const meta = metaRecord(entry.metadata);
-  if (meta?.reason != null && String(meta.reason).trim()) {
-    return String(meta.reason);
+  const label = meta?.entity_label != null && String(meta.entity_label).trim() ? String(meta.entity_label) : '';
+  const reasonish =
+    meta?.reason ?? meta?.cancellation_reason ?? meta?.rejection_reason;
+  if (reasonish != null && String(reasonish).trim()) {
+    const rs = String(reasonish);
+    return label ? `${label}: ${rs}` : rs;
   }
   if (meta?.purpose != null && String(meta.purpose).trim()) {
-    return String(meta.purpose);
+    return label ? `${label} · ${String(meta.purpose)}` : String(meta.purpose);
   }
+  if (label) return label;
   return `${humanizeKey(entry.module)} · ${humanizeKey(entry.entity_type)} (${entry.operation})`;
 }
 
@@ -184,7 +115,7 @@ export function ledgerChangeBullets(entry: {
 
   const meta = metaRecord(entry.metadata);
   if (meta) {
-    const skip = new Set(['reason', 'purpose']);
+    const skip = new Set(['reason', 'purpose', 'entity_label', 'summary', 'cancellation_reason', 'rejection_reason']);
     for (const [k, v] of Object.entries(meta)) {
       if (skip.has(k)) continue;
       lines.push(`${humanizeKey(k)}: ${formatPrimitive(v)}`);

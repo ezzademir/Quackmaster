@@ -5,7 +5,6 @@
 
 import { supabase } from './supabase';
 import { writeLedgerEntry } from './ledger';
-import { logActivity } from './activityLog';
 import {
   checkInventoryAvailability,
   reserveInventory,
@@ -180,18 +179,7 @@ export async function createSupplyOrder(
       };
     }
 
-    await logActivity({
-      action: 'created',
-      entityType: 'supply_order',
-      entityId: supplyOrder.id,
-      entityLabel: `Order to outlet`,
-      details: {
-        outlet_id: params.outletId,
-        item_count: params.items.length,
-        total_quantity: params.items.reduce((sum, item) => sum + item.quantity, 0),
-      },
-    });
-
+    const totalQty = params.items.reduce((sum, item) => sum + item.quantity, 0);
     await writeLedgerEntry({
       action: 'created',
       entityType: 'supply_order',
@@ -202,7 +190,10 @@ export async function createSupplyOrder(
         outlet_id: params.outletId,
         status: 'pending',
         item_count: params.items.length,
+        total_quantity: totalQty,
+        notes: params.notes || null,
       },
+      metadata: { entity_label: 'Supply order created', outlet_id: params.outletId },
     });
 
     return {
@@ -264,21 +255,15 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
         .eq('id', supplyOrderId)
     );
 
+    const dispatchDate = new Date().toISOString().split('T')[0];
     await writeLedgerEntry({
-      action: 'updated',
+      action: 'dispatched',
       entityType: 'supply_order',
       entityId: supplyOrderId,
       module: 'distribution',
       operation: 'update',
-      afterData: { status: 'dispatched' },
-    });
-
-    await logActivity({
-      action: 'dispatched',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      entityLabel: `Supply Order Dispatched`,
-      details: { dispatch_date: new Date().toISOString() },
+      afterData: { status: 'dispatched', dispatch_date: dispatchDate },
+      metadata: { entity_label: 'Supply order dispatched' },
     });
 
     return { success: true };
@@ -331,20 +316,15 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
         .eq('id', supplyOrderId)
     );
 
+    const receivedDate = new Date().toISOString().split('T')[0];
     await writeLedgerEntry({
-      action: 'updated',
+      action: 'received',
       entityType: 'supply_order',
       entityId: supplyOrderId,
       module: 'distribution',
       operation: 'update',
-      afterData: { status: 'received' },
-    });
-
-    await logActivity({
-      action: 'received',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      entityLabel: `Supply Order Received`,
+      afterData: { status: 'received', received_date: receivedDate },
+      metadata: { entity_label: 'Supply order received at outlet' },
     });
 
     return { success: true };
@@ -401,15 +381,8 @@ export async function cancelSupplyOrder(
       entityId: supplyOrderId,
       module: 'distribution',
       operation: 'update',
-      metadata: { cancellation_reason: reason },
-    });
-
-    await logActivity({
-      action: 'cancelled',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      entityLabel: `Supply Order Cancelled`,
-      details: { reason },
+      afterData: { status: 'cancelled' },
+      metadata: { entity_label: 'Supply order cancelled', cancellation_reason: reason },
     });
 
     return { success: true };
@@ -448,14 +421,7 @@ export async function adminDeleteSupplyOrder(options: {
         supply_order_number: options.supplyOrderNumber,
         status: options.status,
       },
-    });
-
-    await logActivity({
-      action: 'deleted',
-      entityType: 'supply_order',
-      entityId: options.supplyOrderId,
-      entityLabel: options.supplyOrderNumber,
-      details: { status: options.status },
+      metadata: { entity_label: options.supplyOrderNumber, prior_status: options.status },
     });
 
     return { success: true };
@@ -488,13 +454,7 @@ export async function adminDeleteOutlet(options: {
       module: 'distribution',
       operation: 'delete',
       beforeData: { name: options.outletName },
-    });
-
-    await logActivity({
-      action: 'deleted',
-      entityType: 'outlet',
-      entityId: options.outletId,
-      entityLabel: options.outletName,
+      metadata: { entity_label: options.outletName },
     });
 
     return { success: true };

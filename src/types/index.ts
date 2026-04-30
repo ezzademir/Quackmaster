@@ -163,15 +163,6 @@ export interface DashboardKPIs {
   recentActivityCount: number;
 }
 
-export interface ActivityLog {
-  id: string;
-  type: 'purchase' | 'production' | 'supply';
-  title: string;
-  description: string;
-  timestamp: string;
-  relatedId: string;
-}
-
 export interface PendingRegistration {
   id: string;
   user_id: string;

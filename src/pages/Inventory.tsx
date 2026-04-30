@@ -4,7 +4,6 @@ import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
-import { logActivity } from '../utils/activityLog';
 import { writeLedgerEntry } from '../utils/ledger';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import type { RawMaterial, Outlet } from '../types';
@@ -72,7 +71,7 @@ function AdjustModal({
     const newAvailable = Math.max(0, newQty - reserved);
     setSaving(true);
     try {
-      await supabase
+      const { error: updateErr } = await supabase
         .from('hub_inventory')
         .update({
           quantity_on_hand: newQty,
@@ -80,7 +79,13 @@ function AdjustModal({
           last_updated: new Date().toISOString(),
         })
         .eq('id', row.id);
-      await writeLedgerEntry({
+
+      if (updateErr) {
+        setError(updateErr.message);
+        return;
+      }
+
+      const ledgerRes = await writeLedgerEntry({
         action: 'updated',
         entityType: row.type === 'material' ? 'hub_inventory_material' : 'hub_inventory_product',
         entityId: row.id,
@@ -89,9 +94,20 @@ function AdjustModal({
         beforeData: { quantity_on_hand: row.quantity_on_hand, available_quantity: row.available_quantity },
         afterData: { quantity_on_hand: newQty, available_quantity: newAvailable },
         deltaData: { quantity_on_hand: newQty - row.quantity_on_hand },
-        metadata: { reason },
+        metadata: {
+          reason,
+          entity_label: row.name,
+          adjustment_from: row.quantity_on_hand,
+          adjustment_to: newQty,
+        },
       });
-      await logActivity({ action: 'updated', entityType: 'inventory_adjustment', entityId: row.id, entityLabel: row.name, details: { from: row.quantity_on_hand, to: newQty, reason } });
+
+      if (!ledgerRes.ok) {
+        setError(
+          `Stock was updated, but the audit trail failed to save${ledgerRes.error ? `: ${ledgerRes.error}` : ''}.`
+        );
+      }
+
       onSave();
     } finally {
       setSaving(false);
