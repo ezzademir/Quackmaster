@@ -223,7 +223,7 @@ export function validateSupplyOrder(data: Record<string, unknown>): ValidationRe
   const outletErr = validateRequired(data.outlet_id, 'Outlet');
   if (outletErr) errors.push(outletErr);
 
-  const dateErr = validateRequired(data.dispatch_date, 'Dispatch date');
+  const dateErr = validateRequired(data.supply_date ?? data.dispatch_date, 'Supply date');
   if (dateErr) errors.push(dateErr);
 
   const qtyErr = validatePositiveNumber(data.total_quantity, 'Total quantity');

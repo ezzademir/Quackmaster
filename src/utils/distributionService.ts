@@ -22,7 +22,8 @@ export interface SupplyOrderItem {
 
 export interface SupplyOrderParams {
   outletId: string;
-  dispatchDate: string;
+  /** Supply date from picker (persisted as supply_date; dispatch_date starts equal until dispatch) */
+  supplyDate: string;
   items: SupplyOrderItem[];
   notes?: string;
 }
@@ -108,7 +109,8 @@ export async function createSupplyOrder(
         .insert({
           outlet_id: params.outletId,
           supply_order_number: generateSupplyOrderNumber(),
-          dispatch_date: params.dispatchDate,
+          supply_date: params.supplyDate,
+          dispatch_date: params.supplyDate,
           status: 'pending',
           total_quantity: params.items.reduce((sum, item) => sum + item.quantity, 0),
           notes: params.notes || null,

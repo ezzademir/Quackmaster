@@ -135,6 +135,8 @@ export interface SupplyOrder {
   id: string;
   supply_order_number: string;
   outlet_id: string;
+  /** User-selected supply date from create form; not overwritten on dispatch */
+  supply_date: string;
   dispatch_date: string;
   received_date?: string;
   status: 'pending' | 'dispatched' | 'received' | 'cancelled';

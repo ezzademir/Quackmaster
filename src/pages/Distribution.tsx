@@ -18,6 +18,23 @@ import { useAuth } from '../utils/auth';
 
 type Tab = 'orders' | 'outlets';
 
+/** Calendar date from DB `date` or timestamptz — avoids UTC midnight shifting the displayed day */
+function formatSupplyCalendarDate(value: string | undefined | null): string {
+  if (value == null || value === '') return '—';
+  const trimmed = String(value).trim();
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+  if (dateOnly) {
+    const y = Number(dateOnly[1]);
+    const mo = Number(dateOnly[2]) - 1;
+    const day = Number(dateOnly[3]);
+    const d = new Date(y, mo, day);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleDateString();
+  }
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString();
+}
+
 /** Admin hard-delete is allowed for these statuses (RPC reverses inventory when applicable). */
 function supplyOrderAllowsAdminHardDelete(status: string | undefined): boolean {
   const s = String(status ?? '').toLowerCase().trim();
@@ -189,7 +206,7 @@ function NewSupplyOrderModal({
   onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
-  const [dispatch_date, setDispatchDate] = useState(new Date().toISOString().split('T')[0]);
+  const [supply_date, setSupplyDate] = useState(new Date().toISOString().split('T')[0]);
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -200,7 +217,7 @@ function NewSupplyOrderModal({
 
     const validation = validateSupplyOrder({
       outlet_id,
-      dispatch_date,
+      supply_date,
       total_quantity: qty,
     });
 
@@ -229,7 +246,7 @@ function NewSupplyOrderModal({
 
       const result = await createSupplyOrder({
         outletId: outlet_id,
-        dispatchDate: dispatch_date,
+        supplyDate: supply_date,
         items,
         notes,
       });
@@ -271,9 +288,10 @@ function NewSupplyOrderModal({
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Dispatch Date</label>
-          <input type="date" value={dispatch_date} onChange={(e) => setDispatchDate(e.target.value)}
+          <label className="mb-1 block text-sm font-medium text-gray-700">Supply date *</label>
+          <input type="date" value={supply_date} onChange={(e) => setSupplyDate(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          <p className="mt-1 text-xs text-gray-500">Shown in the supply orders list; unchanged when the order is later dispatched.</p>
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Quantity *</label>
@@ -366,6 +384,9 @@ function SODetailModal({
     }
   }
 
+  const statusNorm = String(so.status ?? '').toLowerCase().trim();
+  const showDispatchedOn = statusNorm === 'dispatched' || statusNorm === 'received';
+
   return (
     <Modal isOpen onClose={onClose} title={`Supply Order: ${so.supply_order_number}`} size="md">
       <div className="space-y-4">
@@ -374,8 +395,9 @@ function SODetailModal({
           <div><p className="text-xs text-gray-500">Location</p><p className="font-semibold text-gray-900">{so.outlet?.location_code ?? '—'}</p></div>
           <div><p className="text-xs text-gray-500">Status</p><StatusBadge status={so.status} /></div>
           <div><p className="text-xs text-gray-500">Quantity</p><p className="font-semibold text-gray-900">{so.total_quantity} units</p></div>
-          <div><p className="text-xs text-gray-500">Dispatch Date</p><p className="font-semibold text-gray-900">{so.dispatch_date ? new Date(so.dispatch_date).toLocaleDateString() : '—'}</p></div>
-          {so.received_date && <div><p className="text-xs text-gray-500">Received Date</p><p className="font-semibold text-gray-900">{new Date(so.received_date).toLocaleDateString()}</p></div>}
+          <div><p className="text-xs text-gray-500">Supply date</p><p className="font-semibold text-gray-900">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</p></div>
+          <div><p className="text-xs text-gray-500">Dispatched on</p><p className="font-semibold text-gray-900">{showDispatchedOn ? formatSupplyCalendarDate(so.dispatch_date) : '—'}</p></div>
+          {so.received_date && <div><p className="text-xs text-gray-500">Received date</p><p className="font-semibold text-gray-900">{formatSupplyCalendarDate(so.received_date)}</p></div>}
           {so.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{so.notes}</p></div>}
         </div>
       </div>
@@ -415,13 +437,17 @@ function normalizeSOStatus(status: string | undefined): string {
   return String(status ?? '').toLowerCase().trim();
 }
 
-/** Pending/cancelled: filter by when the order was created. Dispatched/received: actual dispatch (planned date must not hide new pending rows). */
+/** Pending/cancelled: filter by supply_date (picker). Dispatched/received: actual dispatch_date. */
 function supplyOrderDateForRangeFilter(so: SOWithOutlet): string {
   const st = normalizeSOStatus(so.status);
+  const picker = (so.supply_date ?? so.dispatch_date)?.trim();
   if (st === 'pending' || st === 'cancelled') {
+    if (picker) return picker.includes('T') ? picker : `${picker}T12:00:00`;
     return so.created_at ?? '';
   }
-  return so.dispatch_date ?? so.created_at ?? '';
+  const dispatched = so.dispatch_date?.trim();
+  if (dispatched) return dispatched.includes('T') ? dispatched : `${dispatched}T12:00:00`;
+  return so.created_at ?? '';
 }
 
 interface OutletStockRow {
@@ -788,9 +814,10 @@ export function Distribution() {
                 <thead className="border-b border-gray-200 bg-gray-50">
                   <tr>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Order #</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Supply date</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
                     <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Qty</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
+                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatched</th>
                     <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
                     <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
@@ -799,7 +826,7 @@ export function Distribution() {
                 <tbody className="divide-y divide-gray-100">
                   {filteredOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-6 py-12 text-center">
+                      <td colSpan={9} className="px-6 py-12 text-center">
                         <Truck className="mx-auto mb-3 text-gray-300" size={40} />
                         <p className="text-gray-400">No supply orders yet</p>
                       </td>
@@ -808,10 +835,15 @@ export function Distribution() {
                     filteredOrders.map((so) => (
                       <tr key={so.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{so.supply_order_number}</td>
+                        <td className="px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</td>
                         <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{so.outlet?.name ?? '—'}</td>
                         <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{so.total_quantity}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs">{new Date(so.dispatch_date).toLocaleDateString()}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs">{so.received_date ? new Date(so.received_date).toLocaleDateString() : '—'}</td>
+                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
+                          {['dispatched', 'received'].includes(normalizeSOStatus(so.status))
+                            ? formatSupplyCalendarDate(so.dispatch_date)
+                            : '—'}
+                        </td>
+                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">{so.received_date ? formatSupplyCalendarDate(so.received_date) : '—'}</td>
                         <td className="px-4 md:px-6 py-4"><StatusBadge status={so.status} /></td>
                         <td className="px-4 md:px-6 py-4">
                           <div className="flex flex-wrap items-center justify-end gap-2">
