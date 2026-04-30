@@ -814,10 +814,10 @@ export function Distribution() {
                 <thead className="border-b border-gray-200 bg-gray-50">
                   <tr>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Order #</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Supply date</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
                     <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Qty</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatched</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Supply</th>
+                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
                     <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
                     <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
@@ -835,9 +835,9 @@ export function Distribution() {
                     filteredOrders.map((so) => (
                       <tr key={so.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{so.supply_order_number}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</td>
                         <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{so.outlet?.name ?? '—'}</td>
                         <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{so.total_quantity}</td>
+                        <td className="px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</td>
                         <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
                           {['dispatched', 'received'].includes(normalizeSOStatus(so.status))
                             ? formatSupplyCalendarDate(so.dispatch_date)
