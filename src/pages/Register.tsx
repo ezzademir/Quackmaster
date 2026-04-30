@@ -27,7 +27,9 @@ export function Register() {
       return;
     }
     if (!isSupabaseConfigured) {
-      setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then rebuild.');
+      setError(
+        'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or legacy VITE_SUPABASE_ANON_KEY), then rebuild.'
+      );
       return;
     }
     setLoading(true);
@@ -128,7 +130,8 @@ export function Register() {
                 <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   Missing Supabase env at build time. Configure{' '}
                   <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_URL</code> and{' '}
-                  <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code>, then redeploy.
+                  <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_PUBLISHABLE_KEY</code> (or{' '}
+                  <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code>), then redeploy.
                 </div>
               )}
               {error && (

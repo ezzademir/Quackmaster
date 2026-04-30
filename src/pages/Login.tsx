@@ -15,7 +15,9 @@ export function Login() {
     e.preventDefault();
     setError('');
     if (!isSupabaseConfigured) {
-      setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then rebuild.');
+      setError(
+        'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or legacy VITE_SUPABASE_ANON_KEY), then rebuild.'
+      );
       return;
     }
     setLoading(true);
@@ -51,8 +53,10 @@ export function Login() {
             <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               Missing Supabase env at build time. Add{' '}
               <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_URL</code> and{' '}
-              <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code> (GitHub Actions secrets or local{' '}
-              <code className="rounded bg-amber-100 px-1">.env</code>), then redeploy.
+              <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_PUBLISHABLE_KEY</code> (or legacy{' '}
+              <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code>) from Supabase → Settings → API.
+              Use GitHub Actions secrets or local <code className="rounded bg-amber-100 px-1">.env</code>, then redeploy.
+              Never use the secret/service_role key in the browser.
             </div>
           )}
           {error && (

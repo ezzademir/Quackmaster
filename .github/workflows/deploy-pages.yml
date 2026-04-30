@@ -24,6 +24,8 @@ jobs:
     # If this job still sees empty values, add the same names under Environment secrets for "github-pages".
     env:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      # Prefer publishable (`sb_publishable_…`); legacy anon JWT still supported.
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
     steps:
       - name: Checkout
@@ -40,9 +42,13 @@ jobs:
 
       - name: Verify Supabase env for Vite build
         run: |
-          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "::error::Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY."
-            echo "Add both as Actions secrets (repository or github-pages environment)."
+          if [ -z "$VITE_SUPABASE_URL" ]; then
+            echo "::error::Missing VITE_SUPABASE_URL (Project URL from Supabase → Settings → API)."
+            exit 1
+          fi
+          if [ -z "$VITE_SUPABASE_PUBLISHABLE_KEY" ] && [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Missing client API key. Set VITE_SUPABASE_PUBLISHABLE_KEY (recommended) or VITE_SUPABASE_ANON_KEY."
+            echo "Copy from Supabase → Settings → API. Never use the secret/service_role key in the frontend."
             exit 1
           fi
 
