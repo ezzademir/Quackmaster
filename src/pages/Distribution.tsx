@@ -5,17 +5,39 @@ import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
-import { dispatchSupplyOrder, confirmSupplyOrderReceipt, createSupplyOrder, adminDeleteSupplyOrder } from '../utils/distributionService';
+import {
+  dispatchSupplyOrder,
+  confirmSupplyOrderReceipt,
+  createSupplyOrder,
+  adminDeleteOutlet,
+  adminDeleteSupplyOrder,
+} from '../utils/distributionService';
 import { validateSupplyOrder } from '../utils/validation';
 import type { Outlet, SupplyOrder } from '../types';
 import { useAuth } from '../utils/auth';
 
 type Tab = 'orders' | 'outlets';
 
-/** Normalize DB status so delete visibility matches RPC (pending/cancelled only). */
+/** Admin hard-delete is allowed for these statuses (RPC reverses inventory when applicable). */
 function supplyOrderAllowsAdminHardDelete(status: string | undefined): boolean {
   const s = String(status ?? '').toLowerCase().trim();
-  return s === 'pending' || s === 'cancelled';
+  return s === 'pending' || s === 'cancelled' || s === 'dispatched' || s === 'received';
+}
+
+function supplyOrderAdminDeleteConfirmDetail(status: string | undefined): string {
+  const stNorm = String(status ?? '').toLowerCase().trim();
+  switch (stNorm) {
+    case 'pending':
+      return 'Reserved hub stock will be released.';
+    case 'dispatched':
+      return 'Hub shipment will be reversed (stock returned to hub batches). Outlet on-hand was not increased until receipt, so it is unchanged.';
+    case 'received':
+      return 'Outlet on-hand will be reduced and hub finished-goods stock will be restored for each line (admin correction).';
+    case 'cancelled':
+      return 'This removes the cancelled record only. Inventory is not adjusted automatically; if this order was dispatched before cancel, correct hub/outlet stock manually if needed.';
+    default:
+      return 'This order will be permanently removed.';
+  }
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -295,11 +317,7 @@ function SODetailModal({
 
   async function askAdminDelete() {
     if (!canHardDelete) return;
-    const stNorm = String(so.status ?? '').toLowerCase().trim();
-    const detail =
-      stNorm === 'pending'
-        ? 'Reserved hub stock will be released.'
-        : 'This removes the cancelled record from the list.';
+    const detail = supplyOrderAdminDeleteConfirmDetail(so.status);
     if (!confirm(`Permanently delete supply order ${so.supply_order_number}?\n\n${detail}\n\nThis cannot be undone.`)) return;
     setSaving(true);
     try {
@@ -397,13 +415,24 @@ function normalizeSOStatus(status: string | undefined): string {
   return String(status ?? '').toLowerCase().trim();
 }
 
+/** Pending/cancelled: filter by when the order was created. Dispatched/received: actual dispatch (planned date must not hide new pending rows). */
+function supplyOrderDateForRangeFilter(so: SOWithOutlet): string {
+  const st = normalizeSOStatus(so.status);
+  if (st === 'pending' || st === 'cancelled') {
+    return so.created_at ?? '';
+  }
+  return so.dispatch_date ?? so.created_at ?? '';
+}
+
 interface OutletStockRow {
   outletId: string;
   outletName: string;
-  /** outlet_inventory (credited when order is dispatched from hub) */
+  /** outlet_inventory — credited when the outlet confirms receipt */
   onHand: number;
-  /** Dispatched orders not yet marked received — informational only (qty already in on hand) */
+  /** Dispatched, not yet received — in transit; not included in on hand until receipt */
   awaitingReceiptQty: number;
+  /** Pending supply orders — hub reserved only */
+  pendingSupplyQty: number;
 }
 
 interface StockMetrics {
@@ -411,6 +440,8 @@ interface StockMetrics {
   /** Qty on orders that have left hub (dispatched or received), excludes pending/cancelled */
   totalDispatched: number;
   currentAvailable: number;
+  /** Units tied up on pending supply orders (hub reservations only) */
+  pendingSupplyUnits: number;
   outletInventory: OutletStockRow[];
 }
 
@@ -428,6 +459,7 @@ export function Distribution() {
     totalGenerated: 0,
     totalDispatched: 0,
     currentAvailable: 0,
+    pendingSupplyUnits: 0,
     outletInventory: [],
   });
 
@@ -475,12 +507,19 @@ export function Distribution() {
     }, 0);
 
     const awaitingReceiptByOutlet = new Map<string, number>();
+    const pendingQtyByOutlet = new Map<string, number>();
+    let pendingSupplyUnits = 0;
     for (const so of orders) {
-      if (normalizeSOStatus(so.status) !== 'dispatched') continue;
+      const st = normalizeSOStatus(so.status);
       const oid = so.outlet_id;
-      if (!oid) continue;
       const q = Number(so.total_quantity ?? 0);
-      awaitingReceiptByOutlet.set(oid, (awaitingReceiptByOutlet.get(oid) ?? 0) + q);
+      if (st === 'dispatched' && oid) {
+        awaitingReceiptByOutlet.set(oid, (awaitingReceiptByOutlet.get(oid) ?? 0) + q);
+      }
+      if (st === 'pending' && oid) {
+        pendingSupplyUnits += q;
+        pendingQtyByOutlet.set(oid, (pendingQtyByOutlet.get(oid) ?? 0) + q);
+      }
     }
 
     const hubLines = (hubProducts ?? []).map((row) => {
@@ -515,6 +554,7 @@ export function Distribution() {
         outletName: o.name,
         onHand: qtyByOutlet.get(o.id) ?? 0,
         awaitingReceiptQty: awaitingReceiptByOutlet.get(o.id) ?? 0,
+        pendingSupplyQty: pendingQtyByOutlet.get(o.id) ?? 0,
       }))
       .sort((a, b) => a.outletName.localeCompare(b.outletName));
 
@@ -526,6 +566,7 @@ export function Distribution() {
       totalGenerated,
       totalDispatched,
       currentAvailable,
+      pendingSupplyUnits,
       outletInventory: outletInventoryBreakdown,
     });
     setLoading(false);
@@ -569,7 +610,7 @@ export function Distribution() {
   };
 
   const filteredOrders = dateRange
-    ? orders.filter((o) => isDateInRange(o.dispatch_date ?? o.created_at ?? '', dateRange))
+    ? orders.filter((o) => isDateInRange(supplyOrderDateForRangeFilter(o), dateRange))
     : orders;
 
   // Cards always show actual current state (all-time), not filtered
@@ -577,6 +618,7 @@ export function Distribution() {
     totalGenerated: stockMetrics.totalGenerated,
     totalDispatched: stockMetrics.totalDispatched,
     currentAvailable: stockMetrics.currentAvailable,
+    pendingSupplyUnits: stockMetrics.pendingSupplyUnits,
     outletInventory: stockMetrics.outletInventory,
   };
   const totalOutletOnHand = displayMetrics.outletInventory.reduce((sum, o) => sum + o.onHand, 0);
@@ -597,11 +639,7 @@ export function Distribution() {
 
   async function handleDeleteSupplyOrderRow(so: SOWithOutlet) {
     if (!isAdmin || !supplyOrderAllowsAdminHardDelete(so.status)) return;
-    const stNorm = String(so.status ?? '').toLowerCase().trim();
-    const detail =
-      stNorm === 'pending'
-        ? 'Reserved hub stock will be released.'
-        : 'This removes the cancelled record from the list.';
+    const detail = supplyOrderAdminDeleteConfirmDetail(so.status);
     if (
       !confirm(`Permanently delete supply order ${so.supply_order_number}?\n\n${detail}\n\nThis cannot be undone.`)
     ) {
@@ -614,11 +652,22 @@ export function Distribution() {
   }
 
   async function deleteOutlet(id: string) {
-    if (!confirm('Delete this outlet?')) return;
+    if (!isAdmin) return;
     const o = outlets.find((x) => x.id === id);
-    await supabase.from('outlets').delete().eq('id', id);
-    await logActivity({ action: 'deleted', entityType: 'outlet', entityId: id, entityLabel: o?.name ?? id });
-    loadAll();
+    const label = o?.name ?? id;
+    if (
+      !confirm(
+        `Permanently delete outlet "${label}"?\n\nOutlet inventory rows will be removed. You cannot delete if any supply orders still reference this outlet.\n\nThis cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    const result = await adminDeleteOutlet({ outletId: id, outletName: label });
+    if (!result.success) {
+      alert(result.error ?? 'Could not delete outlet');
+      return;
+    }
+    void loadAll();
   }
 
   const tabClass = (t: Tab) =>
@@ -662,15 +711,23 @@ export function Distribution() {
         <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
           <p className="text-xs font-medium uppercase text-teal-600">Hub Available</p>
           <p className="mt-2 text-2xl font-bold text-teal-900">{displayMetrics.currentAvailable.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-teal-600">Available (after reservations)</p>
+          <p className="mt-1 text-xs text-teal-600">
+            Available (after reservations)
+            {displayMetrics.pendingSupplyUnits > 0 && (
+              <>
+                {' '}
+                · {displayMetrics.pendingSupplyUnits.toLocaleString()} reserved on pending orders
+              </>
+            )}
+          </p>
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <p className="text-xs font-medium uppercase text-emerald-600">At Outlets</p>
           <p className="mt-2 text-2xl font-bold text-emerald-900">{totalOutletOnHand.toLocaleString()}</p>
           <p className="mt-1 text-xs text-emerald-600">
-            {displayMetrics.outletInventory.length} outlets · stock credited on dispatch
+            {displayMetrics.outletInventory.length} outlets · on-hand updates when receipt is confirmed
             {totalAwaitingReceipt > 0
-              ? ` · ${totalAwaitingReceipt.toLocaleString()} pending receipt confirmation`
+              ? ` · ${totalAwaitingReceipt.toLocaleString()} dispatched, awaiting outlet receipt`
               : ''}
           </p>
         </div>
@@ -679,7 +736,10 @@ export function Distribution() {
       {/* Outlet Inventory Breakdown */}
       {displayMetrics.outletInventory.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-4 text-sm font-semibold text-gray-900">Outlet Stock Levels</h3>
+          <h3 className="mb-1 text-sm font-semibold text-gray-900">Outlet Stock Levels</h3>
+          <p className="mb-4 text-xs text-gray-500">
+            On-hand totals update when the outlet <strong className="font-medium text-gray-700">confirms receipt</strong>. Dispatch removes stock from the hub; outlet inventory increases only after receive.
+          </p>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {displayMetrics.outletInventory.map((inv) => (
               <div key={inv.outletId} className="flex flex-col gap-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
@@ -689,10 +749,16 @@ export function Distribution() {
                 </div>
                 <p className="text-xs text-gray-500">
                   On hand at outlet
+                  {inv.pendingSupplyQty > 0 && (
+                    <span className="text-blue-800">
+                      {' '}
+                      · {inv.pendingSupplyQty.toLocaleString()} reserved (pending orders)
+                    </span>
+                  )}
                   {inv.awaitingReceiptQty > 0 && (
                     <span className="text-amber-800">
                       {' '}
-                      · {inv.awaitingReceiptQty.toLocaleString()} awaiting receipt confirmation
+                      · {inv.awaitingReceiptQty.toLocaleString()} dispatched · moves into on hand after receipt
                     </span>
                   )}
                 </p>
@@ -798,7 +864,16 @@ export function Distribution() {
                       </div>
                       <div className="flex gap-1">
                         <button onClick={() => { setEditOutlet(outlet); setShowOutletModal(true); }} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
-                        <button onClick={() => deleteOutlet(outlet.id)} className="p-1 text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => void deleteOutlet(outlet.id)}
+                            className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                            title="Delete outlet (admin)"
+                          >
+                            <Trash2 size={15} aria-hidden />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50/80 px-3 py-2 text-xs">
@@ -806,13 +881,21 @@ export function Distribution() {
                         Stock on hand:{' '}
                         <span className="tabular-nums">{(stock?.onHand ?? 0).toLocaleString()}</span>
                       </p>
+                      {(stock?.pendingSupplyQty ?? 0) > 0 && (
+                        <p className="mt-0.5 text-blue-800">
+                          Pending orders (hub reserved):{' '}
+                          <span className="font-semibold tabular-nums">
+                            {(stock?.pendingSupplyQty ?? 0).toLocaleString()}
+                          </span>
+                        </p>
+                      )}
                       {(stock?.awaitingReceiptQty ?? 0) > 0 && (
                         <p className="mt-0.5 text-amber-800">
-                          Awaiting receipt confirmation:{' '}
+                          Dispatched, awaiting receipt:{' '}
                           <span className="font-semibold tabular-nums">
                             {(stock?.awaitingReceiptQty ?? 0).toLocaleString()}
                           </span>{' '}
-                          <span className="font-normal text-gray-600">(included in on hand)</span>
+                          <span className="font-normal text-gray-600">(not in on hand yet)</span>
                         </p>
                       )}
                     </div>

@@ -34,7 +34,7 @@ export interface SupplyOrderCreationResult {
   errors: string[];
 }
 
-/** Increase outlet_inventory when hub ships (dispatch). */
+/** Increase outlet_inventory when the outlet confirms receipt. */
 async function bumpOutletStock(
   outletId: string,
   productBatch: string,
@@ -77,39 +77,6 @@ async function bumpOutletStock(
     if (error) return { success: false, error: error.message };
   }
 
-  return { success: true };
-}
-
-/** Decrease outlet_inventory when a dispatched order is cancelled before receipt. */
-async function reduceOutletStock(
-  outletId: string,
-  productBatch: string,
-  qty: number
-): Promise<{ success: boolean; error?: string }> {
-  const { data: existing, error: selErr } = await supabase
-    .from('outlet_inventory')
-    .select('id, quantity_on_hand, reserved_quantity')
-    .eq('outlet_id', outletId)
-    .eq('product_batch', productBatch)
-    .maybeSingle();
-
-  if (selErr) return { success: false, error: selErr.message };
-  if (!existing) return { success: false, error: 'No outlet inventory row to reduce' };
-
-  const iso = new Date().toISOString();
-  const newQoh = Math.max(0, Number(existing.quantity_on_hand) - qty);
-  const reserved = Number(existing.reserved_quantity ?? 0);
-  const { error } = await supabase
-    .from('outlet_inventory')
-    .update({
-      quantity_on_hand: newQoh,
-      available_quantity: Math.max(0, newQoh - reserved),
-      last_updated: iso,
-      updated_at: iso,
-    })
-    .eq('id', existing.id);
-
-  if (error) return { success: false, error: error.message };
   return { success: true };
 }
 
@@ -252,7 +219,7 @@ export async function createSupplyOrder(
 }
 
 /**
- * Dispatch supply order — fulfill hub reservations and credit outlet_inventory (stock at outlet on ship).
+ * Dispatch supply order — fulfill hub reservations (goods leave hub). Outlet on-hand is credited on receipt.
  */
 export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
@@ -284,16 +251,6 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
         );
         if (!result.success) {
           return { success: false, error: result.error ?? 'Failed to fulfill hub reservation' };
-        }
-      }
-      for (const line of lines) {
-        const bumped = await bumpOutletStock(
-          order.outlet_id,
-          line.product_batch,
-          Number(line.quantity)
-        );
-        if (!bumped.success) {
-          return { success: false, error: bumped.error ?? 'Failed to credit outlet inventory' };
         }
       }
     }
@@ -329,13 +286,13 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
 }
 
 /**
- * Confirm receipt at outlet — workflow only; outlet_inventory was credited at dispatch.
+ * Confirm receipt at outlet — credit outlet_inventory (stock lands at outlet).
  */
 export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
     const { data: order, error: orderErr } = await supabase
       .from('supply_orders')
-      .select('id, status')
+      .select('id, status, outlet_id')
       .eq('id', supplyOrderId)
       .single();
 
@@ -345,6 +302,24 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
 
     if (order.status !== 'dispatched') {
       return { success: false, error: `Cannot receive order with status: ${order.status}` };
+    }
+
+    const { data: lines } = await supabase
+      .from('supply_order_lines')
+      .select('quantity, product_batch')
+      .eq('supply_order_id', supplyOrderId);
+
+    if (lines?.length) {
+      for (const line of lines) {
+        const bumped = await bumpOutletStock(
+          order.outlet_id,
+          line.product_batch,
+          Number(line.quantity)
+        );
+        if (!bumped.success) {
+          return { success: false, error: bumped.error ?? 'Failed to credit outlet inventory' };
+        }
+      }
     }
 
     await retryWithBackoff(async () => await
@@ -377,7 +352,7 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
 }
 
 /**
- * Cancel pending supply order and release hub reservations
+ * Cancel pending supply order (releases reservations) or cancel dispatched order (no outlet reversal — stock was never credited at outlet).
  */
 export async function cancelSupplyOrder(
   supplyOrderId: string,
@@ -386,7 +361,7 @@ export async function cancelSupplyOrder(
   try {
     const { data: order } = await supabase
       .from('supply_orders')
-      .select('id, status, outlet_id')
+      .select('id, status')
       .eq('id', supplyOrderId)
       .single();
 
@@ -409,26 +384,6 @@ export async function cancelSupplyOrder(
           );
           if (!result.success) {
             return { success: false, error: result.error ?? 'Failed to release reservation' };
-          }
-        }
-      }
-    }
-
-    if (order.status === 'dispatched') {
-      const { data: lines } = await supabase
-        .from('supply_order_lines')
-        .select('product_batch, quantity')
-        .eq('supply_order_id', supplyOrderId);
-
-      if (lines?.length) {
-        for (const line of lines) {
-          const result = await reduceOutletStock(
-            order.outlet_id,
-            line.product_batch,
-            Number(line.quantity)
-          );
-          if (!result.success) {
-            return { success: false, error: result.error ?? 'Failed to reverse outlet inventory' };
           }
         }
       }
@@ -466,7 +421,7 @@ function generateSupplyOrderNumber(): string {
   return `SO-${timestamp}`;
 }
 
-/** Hard-delete a supply order (admin RPC). Pending orders release hub reservations first. */
+/** Hard-delete a supply order (admin RPC). Releases reservations (pending), restores hub (dispatched/received), reduces outlet (received). Cancelled = delete row only. */
 export async function adminDeleteSupplyOrder(options: {
   supplyOrderId: string;
   supplyOrderNumber: string;
@@ -506,6 +461,45 @@ export async function adminDeleteSupplyOrder(options: {
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Failed to delete supply order',
+    };
+  }
+}
+
+/** Hard-delete an outlet (admin RPC). Blocked while any supply_orders reference it. */
+export async function adminDeleteOutlet(options: {
+  outletId: string;
+  outletName: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.rpc('admin_delete_outlet', {
+      p_outlet_id: options.outletId,
+    });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    await writeLedgerEntry({
+      action: 'deleted',
+      entityType: 'outlet',
+      entityId: options.outletId,
+      module: 'distribution',
+      operation: 'delete',
+      beforeData: { name: options.outletName },
+    });
+
+    await logActivity({
+      action: 'deleted',
+      entityType: 'outlet',
+      entityId: options.outletId,
+      entityLabel: options.outletName,
+    });
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to delete outlet',
     };
   }
 }
