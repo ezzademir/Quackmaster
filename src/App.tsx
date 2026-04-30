@@ -16,14 +16,15 @@ import { Ledger } from './pages/Ledger';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
 
-function LoadingScreen() {
+function LoadingScreen({ subtitle }: { subtitle?: string }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="text-center">
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+      <div className="text-center max-w-sm">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-xl font-bold text-white">
           Q
         </div>
         <p className="text-sm text-gray-500">Loading…</p>
+        {subtitle && <p className="mt-3 text-xs text-gray-400 leading-relaxed">{subtitle}</p>}
       </div>
     </div>
   );
@@ -64,10 +65,15 @@ function SettingsGate() {
 }
 
 function ProtectedShell() {
-  const { session, loading, profile } = useAuth();
+  const { session, loading, profileLoading, profile } = useAuth();
 
   if (loading) return <LoadingScreen />;
   if (!session) return <Navigate to="/login" replace />;
+  if (profileLoading) {
+    return (
+      <LoadingScreen subtitle="Loading your profile from the server. If this hangs, check your connection or Supabase status." />
+    );
+  }
 
   const role = profile?.role?.toLowerCase?.()?.trim();
   if (role === 'pending') return <PendingApproval />;

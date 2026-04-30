@@ -13,7 +13,10 @@ interface AuthContextValue {
   user: User | null;
   profile: Profile | null;
   isAdmin: boolean;
+  /** Session bootstrap (getSession) — ends quickly once storage/network responds */
   loading: boolean;
+  /** Profile row fetch after session exists — does not block login screen when logged out */
+  profileLoading: boolean;
   signOut: () => Promise<void>;
   refetchProfile: () => Promise<void>;
 }
@@ -24,14 +27,18 @@ const AuthContext = createContext<AuthContextValue>({
   profile: null,
   isAdmin: false,
   loading: true,
+  profileLoading: false,
   signOut: async () => {},
   refetchProfile: async () => {},
 });
+
+const SESSION_INIT_TIMEOUT_MS = 15000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   async function fetchProfile(userId: string) {
     const { data, error } = await supabase
@@ -49,32 +56,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    let timedOut = false;
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      if (!mounted) return;
+      console.warn(
+        '[Quackmaster] Auth session check timed out. Verify Supabase URL/key, network, or try disabling browser extensions that inject into pages.'
+      );
+      setSession(null);
+      setProfile(null);
+      setProfileLoading(false);
+      setLoading(false);
+    }, SESSION_INIT_TIMEOUT_MS);
+
+    async function loadProfileForUser(userId: string) {
+      setProfileLoading(true);
+      try {
+        await fetchProfile(userId);
+      } catch (e) {
+        console.error('Profile load failed:', e);
+        setProfile(null);
+      } finally {
+        if (mounted) setProfileLoading(false);
+      }
+    }
 
     async function init() {
       try {
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (!mounted) return;
+        window.clearTimeout(timer);
+        if (!mounted || timedOut) return;
+
         setSession(session);
+        setLoading(false);
+
         if (session?.user) {
-          try {
-            await fetchProfile(session.user.id);
-          } catch (e) {
-            console.error('Profile load failed:', e);
-            setProfile(null);
-          }
+          await loadProfileForUser(session.user.id);
         } else {
           setProfile(null);
+          setProfileLoading(false);
         }
       } catch (e) {
+        window.clearTimeout(timer);
         console.error('Auth init failed:', e);
-        if (mounted) {
+        if (mounted && !timedOut) {
           setSession(null);
           setProfile(null);
+          setProfileLoading(false);
+          setLoading(false);
         }
-      } finally {
-        if (mounted) setLoading(false);
       }
     }
 
@@ -84,8 +116,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
+      setLoading(false);
       try {
         if (session?.user) {
+          setProfileLoading(true);
           await fetchProfile(session.user.id);
         } else {
           setProfile(null);
@@ -94,12 +128,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Profile load failed:', e);
         setProfile(null);
       } finally {
-        setLoading(false);
+        setProfileLoading(false);
       }
     });
 
     return () => {
       mounted = false;
+      window.clearTimeout(timer);
       subscription.unsubscribe();
     };
   }, []);
@@ -121,6 +156,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile,
       isAdmin: profile?.role?.toLowerCase?.()?.trim() === 'admin',
       loading,
+      profileLoading,
       signOut,
       refetchProfile,
     }}>
