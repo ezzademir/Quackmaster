@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
@@ -41,7 +41,7 @@ function OutletModal({
 }: {
   outlet: Outlet | null;
   onClose: () => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
 }) {
   const blank = { name: '', location_code: '', address: '', city: '', country: '', manager_name: '', manager_phone: '', manager_email: '' };
   const [form, setForm] = useState(outlet ? {
@@ -60,25 +60,32 @@ function OutletModal({
   async function handleSave() {
     if (!form.name.trim() || !form.location_code.trim()) { setError('Name and Location Code are required'); return; }
     setSaving(true);
-    const payload = { ...form };
-    let createdOutletId = outlet?.id ?? '';
-    let err: { message: string } | null = null;
-    if (outlet) {
-      const { error } = await supabase.from('outlets').update(payload).eq('id', outlet.id);
-      err = error;
-    } else {
-      const { data, error } = await supabase.from('outlets').insert(payload).select('id').single();
-      err = error;
-      createdOutletId = data?.id ?? '';
+    try {
+      const payload = { ...form };
+      let createdOutletId = outlet?.id ?? '';
+      let err: { message: string } | null = null;
+      if (outlet) {
+        const { error } = await supabase.from('outlets').update(payload).eq('id', outlet.id);
+        err = error;
+      } else {
+        const { data, error } = await supabase.from('outlets').insert(payload).select('id').single();
+        err = error;
+        createdOutletId = data?.id ?? '';
+      }
+      if (err) {
+        setError(err.message);
+        return;
+      }
+      await logActivity({
+        action: outlet ? 'updated' : 'created',
+        entityType: 'outlet',
+        entityId: createdOutletId,
+        entityLabel: form.name,
+      });
+      await onSave();
+    } finally {
+      setSaving(false);
     }
-    if (err) { setError(err.message); setSaving(false); return; }
-    await logActivity({
-      action: outlet ? 'updated' : 'created',
-      entityType: 'outlet',
-      entityId: createdOutletId,
-      entityLabel: form.name,
-    });
-    onSave();
   }
 
   const field = (label: string, key: keyof typeof form, type = 'text') => (
@@ -157,7 +164,7 @@ function NewSupplyOrderModal({
   hubProductQty: number;
   hubProductLines: { id: string; product_batch: string | null; available: number; last_updated?: string }[];
   onClose: () => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
   const [dispatch_date, setDispatchDate] = useState(new Date().toISOString().split('T')[0]);
@@ -195,7 +202,6 @@ function NewSupplyOrderModal({
             ? 'No finished goods in hub inventory. Complete a production run first.'
             : `Insufficient hub stock (${hubProductQty} units available across batches)`
         );
-        setSaving(false);
         return;
       }
 
@@ -208,13 +214,13 @@ function NewSupplyOrderModal({
 
       if (!result.success) {
         setError(result.errors.join('; '));
-        setSaving(false);
         return;
       }
 
-      onSave();
+      await onSave();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create supply order');
+    } finally {
       setSaving(false);
     }
   }
@@ -280,7 +286,7 @@ function SODetailModal({
 }: {
   so: SOWithOutlet;
   onClose: () => void;
-  onStatusChange: () => void;
+  onStatusChange: () => void | Promise<void>;
   isAdmin: boolean;
   executeAdminDelete: (order: SOWithOutlet) => Promise<boolean>;
 }) {
@@ -299,8 +305,7 @@ function SODetailModal({
     try {
       const ok = await executeAdminDelete(so);
       if (ok) {
-        onClose();
-        onStatusChange();
+        await onStatusChange();
       }
     } finally {
       setSaving(false);
@@ -311,18 +316,16 @@ function SODetailModal({
     setSaving(true);
     try {
       const result = await dispatchSupplyOrder(so.id);
-      
+
       if (!result.success) {
-        // We need an error state in SODetailModal. I'll add a simple alert for now.
         alert(`Failed to dispatch: ${result.error}`);
-        setSaving(false);
         return;
       }
-      
-      setSaving(false);
-      onStatusChange();
+
+      await onStatusChange();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to dispatch');
+    } finally {
       setSaving(false);
     }
   }
@@ -331,17 +334,16 @@ function SODetailModal({
     setSaving(true);
     try {
       const result = await confirmSupplyOrderReceipt(so.id);
-      
+
       if (!result.success) {
         alert(`Failed to receive: ${result.error}`);
-        setSaving(false);
         return;
       }
-      
-      setSaving(false);
-      onStatusChange();
+
+      await onStatusChange();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to receive');
+    } finally {
       setSaving(false);
     }
   }
@@ -391,11 +393,25 @@ function SODetailModal({
 }
 
 // ---- Main Distribution Page ----
+function normalizeSOStatus(status: string | undefined): string {
+  return String(status ?? '').toLowerCase().trim();
+}
+
+interface OutletStockRow {
+  outletId: string;
+  outletName: string;
+  /** outlet_inventory (credited when order is dispatched from hub) */
+  onHand: number;
+  /** Dispatched orders not yet marked received — informational only (qty already in on hand) */
+  awaitingReceiptQty: number;
+}
+
 interface StockMetrics {
   totalGenerated: number;
+  /** Qty on orders that have left hub (dispatched or received), excludes pending/cancelled */
   totalDispatched: number;
   currentAvailable: number;
-  outletInventory: { outletId: string; outletName: string; quantity: number }[];
+  outletInventory: OutletStockRow[];
 }
 
 export function Distribution() {
@@ -414,6 +430,14 @@ export function Distribution() {
     currentAvailable: 0,
     outletInventory: [],
   });
+
+  const outletStockById = useMemo(() => {
+    const m = new Map<string, OutletStockRow>();
+    for (const row of stockMetrics.outletInventory) {
+      m.set(row.outletId, row);
+    }
+    return m;
+  }, [stockMetrics.outletInventory]);
   const [loading, setLoading] = useState(true);
 
   const [showNewSO, setShowNewSO] = useState(false);
@@ -443,8 +467,21 @@ export function Distribution() {
     // Calculate total generated from production runs
     const totalGenerated = (prodRuns ?? []).reduce((sum, run) => sum + (run.actual_output || 0), 0);
 
-    // Calculate total dispatched (pending + dispatched + received)
-    const totalDispatched = orders.reduce((sum, so) => sum + (so.total_quantity || 0), 0);
+    // Qty that has left hub toward outlets (dispatched or fully received), excludes pending/cancelled
+    const totalDispatched = orders.reduce((sum, so) => {
+      const st = normalizeSOStatus(so.status);
+      if (st !== 'dispatched' && st !== 'received') return sum;
+      return sum + Number(so.total_quantity ?? 0);
+    }, 0);
+
+    const awaitingReceiptByOutlet = new Map<string, number>();
+    for (const so of orders) {
+      if (normalizeSOStatus(so.status) !== 'dispatched') continue;
+      const oid = so.outlet_id;
+      if (!oid) continue;
+      const q = Number(so.total_quantity ?? 0);
+      awaitingReceiptByOutlet.set(oid, (awaitingReceiptByOutlet.get(oid) ?? 0) + q);
+    }
 
     const hubLines = (hubProducts ?? []).map((row) => {
       const reserved = row.reserved_quantity ?? 0;
@@ -476,7 +513,8 @@ export function Distribution() {
       .map((o) => ({
         outletId: o.id,
         outletName: o.name,
-        quantity: qtyByOutlet.get(o.id) ?? 0,
+        onHand: qtyByOutlet.get(o.id) ?? 0,
+        awaitingReceiptQty: awaitingReceiptByOutlet.get(o.id) ?? 0,
       }))
       .sort((a, b) => a.outletName.localeCompare(b.outletName));
 
@@ -541,6 +579,8 @@ export function Distribution() {
     currentAvailable: stockMetrics.currentAvailable,
     outletInventory: stockMetrics.outletInventory,
   };
+  const totalOutletOnHand = displayMetrics.outletInventory.reduce((sum, o) => sum + o.onHand, 0);
+  const totalAwaitingReceipt = displayMetrics.outletInventory.reduce((sum, o) => sum + o.awaitingReceiptQty, 0);
 
   async function executeAdminDeleteSupplyOrder(so: SOWithOutlet): Promise<boolean> {
     const result = await adminDeleteSupplyOrder({
@@ -617,7 +657,7 @@ export function Distribution() {
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-xs font-medium uppercase text-amber-600">Total Dispatched</p>
           <p className="mt-2 text-2xl font-bold text-amber-900">{displayMetrics.totalDispatched.toLocaleString()}</p>
-          <p className="mt-1 text-xs text-amber-600">via supply orders</p>
+          <p className="mt-1 text-xs text-amber-600">units left hub (dispatched or received orders)</p>
         </div>
         <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
           <p className="text-xs font-medium uppercase text-teal-600">Hub Available</p>
@@ -626,8 +666,13 @@ export function Distribution() {
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <p className="text-xs font-medium uppercase text-emerald-600">At Outlets</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-900">{displayMetrics.outletInventory.reduce((sum, o) => sum + o.quantity, 0).toLocaleString()}</p>
-          <p className="mt-1 text-xs text-emerald-600">{displayMetrics.outletInventory.length} outlets</p>
+          <p className="mt-2 text-2xl font-bold text-emerald-900">{totalOutletOnHand.toLocaleString()}</p>
+          <p className="mt-1 text-xs text-emerald-600">
+            {displayMetrics.outletInventory.length} outlets · stock credited on dispatch
+            {totalAwaitingReceipt > 0
+              ? ` · ${totalAwaitingReceipt.toLocaleString()} pending receipt confirmation`
+              : ''}
+          </p>
         </div>
       </div>
 
@@ -637,9 +682,20 @@ export function Distribution() {
           <h3 className="mb-4 text-sm font-semibold text-gray-900">Outlet Stock Levels</h3>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {displayMetrics.outletInventory.map((inv) => (
-              <div key={inv.outletId} className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                <span className="text-sm font-medium text-gray-700">{inv.outletName}</span>
-                <span className="text-lg font-bold text-gray-900">{inv.quantity.toLocaleString()}</span>
+              <div key={inv.outletId} className="flex flex-col gap-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-gray-700">{inv.outletName}</span>
+                  <span className="text-lg font-bold text-gray-900">{inv.onHand.toLocaleString()}</span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  On hand at outlet
+                  {inv.awaitingReceiptQty > 0 && (
+                    <span className="text-amber-800">
+                      {' '}
+                      · {inv.awaitingReceiptQty.toLocaleString()} awaiting receipt confirmation
+                    </span>
+                  )}
+                </p>
               </div>
             ))}
           </div>
@@ -728,7 +784,9 @@ export function Distribution() {
                   No outlets added yet
                 </div>
               ) : (
-                outlets.map((outlet) => (
+                outlets.map((outlet) => {
+                  const stock = outletStockById.get(outlet.id);
+                  return (
                   <div key={outlet.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:border-teal-200 transition-all">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
@@ -743,6 +801,21 @@ export function Distribution() {
                         <button onClick={() => deleteOutlet(outlet.id)} className="p-1 text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
                       </div>
                     </div>
+                    <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50/80 px-3 py-2 text-xs">
+                      <p className="font-semibold text-emerald-900">
+                        Stock on hand:{' '}
+                        <span className="tabular-nums">{(stock?.onHand ?? 0).toLocaleString()}</span>
+                      </p>
+                      {(stock?.awaitingReceiptQty ?? 0) > 0 && (
+                        <p className="mt-0.5 text-amber-800">
+                          Awaiting receipt confirmation:{' '}
+                          <span className="font-semibold tabular-nums">
+                            {(stock?.awaitingReceiptQty ?? 0).toLocaleString()}
+                          </span>{' '}
+                          <span className="font-normal text-gray-600">(included in on hand)</span>
+                        </p>
+                      )}
+                    </div>
                     <div className="mt-4 space-y-1 text-xs text-gray-600">
                       {outlet.city && <p>{outlet.city}{outlet.country ? `, ${outlet.country}` : ''}</p>}
                       {outlet.address && <p className="text-gray-400 line-clamp-1">{outlet.address}</p>}
@@ -755,7 +828,8 @@ export function Distribution() {
                       )}
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
@@ -768,14 +842,20 @@ export function Distribution() {
           hubProductQty={hubProductQty}
           hubProductLines={hubProductLines}
           onClose={() => setShowNewSO(false)}
-          onSave={() => { setShowNewSO(false); loadAll(); }}
+          onSave={async () => {
+            await loadAll({ silent: true });
+            setShowNewSO(false);
+          }}
         />
       )}
       {viewSO && (
         <SODetailModal
           so={viewSO}
           onClose={() => setViewSO(null)}
-          onStatusChange={() => { setViewSO(null); loadAll(); }}
+          onStatusChange={async () => {
+            await loadAll({ silent: true });
+            setViewSO(null);
+          }}
           isAdmin={isAdmin}
           executeAdminDelete={executeAdminDeleteSupplyOrder}
         />
@@ -784,7 +864,10 @@ export function Distribution() {
         <OutletModal
           outlet={editOutlet}
           onClose={() => setShowOutletModal(false)}
-          onSave={() => { setShowOutletModal(false); loadAll(); }}
+          onSave={async () => {
+            await loadAll({ silent: true });
+            setShowOutletModal(false);
+          }}
         />
       )}
     </div>
