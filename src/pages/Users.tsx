@@ -183,21 +183,26 @@ export function Users() {
     setResetMessage('');
 
     try {
-      // Call the edge function to set password reset flag
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/force_password_reset`;
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId: selectedUser.id }),
+      const { data, error } = await supabase.functions.invoke<{
+        success?: boolean;
+        message?: string;
+        error?: string;
+      }>('force_password_reset', {
+        body: { userId: selectedUser.id },
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to force password reset');
+      if (error) {
+        const hint =
+          error.message === 'Failed to fetch'
+            ? ' (network/CORS — deploy the function with `supabase functions deploy force_password_reset`, or check DevTools → Network)'
+            : '';
+        setResetMessage(`Error: ${error.message}${hint}`);
+        return;
+      }
+
+      if (data && typeof data === 'object' && 'error' in data && data.error) {
+        setResetMessage(`Error: ${data.error}`);
+        return;
       }
 
       await writeLedgerEntry({

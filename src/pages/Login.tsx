@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
+import { devClientLog } from '../utils/devClientLog';
 
 export function Login() {
   const { syncAuth } = useAuth();
@@ -23,14 +24,35 @@ export function Login() {
     setLoading(true);
     try {
       const emailTrimmed = email.trim();
+      devClientLog('login', {
+        phase: 'attempt',
+        email: emailTrimmed,
+        supabaseHost: (() => {
+          const u = import.meta.env.VITE_SUPABASE_URL?.trim();
+          if (!u) return '(unset)';
+          try {
+            return new URL(u).host;
+          } catch {
+            return '(invalid URL)';
+          }
+        })(),
+      });
       const { error: err } = await supabase.auth.signInWithPassword({
         email: emailTrimmed,
         password,
       });
       if (err) {
+        devClientLog('login', {
+          phase: 'failed',
+          email: emailTrimmed,
+          message: err.message,
+          code: (err as { code?: string }).code,
+          status: (err as { status?: number }).status,
+        });
         setError(err.message);
         return;
       }
+      devClientLog('login', { phase: 'success', email: emailTrimmed });
       await syncAuth();
       navigate('/', { replace: true });
     } finally {
