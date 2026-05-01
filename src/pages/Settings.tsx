@@ -1,4 +1,4 @@
-import { BarChart3, Users, ShoppingBag, Star, Shield, RefreshCw, Check, X } from 'lucide-react';
+import { BarChart3, Users, ShoppingBag, Star, Shield, RefreshCw, Check, X, Download } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -7,6 +7,7 @@ import type { PendingRegistration } from '../types';
 import { Modal } from '../components/Modal';
 import { writeLedgerEntry } from '../utils/ledger';
 import { fetchQCAuditCriteria, saveQCAuditCriteria } from '../utils/qcSettings';
+import { downloadCsv } from '../utils/exportCsv';
 
 export function Settings() {
   const { refetchProfile, isAdmin } = useAuth();
@@ -22,6 +23,27 @@ export function Settings() {
   const [qcLoading, setQcLoading] = useState(true);
   const [qcSaving, setQcSaving] = useState(false);
   const [qcNotice, setQcNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  const [exportBusy, setExportBusy] = useState<string | null>(null);
+
+  async function exportTableCsv(table: string, filename: string) {
+    setExportBusy(table);
+    try {
+      const { data, error } = await supabase.from(table).select('*').limit(5000);
+      if (error) throw error;
+      const rows = data ?? [];
+      if (!rows.length) {
+        downloadCsv(filename, ['message'], [['No rows']]);
+        return;
+      }
+      const headers = Object.keys(rows[0] as Record<string, unknown>);
+      const body = rows.map((row) =>
+        headers.map((h) => (row as Record<string, unknown>)[h] as string | number | null | undefined)
+      );
+      downloadCsv(filename, headers, body);
+    } finally {
+      setExportBusy(null);
+    }
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -398,11 +420,40 @@ export function Settings() {
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-2 font-semibold text-gray-900">Accounting / tax exports</h2>
+            <p className="mb-4 text-xs text-gray-500">
+              CSV snapshots (first 5k rows per table). Run after migrations so new columns exist.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  { table: 'raw_materials', label: 'Raw materials' },
+                  { table: 'suppliers', label: 'Suppliers' },
+                  { table: 'purchase_orders', label: 'Purchase orders' },
+                  { table: 'sales_journals', label: 'Sales journals' },
+                  { table: 'waste_events', label: 'Waste events' },
+                ] as const
+              ).map(({ table, label }) => (
+                <button
+                  key={table}
+                  type="button"
+                  disabled={exportBusy !== null}
+                  onClick={() => void exportTableCsv(table, `${table}_export`)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  <Download size={14} />
+                  {exportBusy === table ? 'Exporting…' : label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="mb-2 font-semibold text-gray-900">System Info</h2>
             <div className="space-y-2 text-xs text-gray-500">
               <div className="flex justify-between"><span>Version</span><span className="font-medium text-gray-700">1.0.0</span></div>
               <div className="flex justify-between"><span>Database</span><span className="font-medium text-gray-700">Supabase</span></div>
-              <div className="flex justify-between"><span>Last Migration</span><span className="font-medium text-gray-700">2026-04-23</span></div>
+              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">037–041</span></div>
             </div>
           </div>
         </div>

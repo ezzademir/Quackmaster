@@ -13,6 +13,9 @@ import { Procurement } from './pages/Procurement';
 import { Production } from './pages/Production';
 import { Inventory } from './pages/Inventory';
 import { Distribution } from './pages/Distribution';
+import { Sales } from './pages/Sales';
+import { Waste } from './pages/Waste';
+import { Genealogy } from './pages/Genealogy';
 import { Ledger } from './pages/Ledger';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
@@ -67,6 +70,11 @@ function SettingsGate() {
   return isAdmin ? <Settings /> : <Navigate to="/" replace />;
 }
 
+function GenealogyGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Genealogy /> : <Navigate to="/" replace />;
+}
+
 function LayoutShell() {
   return (
     <Layout>
@@ -114,8 +122,11 @@ function App() {
               <Route path="/production/*" element={<Production />} />
               <Route path="/inventory/*" element={<Inventory />} />
               <Route path="/distribution/*" element={<Distribution />} />
+              <Route path="/sales" element={<Sales />} />
+              <Route path="/waste" element={<Waste />} />
               <Route path="/users" element={<UsersGate />} />
               <Route path="/ledger" element={<LedgerGate />} />
+              <Route path="/genealogy" element={<GenealogyGate />} />
               <Route path="/settings" element={<SettingsGate />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

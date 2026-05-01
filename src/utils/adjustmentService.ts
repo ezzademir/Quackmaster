@@ -48,6 +48,7 @@ export interface AdjustmentRecord {
   reviewed_by?: string;
   reviewed_at?: string;
   review_notes?: string;
+  applied_at?: string | null;
 }
 
 /**
@@ -127,7 +128,7 @@ export async function createInventoryAdjustment(
 
     // If no approval needed, apply immediately
     if (!params.requiresApproval) {
-      await applyInventoryAdjustment(adjustment.id, session.user.id);
+      await applyInventoryAdjustment(adjustment.id);
     }
 
     await writeLedgerEntry({
@@ -163,94 +164,21 @@ export async function createInventoryAdjustment(
  * Apply (approve and execute) inventory adjustment
  */
 export async function applyInventoryAdjustment(
-  adjustmentId: string,
-  approvedBy: string
+  adjustmentId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Get adjustment details
-    const { data: adjustment, error: adjErr } = await supabase
-      .from('inventory_adjustments')
-      .select('*')
-      .eq('id', adjustmentId)
-      .single();
-
-    if (adjErr || !adjustment) {
-      return { success: false, error: 'Adjustment not found' };
-    }
-
-    // Get current inventory
-    const { data: inventory, error: invErr } = await supabase
-      .from('hub_inventory')
-      .select('id, quantity_on_hand, reserved_quantity')
-      .eq('id', adjustment.hub_inventory_id)
-      .single();
-
-    if (invErr || !inventory) {
-      return { success: false, error: 'Inventory record not found' };
-    }
-
-    // Calculate new quantity
-    let newQuantity = inventory.quantity_on_hand;
-    if (adjustment.adjustment_type === 'addition') {
-      newQuantity += adjustment.adjusted_quantity;
-    } else if (adjustment.adjustment_type === 'deduction') {
-      newQuantity = Math.max(0, newQuantity - adjustment.adjusted_quantity);
-    }
-
-    const newAvailable = newQuantity - (inventory.reserved_quantity || 0);
-
-    // Update inventory
-    await retryWithBackoff(async () => await
-      supabase
-        .from('hub_inventory')
-        .update({
-          quantity_on_hand: newQuantity,
-          available_quantity: newAvailable,
-          last_updated: new Date().toISOString(),
-        })
-        .eq('id', inventory.id)
+    const { data: rpcResult, error: rpcErr } = await retryWithBackoff(async () =>
+      supabase.rpc('apply_inventory_adjustment', { p_adjustment_id: adjustmentId })
     );
 
-    // Update adjustment status
-    await retryWithBackoff(async () => await
-      supabase
-        .from('inventory_adjustments')
-        .update({
-          status: 'approved',
-          reviewed_by: approvedBy,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('id', adjustmentId)
-    );
+    if (rpcErr) {
+      return { success: false, error: rpcErr.message };
+    }
 
-    // Log to ledger
-    await writeLedgerEntry({
-      action: 'updated',
-      entityType: 'hub_inventory',
-      entityId: inventory.id,
-      module: 'inventory',
-      operation: 'update',
-      beforeData: {
-        quantity_on_hand: inventory.quantity_on_hand,
-        available_quantity: inventory.quantity_on_hand - (inventory.reserved_quantity || 0),
-      },
-      afterData: {
-        quantity_on_hand: newQuantity,
-        available_quantity: newAvailable,
-      },
-      deltaData: {
-        [adjustment.adjustment_type === 'addition' ? 'quantity_added' : 'quantity_removed']:
-          adjustment.adjusted_quantity,
-      },
-      referenceId: adjustmentId,
-      metadata: {
-        adjustment_reason: adjustment.adjustment_reason,
-        adjustment_notes: adjustment.notes,
-        entity_label: `${adjustment.adjustment_type} applied — ${adjustment.adjustment_reason}`,
-        previous_quantity: inventory.quantity_on_hand,
-        new_quantity: newQuantity,
-      },
-    });
+    const payload = rpcResult as { success?: boolean; error?: string; pending_requires_admin?: boolean } | null;
+    if (payload && payload.success === false) {
+      return { success: false, error: payload.error ?? 'apply_inventory_adjustment failed' };
+    }
 
     return { success: true };
   } catch (err) {

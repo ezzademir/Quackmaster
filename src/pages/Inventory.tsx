@@ -4,7 +4,6 @@ import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
-import { writeLedgerEntry } from '../utils/ledger';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import type { RawMaterial, Outlet } from '../types';
 
@@ -68,44 +67,23 @@ function AdjustModal({
       );
       return;
     }
-    const newAvailable = Math.max(0, newQty - reserved);
     setSaving(true);
     try {
-      const { error: updateErr } = await supabase
-        .from('hub_inventory')
-        .update({
-          quantity_on_hand: newQty,
-          available_quantity: newAvailable,
-          last_updated: new Date().toISOString(),
-        })
-        .eq('id', row.id);
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('adjust_hub_inventory_quantity', {
+        p_hub_inventory_id: row.id,
+        p_new_quantity: newQty,
+        p_reason: reason.trim() || null,
+      });
 
-      if (updateErr) {
-        setError(updateErr.message);
+      if (rpcErr) {
+        setError(rpcErr.message);
         return;
       }
 
-      const ledgerRes = await writeLedgerEntry({
-        action: 'updated',
-        entityType: row.type === 'material' ? 'hub_inventory_material' : 'hub_inventory_product',
-        entityId: row.id,
-        module: 'inventory',
-        operation: 'update',
-        beforeData: { quantity_on_hand: row.quantity_on_hand, available_quantity: row.available_quantity },
-        afterData: { quantity_on_hand: newQty, available_quantity: newAvailable },
-        deltaData: { quantity_on_hand: newQty - row.quantity_on_hand },
-        metadata: {
-          reason,
-          entity_label: row.name,
-          adjustment_from: row.quantity_on_hand,
-          adjustment_to: newQty,
-        },
-      });
-
-      if (!ledgerRes.ok) {
-        setError(
-          `Stock was updated, but the audit trail failed to save${ledgerRes.error ? `: ${ledgerRes.error}` : ''}.`
-        );
+      const payload = rpcData as { success?: boolean; error?: string } | null;
+      if (payload && payload.success === false) {
+        setError(payload.error === 'forbidden' ? 'Only administrators can adjust hub stock.' : (payload.error ?? 'Adjustment failed'));
+        return;
       }
 
       onSave();

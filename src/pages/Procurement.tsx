@@ -556,110 +556,31 @@ function PODetailModal({
         return;
       }
 
-      // Second pass: apply updates with retry logic
-      for (let i = 0; i < (po.items ?? []).length; i++) {
-        const item = (po.items ?? [])[i];
-        const update = updates[i];
+      const payload = updates.map((u) => ({
+        purchase_order_item_id: u.id,
+        quantity_received: u.qty,
+      }));
 
-        await retryWithBackoff(async () => {
-          await supabase
-            .from('purchase_order_items')
-            .update({ quantity_received: update.qty, line_total: update.qty * item.unit_price })
-            .eq('id', item.id);
+      const nextStatus =
+        receivedTotal <= 0 ? 'ordered' : receivedTotal < orderedTotal ? 'partial' : 'received';
 
-          await writeLedgerEntry({
-            action: 'updated',
-            entityType: 'purchase_order_item',
-            entityId: item.id,
-            module: 'procurement',
-            operation: 'update',
-            beforeData: { quantity_received: item.quantity_received },
-            afterData: { quantity_received: update.qty, line_total: update.qty * item.unit_price },
-            referenceId: po.id,
-          });
+      const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
+        supabase.rpc('receive_po_shipment', {
+          p_po_id: po.id,
+          p_lines: payload,
+        })
+      );
 
-          // Upsert hub inventory
-          const { data: existing, error: checkErr } = await supabase
-            .from('hub_inventory')
-            .select('id, quantity_on_hand, reserved_quantity')
-            .eq('raw_material_id', item.raw_material_id)
-            .maybeSingle();
-
-          if (checkErr && checkErr.code !== 'PGRST116') {
-            throw checkErr;
-          }
-
-          if (existing) {
-            const newQty = existing.quantity_on_hand + update.qty;
-            await supabase
-              .from('hub_inventory')
-              .update({
-                quantity_on_hand: newQty,
-                available_quantity: newQty - (existing.reserved_quantity || 0),
-                last_updated: new Date().toISOString(),
-              })
-              .eq('id', existing.id);
-
-            await writeLedgerEntry({
-              action: 'updated',
-              entityType: 'hub_inventory',
-              entityId: existing.id,
-              module: 'procurement',
-              operation: 'update',
-              beforeData: {
-                quantity_on_hand: existing.quantity_on_hand,
-                available_quantity: existing.quantity_on_hand - (existing.reserved_quantity || 0),
-              },
-              afterData: {
-                quantity_on_hand: newQty,
-                available_quantity: newQty - (existing.reserved_quantity || 0),
-              },
-              deltaData: { quantity_added: update.qty },
-              referenceId: po.id,
-            });
-          } else {
-            const { data: inserted, error: insertErr } = await supabase
-              .from('hub_inventory')
-              .insert({
-                raw_material_id: item.raw_material_id,
-                quantity_on_hand: update.qty,
-                reserved_quantity: 0,
-                available_quantity: update.qty,
-                last_updated: new Date().toISOString(),
-              })
-              .select('id')
-              .single();
-
-            if (insertErr) throw insertErr;
-
-            await writeLedgerEntry({
-              action: 'created',
-              entityType: 'hub_inventory',
-              entityId: inserted?.id ?? '',
-              module: 'procurement',
-              operation: 'insert',
-              afterData: {
-                raw_material_id: item.raw_material_id,
-                quantity_on_hand: update.qty,
-                available_quantity: update.qty,
-              },
-              referenceId: po.id,
-            });
-          }
-        });
+      if (rpcErr) {
+        throw rpcErr;
       }
 
-      // Update PO status
-      const nextStatus = receivedTotal <= 0 ? 'ordered' : receivedTotal < orderedTotal ? 'partial' : 'received';
-      await retryWithBackoff(async () => await
-        supabase
-          .from('purchase_orders')
-          .update({
-            status: nextStatus,
-            actual_delivery_date: nextStatus === 'received' ? new Date().toISOString().split('T')[0] : null,
-          })
-          .eq('id', po.id)
-      );
+      const rpcResult = rpcData as { success?: boolean; error?: string } | null;
+      if (rpcResult && rpcResult.success === false) {
+        setError(rpcResult.error ?? 'Receive shipment failed');
+        setSaving(false);
+        return;
+      }
 
       await writeLedgerEntry({
         action: nextStatus === 'received' ? 'received' : 'updated',
@@ -668,9 +589,8 @@ function PODetailModal({
         module: 'procurement',
         operation: 'update',
         afterData: {
-          status: nextStatus,
-          received_total: receivedTotal,
-          ordered_total: orderedTotal,
+          rpc: 'receive_po_shipment',
+          lines: payload,
         },
         metadata: { entity_label: po.order_number },
       });

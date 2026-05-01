@@ -19,6 +19,7 @@ export interface RawMaterial {
   description?: string;
   unit_of_measure: string;
   cost_price?: number;
+  weighted_avg_unit_cost?: number;
   reorder_level?: number;
   created_at: string;
   updated_at: string;
@@ -66,6 +67,8 @@ export interface PurchaseOrderItem {
   quantity_received: number;
   unit_price: number;
   line_total?: number;
+  purchase_uom?: string | null;
+  quantity_ordered_base?: number;
   created_at: string;
   updated_at: string;
 }
@@ -80,6 +83,7 @@ export interface ProductionRun {
   yield_percentage?: number;
   status: 'in_progress' | 'completed' | 'cancelled';
   notes?: string;
+  planned_batch_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -111,6 +115,7 @@ export interface HubInventory {
   id: string;
   raw_material_id?: string;
   product_batch?: string;
+  lot_id?: string | null;
   quantity_on_hand: number;
   reserved_quantity?: number;
   available_quantity?: number;

@@ -179,9 +179,15 @@ function OutletModal({
   );
 }
 
-/** Split requested qty across hub product batches (FIFO by last_updated). */
+/** Split requested qty across hub product batches (FEFO by expiry then last_updated). */
 function allocateHubProductItems(
-  batches: { id: string; product_batch: string | null; available: number; last_updated?: string }[],
+  batches: {
+    id: string;
+    product_batch: string | null;
+    available: number;
+    last_updated?: string;
+    expiry_date?: string | null;
+  }[],
   quantity: number
 ): { product_batch: string; hubInventoryId: string; quantity: number }[] | null {
   const sorted = [...batches]
@@ -219,7 +225,13 @@ function NewSupplyOrderModal({
 }: {
   outlets: Outlet[];
   hubProductQty: number;
-  hubProductLines: { id: string; product_batch: string | null; available: number; last_updated?: string }[];
+  hubProductLines: {
+    id: string;
+    product_batch: string | null;
+    available: number;
+    last_updated?: string;
+    expiry_date?: string | null;
+  }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
 }) {
@@ -324,8 +336,8 @@ function NewSupplyOrderModal({
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
           {allocationPreview != null && allocationPreview.length > 0 && (
             <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">FIFO allocation preview</p>
-              <p className="mt-1 text-xs text-gray-500">Same batches as on submit (oldest hub rows first).</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">FEFO allocation preview</p>
+              <p className="mt-1 text-xs text-gray-500">Uses hub batches sorted by expiry date first (FEFO), then oldest last_updated.</p>
               <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm">
                 {allocationPreview.map((line, i) => (
                   <li key={`${line.hubInventoryId}-${i}`} className="flex justify-between gap-3 border-b border-gray-100 pb-1 text-gray-700 last:border-0">
@@ -338,7 +350,7 @@ function NewSupplyOrderModal({
           )}
           {Number.isFinite(qtyParsed) && qtyParsed > 0 && allocationPreview === null && (
             <p className="mt-2 text-xs text-amber-700">
-              This quantity cannot be covered by FIFO allocation across current hub batches (insufficient available).
+              This quantity cannot be covered by FEFO allocation across current hub batches (insufficient available).
             </p>
           )}
         </div>
@@ -527,7 +539,13 @@ export function Distribution() {
   const [hubProductQty, setHubProductQty] = useState(0);
   /** Finished-goods hub rows for reservations (real UUIDs). */
   const [hubProductLines, setHubProductLines] = useState<
-    { id: string; product_batch: string | null; available: number; last_updated?: string }[]
+    {
+      id: string;
+      product_batch: string | null;
+      available: number;
+      last_updated?: string;
+      expiry_date?: string | null;
+    }[]
   >([]);
   const [hubFinishedAtp, setHubFinishedAtp] = useState<FinishedHubTotals>({
     onHand: 0,
@@ -568,9 +586,10 @@ export function Distribution() {
       supabase.from('outlet_inventory').select('outlet_id, quantity_on_hand'),
       supabase
         .from('hub_inventory')
-        .select('id, product_batch, available_quantity, quantity_on_hand, reserved_quantity, last_updated')
-        .is('raw_material_id', null)
-        .order('last_updated', { ascending: true }),
+        .select(
+          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date)'
+        )
+        .is('raw_material_id', null),
     ]);
 
     const orders = sos as SOWithOutlet[] ?? [];
@@ -607,12 +626,21 @@ export function Distribution() {
       const reserved = Number(row.reserved_quantity ?? 0);
       const onHand = Number(row.quantity_on_hand ?? 0);
       const avail = hubRowAvailableQuantity(onHand, reserved, row.available_quantity);
+      const lot = row.lot as { expiry_date?: string | null } | null;
       return {
         id: row.id,
         product_batch: row.product_batch,
         available: avail,
         last_updated: row.last_updated,
+        expiry_date: lot?.expiry_date ?? null,
       };
+    });
+
+    hubLines.sort((a, b) => {
+      const ad = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+      const bd = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+      if (ad !== bd) return ad - bd;
+      return (a.last_updated ?? '').localeCompare(b.last_updated ?? '');
     });
 
     setHubFinishedAtp(aggregateFinishedGoodsHubTotals(hubProducts ?? []));

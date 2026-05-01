@@ -6,7 +6,7 @@ import { MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import { LogOut } from 'lucide-react';
 
 export function RequiredPasswordReset() {
-  const { profile, signOut, refetchProfile, syncAuth } = useAuth();
+  const { profile, user, signOut, refetchProfile, syncAuth } = useAuth();
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -39,10 +39,15 @@ export function RequiredPasswordReset() {
         setError(updErr.message);
         return;
       }
+      const uid = user?.id ?? profile?.id;
+      if (!uid) {
+        setError('Could not resolve your user id.');
+        return;
+      }
       const { error: profileErr } = await supabase
         .from('profiles')
         .update({ password_reset_required: false })
-        .eq('id', profile.id);
+        .eq('id', uid);
       if (profileErr) {
         setError(profileErr.message);
         return;
