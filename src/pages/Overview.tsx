@@ -9,9 +9,19 @@ import {
   FlaskConical,
   ArrowRight,
   Activity,
+  CircleDollarSign,
+  Trash2,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals } from '../utils/hubInventoryMath';
+import { useAuth } from '../utils/auth';
+
+function localISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 interface KPIs {
   rawMaterialValue: number;
@@ -20,14 +30,24 @@ interface KPIs {
   avgYield: number | null;
   lowStockCount: number;
   totalOutlets: number;
+  salesUnits7d: number;
+  salesJournals7d: number;
+  wasteUnits7d: number;
+  wasteEvents7d: number;
 }
 
 interface ActivityItem {
   id: string;
-  type: 'purchase' | 'production' | 'supply';
+  type: 'purchase' | 'production' | 'supply' | 'sales' | 'waste';
   label: string;
   detail: string;
   time: string;
+}
+
+interface ExpiringLotRow {
+  id: string;
+  product_batch_label: string;
+  expiry_date: string;
 }
 
 interface LowStockItem {
@@ -47,16 +67,27 @@ interface SupplierScoreRow {
 }
 
 export function Overview() {
+  const { isAdmin } = useAuth();
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [supplierScores, setSupplierScores] = useState<SupplierScoreRow[]>([]);
+  const [expiringLots, setExpiringLots] = useState<ExpiringLotRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
+        const today = new Date();
+        const rollingStart = new Date(today);
+        rollingStart.setDate(rollingStart.getDate() - 7);
+        const rollingStartIso = localISODate(rollingStart);
+        const expiryHorizon = new Date(today);
+        expiryHorizon.setDate(expiryHorizon.getDate() + 14);
+        const todayIso = localISODate(today);
+        const expiryHorizonIso = localISODate(expiryHorizon);
+
         const [
           { data: hubRaw },
           { data: hubProducts },
@@ -67,6 +98,11 @@ export function Overview() {
           { data: prodRuns },
           { data: supplies },
           { data: scoreRows },
+          { data: salesJournalsKpi },
+          { data: wasteEventsKpi },
+          { data: salesActivityRows },
+          { data: wasteActivityRows },
+          { data: expiringLotsRows },
         ] = await Promise.all([
           supabase
             .from('hub_inventory')
@@ -104,7 +140,62 @@ export function Overview() {
             .order('created_at', { ascending: false })
             .limit(4),
           supabase.from('supplier_scorecard_metrics').select('*').order('supplier_name').limit(20),
+          supabase
+            .from('sales_journals')
+            .select('id')
+            .eq('status', 'posted')
+            .gte('business_date', rollingStartIso),
+          supabase
+            .from('waste_events')
+            .select('id')
+            .eq('status', 'posted')
+            .gte('waste_date', rollingStartIso),
+          supabase
+            .from('sales_journals')
+            .select('id, business_date, created_at, notes, outlet:outlet_id(name)')
+            .eq('status', 'posted')
+            .order('created_at', { ascending: false })
+            .limit(10),
+          supabase
+            .from('waste_events')
+            .select('id, location_kind, waste_date, created_at, notes, outlet:outlet_id(name)')
+            .eq('status', 'posted')
+            .order('created_at', { ascending: false })
+            .limit(10),
+          supabase
+            .from('inventory_lots')
+            .select('id, product_batch_label, expiry_date')
+            .not('expiry_date', 'is', null)
+            .gte('expiry_date', todayIso)
+            .lte('expiry_date', expiryHorizonIso)
+            .order('expiry_date', { ascending: true })
+            .limit(8),
         ]);
+
+        const sjIds = (salesJournalsKpi ?? []).map((r) => r.id);
+        const weIds = (wasteEventsKpi ?? []).map((r) => r.id);
+
+        const [saleLinesResult, wasteLinesResult] = await Promise.all([
+          sjIds.length > 0
+            ? supabase.from('sales_journal_lines').select('quantity_sold').in('sales_journal_id', sjIds)
+            : Promise.resolve({ data: [] as { quantity_sold: unknown }[] }),
+          weIds.length > 0
+            ? supabase.from('waste_lines').select('quantity').in('waste_event_id', weIds)
+            : Promise.resolve({ data: [] as { quantity: unknown }[] }),
+        ]);
+
+        const salesUnits7d = (saleLinesResult.data ?? []).reduce(
+          (acc, row) => acc + Number(row.quantity_sold ?? 0),
+          0
+        );
+        const wasteUnits7d = (wasteLinesResult.data ?? []).reduce(
+          (acc, row) => acc + Number(row.quantity ?? 0),
+          0
+        );
+        const salesJournals7d = sjIds.length;
+        const wasteEvents7d = weIds.length;
+
+        setExpiringLots((expiringLotsRows ?? []) as ExpiringLotRow[]);
 
         // Raw material value
         const rawValue = (hubRaw || []).reduce((acc, row) => {
@@ -156,6 +247,10 @@ export function Overview() {
           avgYield,
           lowStockCount: lowItems.length,
           totalOutlets: outlets?.length ?? 0,
+          salesUnits7d,
+          salesJournals7d,
+          wasteUnits7d,
+          wasteEvents7d,
         });
 
         // Build activity feed
@@ -194,8 +289,34 @@ export function Overview() {
             time: s.created_at,
           });
         }
+        for (const sj of salesActivityRows ?? []) {
+          const outlet = sj.outlet as { name?: string } | null;
+          const noteHint =
+            sj.notes && String(sj.notes).trim() ? String(sj.notes).trim().slice(0, 80) : 'Posted';
+          items.push({
+            id: `sj-${sj.id}`,
+            type: 'sales',
+            label: `Outlet sales · ${sj.business_date}`,
+            detail: `${outlet?.name ?? 'Outlet'} · ${noteHint}`,
+            time: sj.created_at,
+          });
+        }
+        for (const we of wasteActivityRows ?? []) {
+          const outlet = we.outlet as { name?: string } | null;
+          const locLabel =
+            we.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
+          const noteHint =
+            we.notes && String(we.notes).trim() ? String(we.notes).trim().slice(0, 80) : 'Posted';
+          items.push({
+            id: `we-${we.id}`,
+            type: 'waste',
+            label: `Waste · ${we.waste_date}`,
+            detail: `${we.location_kind === 'hub' ? 'Hub' : 'Outlet'} · ${locLabel} · ${noteHint}`,
+            time: we.created_at,
+          });
+        }
         items.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-        setActivity(items.slice(0, 8));
+        setActivity(items.slice(0, 12));
       } catch (err) {
         console.error(err);
       } finally {
@@ -210,12 +331,16 @@ export function Overview() {
     purchase: <ShoppingCart size={16} />,
     production: <FlaskConical size={16} />,
     supply: <Truck size={16} />,
+    sales: <CircleDollarSign size={16} />,
+    waste: <Trash2 size={16} />,
   };
 
   const activityColor = {
     purchase: 'bg-blue-100 text-blue-600',
     production: 'bg-emerald-100 text-emerald-600',
     supply: 'bg-teal-100 text-teal-600',
+    sales: 'bg-violet-100 text-violet-600',
+    waste: 'bg-orange-100 text-orange-600',
   };
 
   function timeAgo(iso: string) {
@@ -249,7 +374,7 @@ export function Overview() {
       </div>
 
       {/* KPIs */}
-      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         {[
           {
             icon: <Package size={20} />,
@@ -304,6 +429,22 @@ export function Overview() {
             value: kpis?.totalOutlets ?? 0,
             sub: 'Quackteow locations',
             to: '/distribution',
+          },
+          {
+            icon: <CircleDollarSign size={20} />,
+            color: 'bg-violet-50 text-violet-600',
+            label: 'Outlet sales (7d)',
+            value: (kpis?.salesUnits7d ?? 0).toLocaleString(),
+            sub: `${kpis?.salesJournals7d ?? 0} journals · units sold`,
+            to: '/sales',
+          },
+          {
+            icon: <Trash2 size={20} />,
+            color: 'bg-orange-50 text-orange-600',
+            label: 'Waste (7d)',
+            value: (kpis?.wasteUnits7d ?? 0).toLocaleString(),
+            sub: `${kpis?.wasteEvents7d ?? 0} events · units`,
+            to: '/waste',
           },
         ].map((card) => (
           <Link
@@ -372,6 +513,42 @@ export function Overview() {
         </div>
       )}
 
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold text-gray-900">Lots expiring soon</h2>
+          {isAdmin ? (
+            <Link to="/genealogy" className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline">
+              Open Lots
+            </Link>
+          ) : (
+            <span className="text-xs text-gray-400">Full traceability in Lots (admins)</span>
+          )}
+        </div>
+        <p className="mb-4 text-xs text-gray-500">Expiry within the next 14 days.</p>
+        {expiringLots.length === 0 ? (
+          <div className="py-6 text-center text-sm text-gray-400">No lots with expiry in this window.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-gray-50 text-left">
+                <tr>
+                  <th className="px-3 py-2 font-medium text-gray-700">Batch</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Expiry</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {expiringLots.map((lot) => (
+                  <tr key={lot.id}>
+                    <td className="px-3 py-2 font-medium text-gray-900">{lot.product_batch_label}</td>
+                    <td className="px-3 py-2 tabular-nums text-gray-700">{lot.expiry_date}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
         {/* Recent Activity */}
         <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -381,7 +558,7 @@ export function Overview() {
           <div className="divide-y divide-gray-50">
             {activity.length === 0 ? (
               <div className="px-6 py-10 text-center text-sm text-gray-400">
-                No activity yet — start by adding suppliers and creating a purchase order.
+                No activity yet — create a PO, production run, supply order, or post outlet sales / waste.
               </div>
             ) : (
               activity.map((item) => (
@@ -485,6 +662,20 @@ export function Overview() {
           >
             <Truck size={16} />
             Create Supply Order
+          </Link>
+          <Link
+            to="/sales"
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 transition-colors"
+          >
+            <CircleDollarSign size={16} />
+            Record outlet sales
+          </Link>
+          <Link
+            to="/waste"
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 transition-colors"
+          >
+            <Trash2 size={16} />
+            Post waste
           </Link>
         </div>
       </div>
