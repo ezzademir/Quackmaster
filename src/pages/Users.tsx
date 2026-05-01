@@ -183,25 +183,14 @@ export function Users() {
     setResetMessage('');
 
     try {
-      const { data, error } = await supabase.functions.invoke<{
-        success?: boolean;
-        message?: string;
-        error?: string;
-      }>('force_password_reset', {
-        body: { userId: selectedUser.id },
-      });
+      // Admins may update profiles via RLS ("Admins can update all profiles"); no Edge Function required.
+      const { error } = await supabase
+        .from('profiles')
+        .update({ password_reset_required: true })
+        .eq('id', selectedUser.id);
 
       if (error) {
-        const hint =
-          error.message === 'Failed to fetch'
-            ? ' (network/CORS — deploy the function with `supabase functions deploy force_password_reset`, or check DevTools → Network)'
-            : '';
-        setResetMessage(`Error: ${error.message}${hint}`);
-        return;
-      }
-
-      if (data && typeof data === 'object' && 'error' in data && data.error) {
-        setResetMessage(`Error: ${data.error}`);
+        setResetMessage(`Error: ${error.message}`);
         return;
       }
 
@@ -211,7 +200,7 @@ export function Users() {
         entityId: selectedUser.id,
         module: 'users',
         operation: 'event',
-        metadata: { password_reset_required: true, source: 'force_password_reset' },
+        metadata: { password_reset_required: true, source: 'admin_force_password_reset' },
       });
 
       setResetMessage('Password reset required flag set. User will be prompted to reset on next login.');
