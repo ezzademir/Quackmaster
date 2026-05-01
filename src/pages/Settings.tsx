@@ -1,10 +1,8 @@
-import { BarChart3, Users, ShoppingBag, Star, Shield, RefreshCw, Check, X, Download } from 'lucide-react';
+import { Shield, RefreshCw, Download } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { supabase } from '../utils/supabase';
-import type { PendingRegistration } from '../types';
-import { Modal } from '../components/Modal';
 import { writeLedgerEntry } from '../utils/ledger';
 import { fetchQCAuditCriteria, saveQCAuditCriteria } from '../utils/qcSettings';
 import { downloadCsv } from '../utils/exportCsv';
@@ -13,10 +11,6 @@ export function Settings() {
   const { refetchProfile, isAdmin } = useAuth();
   const location = useLocation();
   const [refreshing, setRefreshing] = useState(false);
-  const [pendingUsers, setPendingUsers] = useState<PendingRegistration[]>([]);
-  const [loadingApprovals, setLoadingApprovals] = useState(false);
-  const [rejectionModal, setRejectionModal] = useState<{ user: PendingRegistration | null; open: boolean }>({ user: null, open: false });
-  const [rejectionReason, setRejectionReason] = useState('');
   const [qcMin, setQcMin] = useState('85');
   const [qcMax, setQcMax] = useState('110');
   const [qcVariance, setQcVariance] = useState('5');
@@ -52,12 +46,6 @@ export function Settings() {
   };
 
   useEffect(() => {
-    if (isAdmin) {
-      fetchPendingUsers();
-    }
-  }, [isAdmin]);
-
-  useEffect(() => {
     if (!isAdmin) return;
     let cancelled = false;
     setQcLoading(true);
@@ -91,40 +79,6 @@ export function Settings() {
     const el = document.getElementById('qc-audit-settings');
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [location.search]);
-
-  async function fetchPendingUsers() {
-    setLoadingApprovals(true);
-    const { data } = await supabase
-      .from('pending_registrations')
-      .select('*')
-      .eq('status', 'pending')
-      .order('requested_at', { ascending: false });
-    setPendingUsers((data || []) as PendingRegistration[]);
-    setLoadingApprovals(false);
-  }
-
-  async function approveUser(userId: string) {
-    const { error: profileErr } = await supabase
-      .from('profiles')
-      .update({ role: 'staff' })
-      .eq('id', userId);
-
-    if (!profileErr) {
-      await supabase
-        .from('pending_registrations')
-        .update({ status: 'approved', reviewed_at: new Date().toISOString() })
-        .eq('user_id', userId);
-      await writeLedgerEntry({
-        action: 'approved',
-        entityType: 'pending_registration',
-        entityId: userId,
-        module: 'settings',
-        operation: 'update',
-        afterData: { status: 'approved', role: 'staff' },
-      });
-      fetchPendingUsers();
-    }
-  }
 
   async function saveQCSettings() {
     const min = parseFloat(qcMin);
@@ -174,30 +128,14 @@ export function Settings() {
     }
   }
 
-  async function rejectUser(userId: string, reason: string) {
-    await supabase
-      .from('pending_registrations')
-      .update({ status: 'rejected', rejection_reason: reason, reviewed_at: new Date().toISOString() })
-      .eq('user_id', userId);
-    await writeLedgerEntry({
-      action: 'rejected',
-      entityType: 'pending_registration',
-      entityId: userId,
-      module: 'settings',
-      operation: 'update',
-      afterData: { status: 'rejected', rejection_reason: reason || null },
-    });
-    setRejectionModal({ user: null, open: false });
-    setRejectionReason('');
-    fetchPendingUsers();
-  }
-
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-          <p className="mt-1 text-sm text-gray-500">System configuration and future module management</p>
+          <p className="mt-1 text-sm text-gray-500">
+            System configuration, preferences, and data exports.
+          </p>
         </div>
         <button
           onClick={handleRefresh}
@@ -208,47 +146,6 @@ export function Settings() {
           Refresh Profile
         </button>
       </div>
-
-      {isAdmin && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">
-          <h2 className="mb-4 font-semibold text-gray-900 flex items-center gap-2">
-            <Users size={20} className="text-amber-600" />
-            Pending User Approvals
-          </h2>
-          {loadingApprovals ? (
-            <p className="text-sm text-gray-600">Loading...</p>
-          ) : pendingUsers.length === 0 ? (
-            <p className="text-sm text-gray-600">No pending registrations</p>
-          ) : (
-            <div className="space-y-3">
-              {pendingUsers.map((user) => (
-                <div key={user.id} className="flex items-center justify-between rounded-lg bg-white p-4">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{user.full_name}</p>
-                    <p className="text-xs text-gray-500">{user.email}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => approveUser(user.user_id)}
-                      className="flex items-center gap-1 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 transition-colors"
-                    >
-                      <Check size={14} />
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => setRejectionModal({ user, open: true })}
-                      className="flex items-center gap-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 transition-colors"
-                    >
-                      <X size={14} />
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {isAdmin && (
         <div
@@ -392,33 +289,8 @@ export function Settings() {
           </div>
         </div>
 
-        {/* Right column: Future modules */}
+        {/* Right column: exports & system info */}
         <div className="space-y-4">
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 font-semibold text-gray-900">Upcoming Modules</h2>
-            <div className="space-y-3">
-              {[
-                { icon: BarChart3, label: 'Financial Management', desc: 'P&L, cash flow, invoicing', color: 'bg-blue-50 text-blue-600' },
-                { icon: Users, label: 'Human Resources', desc: 'Staff, payroll, attendance', color: 'bg-amber-50 text-amber-600' },
-                { icon: ShoppingBag, label: 'Sales & CRM', desc: 'Orders, customers, pipeline', color: 'bg-emerald-50 text-emerald-600' },
-                { icon: Star, label: 'Quality Control', desc: 'QC checklists, compliance', color: 'bg-teal-50 text-teal-600' },
-                { icon: Shield, label: 'Audit & Compliance', desc: 'Logs, approvals, reports', color: 'bg-rose-50 text-rose-600' },
-              ].map((mod) => {
-                const Icon = mod.icon;
-                return (
-                  <div key={mod.label} className="flex items-start gap-3 rounded-lg border border-dashed border-gray-200 p-3">
-                    <div className={`flex-shrink-0 rounded-lg p-2 ${mod.color}`}><Icon size={16} /></div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">{mod.label}</p>
-                      <p className="text-xs text-gray-400">{mod.desc}</p>
-                    </div>
-                    <span className="ml-auto flex-shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">Soon</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="mb-2 font-semibold text-gray-900">Accounting / tax exports</h2>
             <p className="mb-4 text-xs text-gray-500">
@@ -458,38 +330,6 @@ export function Settings() {
           </div>
         </div>
       </div>
-
-      <Modal isOpen={rejectionModal.open} title="Reject Registration" onClose={() => setRejectionModal({ ...rejectionModal, open: false })}>
-        <div className="space-y-4">
-          <div>
-            <p className="text-sm text-gray-600">Rejecting <span className="font-medium">{rejectionModal.user?.full_name}</span></p>
-          </div>
-          <div>
-            <label className="mb-2 block text-sm font-medium text-gray-700">Reason for rejection</label>
-            <textarea
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="Optional reason to include in notification…"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              rows={3}
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => setRejectionModal({ ...rejectionModal, open: false })}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => rejectionModal.user && rejectUser(rejectionModal.user.user_id, rejectionReason)}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors"
-            >
-              Reject Registration
-            </button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }
