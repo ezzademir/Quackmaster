@@ -16,5 +16,11 @@ export const isSupabaseConfigured = Boolean(url && browserSafeApiKey);
  */
 export const supabase = createClient(
   url ?? 'https://invalid-placeholder.supabase.co',
-  browserSafeApiKey ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.invalid-placeholder-key'
+  browserSafeApiKey ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.invalid-placeholder-key',
+  {
+    auth: {
+      detectSessionInUrl: true,
+      flowType: 'pkce',
+    },
+  }
 );

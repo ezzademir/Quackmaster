@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.force_password_reset]
 verify_jwt = false
+
+[functions.admin_set_user_password]
+verify_jwt = false

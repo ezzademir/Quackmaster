@@ -2,10 +2,11 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
-interface Profile {
+export interface Profile {
   id: string;
   full_name: string;
   role: 'admin' | 'staff' | 'pending';
+  password_reset_required?: boolean | null;
 }
 
 interface AuthContextValue {
@@ -54,7 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       const query = supabase
         .from('profiles')
-        .select('id, full_name, role')
+        .select('id, full_name, role, password_reset_required')
         .eq('id', userId)
         .maybeSingle();
 
@@ -71,7 +72,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           console.error('Profile fetch error:', error);
           setProfile(null);
         } else {
-          setProfile(data as Profile | null);
+          const row = data as Profile | null;
+          setProfile(
+            row
+              ? {
+                  ...row,
+                  password_reset_required: Boolean(row.password_reset_required),
+                }
+              : null
+          );
         }
         return;
       }

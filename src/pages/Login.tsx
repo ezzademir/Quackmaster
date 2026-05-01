@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import { devClientLog } from '../utils/devClientLog';
@@ -11,6 +11,8 @@ export function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const location = useLocation();
+  const resetSuccess = Boolean((location.state as { resetSuccess?: boolean } | null)?.resetSuccess);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -54,7 +56,7 @@ export function Login() {
       }
       devClientLog('login', { phase: 'success', email: emailTrimmed });
       await syncAuth();
-      navigate('/', { replace: true });
+      navigate('/', { replace: true, state: {} });
     } finally {
       setLoading(false);
     }
@@ -71,6 +73,11 @@ export function Login() {
         </div>
 
         <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+          {resetSuccess && (
+            <div className="mb-5 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+              Password updated successfully. Sign in with your new password.
+            </div>
+          )}
           {!isSupabaseConfigured && (
             <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               Missing Supabase env at build time. Add{' '}
