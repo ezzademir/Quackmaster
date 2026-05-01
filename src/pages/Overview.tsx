@@ -373,6 +373,48 @@ export function Overview() {
         </p>
       </div>
 
+      {/* Quick Actions */}
+      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-4 font-semibold text-gray-900">Quick Actions</h2>
+        <div className="flex flex-wrap gap-3">
+          <Link
+            to="/procurement"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+          >
+            <ShoppingCart size={16} />
+            New Purchase Order
+          </Link>
+          <Link
+            to="/production"
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors"
+          >
+            <FlaskConical size={16} />
+            Start Production Run
+          </Link>
+          <Link
+            to="/distribution"
+            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors"
+          >
+            <Truck size={16} />
+            Create Supply Order
+          </Link>
+          <Link
+            to="/sales"
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 transition-colors"
+          >
+            <CircleDollarSign size={16} />
+            Record outlet sales
+          </Link>
+          <Link
+            to="/waste"
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 transition-colors"
+          >
+            <Trash2 size={16} />
+            Post waste
+          </Link>
+        </div>
+      </div>
+
       {/* KPIs */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         {[
@@ -635,48 +677,6 @@ export function Overview() {
               ))
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Quick Actions */}
-      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-4 font-semibold text-gray-900">Quick Actions</h2>
-        <div className="flex flex-wrap gap-3">
-          <Link
-            to="/procurement"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-          >
-            <ShoppingCart size={16} />
-            New Purchase Order
-          </Link>
-          <Link
-            to="/production"
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors"
-          >
-            <FlaskConical size={16} />
-            Start Production Run
-          </Link>
-          <Link
-            to="/distribution"
-            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors"
-          >
-            <Truck size={16} />
-            Create Supply Order
-          </Link>
-          <Link
-            to="/sales"
-            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 transition-colors"
-          >
-            <CircleDollarSign size={16} />
-            Record outlet sales
-          </Link>
-          <Link
-            to="/waste"
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 transition-colors"
-          >
-            <Trash2 size={16} />
-            Post waste
-          </Link>
         </div>
       </div>
     </div>
