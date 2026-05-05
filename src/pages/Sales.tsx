@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
+import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { postSalesJournal, type SalesJournalLineInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
 
@@ -10,21 +11,67 @@ interface LineRow extends SalesJournalLineInput {
 
 const blankLines = (): LineRow[] => [{ key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }];
 
-function outletInventoryRowsToLines(rows: { product_batch: string; last_updated: string | null }[]): LineRow[] {
-  const seen = new Set<string>();
-  const unique: { product_batch: string; last_updated: string | null }[] = [];
-  for (const row of rows) {
-    const batch = row.product_batch.trim();
-    if (!batch || seen.has(batch)) continue;
-    seen.add(batch);
-    unique.push({ product_batch: batch, last_updated: row.last_updated });
-  }
-  if (unique.length === 0) return blankLines();
-  return unique.map((row) => ({
-    key: crypto.randomUUID(),
-    product_batch: row.product_batch,
-    quantity_sold: 0,
-  }));
+interface OutletInventoryLot {
+  expiry_date: string | null;
+  manufactured_at: string | null;
+}
+
+interface OutletInventoryRowForFifo {
+  id: string;
+  product_batch: string;
+  quantity_on_hand: number;
+  reserved_quantity: number | null;
+  available_quantity: number | null;
+  created_at: string | null;
+  lot: OutletInventoryLot | OutletInventoryLot[] | null;
+}
+
+function normalizeLot(lot: OutletInventoryRowForFifo['lot']): OutletInventoryLot | null {
+  if (lot == null) return null;
+  return Array.isArray(lot) ? (lot[0] ?? null) : lot;
+}
+
+/** Ascending with null/empty last (FIFO: unknown dates after known). */
+function compareNullableStringAsc(a: string | null | undefined, b: string | null | undefined): number {
+  const emptyA = a == null || a === '';
+  const emptyB = b == null || b === '';
+  if (emptyA && emptyB) return 0;
+  if (emptyA) return 1;
+  if (emptyB) return -1;
+  return a.localeCompare(b);
+}
+
+function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[] {
+  const parsed = rows
+    .map((row) => {
+      const batch = row.product_batch.trim();
+      if (!batch) return null;
+      return { row, batch, lot: normalizeLot(row.lot) };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+
+  if (parsed.length === 0) return blankLines();
+
+  parsed.sort((a, b) => {
+    const byExpiry = compareNullableStringAsc(a.lot?.expiry_date, b.lot?.expiry_date);
+    if (byExpiry !== 0) return byExpiry;
+    const byMfg = compareNullableStringAsc(a.lot?.manufactured_at, b.lot?.manufactured_at);
+    if (byMfg !== 0) return byMfg;
+    const byCreated = compareNullableStringAsc(a.row.created_at, b.row.created_at);
+    if (byCreated !== 0) return byCreated;
+    return a.row.id.localeCompare(b.row.id);
+  });
+
+  return parsed.map(({ row, batch }) => {
+    const qoh = Number(row.quantity_on_hand ?? 0);
+    const res = Number(row.reserved_quantity ?? 0);
+    const avail = hubRowAvailableQuantity(qoh, res, row.available_quantity);
+    return {
+      key: crypto.randomUUID(),
+      product_batch: batch,
+      quantity_sold: avail,
+    };
+  });
 }
 
 export function Sales() {
@@ -80,14 +127,15 @@ export function Sales() {
       try {
         const { data, error } = await supabase
           .from('outlet_inventory')
-          .select('id, product_batch, quantity_on_hand, last_updated')
+          .select(
+            'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at)'
+          )
           .eq('outlet_id', outletId)
-          .gt('quantity_on_hand', 0)
-          .order('last_updated', { ascending: false });
+          .gt('quantity_on_hand', 0);
 
         if (error) throw error;
 
-        const next = outletInventoryRowsToLines(data ?? []);
+        const next = outletInventoryFifoToLines((data ?? []) as OutletInventoryRowForFifo[]);
         const isEmpty = next.length === 1 && next[0].product_batch === '';
         setLines(next);
         setInventoryEmptyNotice(isEmpty);
@@ -227,6 +275,11 @@ export function Sales() {
           {inventoryEmptyNotice && (
             <p className="mb-2 text-sm text-gray-500">No stocked batches for this outlet.</p>
           )}
+          <p className="mb-2 text-sm text-gray-500">
+            Loading batches pulls outlet stock in FIFO order (earliest expiry and lot dates first) and prefills{' '}
+            <span className="font-medium text-gray-600">Qty sold</span> with available stock—change each row to units
+            actually sold before posting.
+          </p>
           <div className="space-y-3">
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
