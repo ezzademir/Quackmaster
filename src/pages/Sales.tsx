@@ -7,9 +7,13 @@ import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
   key: string;
+  /** UI-only; from inventory_lots.manufactured_at when loaded */
+  production_date_label: string | null;
 }
 
-const blankLines = (): LineRow[] => [{ key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }];
+const blankLines = (): LineRow[] => [
+  { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0, production_date_label: null },
+];
 
 interface OutletInventoryLot {
   expiry_date: string | null;
@@ -29,6 +33,13 @@ interface OutletInventoryRowForFifo {
 function normalizeLot(lot: OutletInventoryRowForFifo['lot']): OutletInventoryLot | null {
   if (lot == null) return null;
   return Array.isArray(lot) ? (lot[0] ?? null) : lot;
+}
+
+function formatProductionDateLabel(manufacturedAt: string | null | undefined): string | null {
+  if (manufacturedAt == null || manufacturedAt === '') return null;
+  const d = new Date(manufacturedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { dateStyle: 'short' });
 }
 
 /** Ascending with null/empty last (FIFO: unknown dates after known). */
@@ -62,7 +73,7 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
     return a.row.id.localeCompare(b.row.id);
   });
 
-  return parsed.map(({ row, batch }) => {
+  return parsed.map(({ row, batch, lot }) => {
     const qoh = Number(row.quantity_on_hand ?? 0);
     const res = Number(row.reserved_quantity ?? 0);
     const avail = hubRowAvailableQuantity(qoh, res, row.available_quantity);
@@ -70,6 +81,7 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
       key: crypto.randomUUID(),
       product_batch: batch,
       quantity_sold: avail,
+      production_date_label: formatProductionDateLabel(lot?.manufactured_at),
     };
   });
 }
@@ -264,7 +276,15 @@ export function Sales() {
                 type="button"
                 onClick={() => {
                   setInventoryEmptyNotice(false);
-                  setLines((prev) => [...prev, { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }]);
+                  setLines((prev) => [
+                    ...prev,
+                    {
+                      key: crypto.randomUUID(),
+                      product_batch: '',
+                      quantity_sold: 0,
+                      production_date_label: null,
+                    },
+                  ]);
                 }}
                 className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
               >
@@ -280,21 +300,46 @@ export function Sales() {
             <span className="font-medium text-gray-600">Qty sold</span> with available stock—change each row to units
             actually sold before posting.
           </p>
+          <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
+            <div className="min-w-[140px] flex-1 text-xs font-medium text-gray-500">Product batch</div>
+            <div className="w-28 min-w-[7rem] text-xs font-medium text-gray-500">Prod. date</div>
+            <div className="w-28 text-xs font-medium text-gray-500">Qty sold</div>
+            <div className="w-10 shrink-0" aria-hidden />
+          </div>
           <div className="space-y-3">
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-[140px] flex-1">
+                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Product batch</span>
                   <input
                     placeholder="Product batch"
                     value={line.product_batch}
                     onChange={(e) => {
                       const v = e.target.value;
-                      setLines((prev) => prev.map((r, i) => (i === idx ? { ...r, product_batch: v } : r)));
+                      setLines((prev) =>
+                        prev.map((r, i) =>
+                          i === idx ? { ...r, product_batch: v, production_date_label: null } : r
+                        )
+                      );
                     }}
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
                   />
                 </div>
+                <div className="w-full min-w-[7rem] sm:w-28">
+                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Prod. date</span>
+                  <div
+                    className="flex min-h-[38px] items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm tabular-nums text-gray-800"
+                    title={
+                      line.production_date_label
+                        ? `Production date ${line.production_date_label}`
+                        : 'No production date on file for this lot'
+                    }
+                  >
+                    {line.production_date_label ?? '—'}
+                  </div>
+                </div>
                 <div className="w-28">
+                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Qty sold</span>
                   <input
                     type="number"
                     min={0}
