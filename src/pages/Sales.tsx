@@ -8,17 +8,36 @@ interface LineRow extends SalesJournalLineInput {
   key: string;
 }
 
+const blankLines = (): LineRow[] => [{ key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }];
+
+function outletInventoryRowsToLines(rows: { product_batch: string; last_updated: string | null }[]): LineRow[] {
+  const seen = new Set<string>();
+  const unique: { product_batch: string; last_updated: string | null }[] = [];
+  for (const row of rows) {
+    const batch = row.product_batch.trim();
+    if (!batch || seen.has(batch)) continue;
+    seen.add(batch);
+    unique.push({ product_batch: batch, last_updated: row.last_updated });
+  }
+  if (unique.length === 0) return blankLines();
+  return unique.map((row) => ({
+    key: crypto.randomUUID(),
+    product_batch: row.product_batch,
+    quantity_sold: 0,
+  }));
+}
+
 export function Sales() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
   const [businessDate, setBusinessDate] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
-  const [lines, setLines] = useState<LineRow[]>([
-    { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 },
-  ]);
+  const [lines, setLines] = useState<LineRow[]>(() => blankLines());
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [inventoryEmptyNotice, setInventoryEmptyNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [history, setHistory] = useState<
@@ -45,6 +64,44 @@ export function Sales() {
     void loadOutlets();
     void loadHistory();
   }, [loadOutlets, loadHistory]);
+
+  useEffect(() => {
+    setInventoryEmptyNotice(false);
+  }, [outletId]);
+
+  const loadBatchesFromInventory = useCallback(
+    async (opts?: { afterPost?: boolean }) => {
+      if (!outletId) {
+        setMessage({ tone: 'err', text: 'Select an outlet.' });
+        return false;
+      }
+      setBatchesLoading(true);
+      if (!opts?.afterPost) setMessage(null);
+      try {
+        const { data, error } = await supabase
+          .from('outlet_inventory')
+          .select('id, product_batch, quantity_on_hand, last_updated')
+          .eq('outlet_id', outletId)
+          .gt('quantity_on_hand', 0)
+          .order('last_updated', { ascending: false });
+
+        if (error) throw error;
+
+        const next = outletInventoryRowsToLines(data ?? []);
+        const isEmpty = next.length === 1 && next[0].product_batch === '';
+        setLines(next);
+        setInventoryEmptyNotice(isEmpty);
+        return true;
+      } catch (err) {
+        const text = err instanceof Error ? err.message : 'Failed to load outlet inventory.';
+        setMessage({ tone: 'err', text });
+        return false;
+      } finally {
+        setBatchesLoading(false);
+      }
+    },
+    [outletId]
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -82,8 +139,9 @@ export function Sales() {
           ? 'Journal already recorded (idempotent replay).'
           : `Posted sales journal${res.salesJournalId ? ` ${res.salesJournalId.slice(0, 8)}…` : ''}.`,
       });
-      setLines([{ key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }]);
       setNotes('');
+      const reloaded = await loadBatchesFromInventory({ afterPost: true });
+      if (!reloaded) setLines(blankLines());
       void loadHistory();
     } finally {
       setSubmitting(false);
@@ -143,18 +201,32 @@ export function Sales() {
         </div>
 
         <div>
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <label className="text-sm font-medium text-gray-700">Lines</label>
-            <button
-              type="button"
-              onClick={() =>
-                setLines((prev) => [...prev, { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }])
-              }
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-            >
-              <Plus size={14} /> Add line
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void loadBatchesFromInventory()}
+                disabled={!outletId || batchesLoading}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {batchesLoading ? 'Loading…' : 'Load batches from inventory'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInventoryEmptyNotice(false);
+                  setLines((prev) => [...prev, { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 }]);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <Plus size={14} /> Add line
+              </button>
+            </div>
           </div>
+          {inventoryEmptyNotice && (
+            <p className="mb-2 text-sm text-gray-500">No stocked batches for this outlet.</p>
+          )}
           <div className="space-y-3">
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
