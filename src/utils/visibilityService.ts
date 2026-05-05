@@ -50,6 +50,48 @@ export async function postSalesJournal(params: {
   };
 }
 
+export async function postSalesJournalFifoBySku(params: {
+  outletId: string;
+  businessDate: string;
+  sku: string;
+  quantitySold: number;
+  notes?: string;
+  idempotencyKey?: string;
+}): Promise<{ success: boolean; salesJournalId?: string; error?: string; idempotentReplay?: boolean }> {
+  const { data, error } = await supabase.rpc('post_sales_journal_fifo_by_sku', {
+    p_outlet_id: params.outletId,
+    p_business_date: params.businessDate,
+    p_sku: params.sku.trim(),
+    p_quantity_sold: params.quantitySold,
+    p_notes: params.notes ?? null,
+    p_idempotency_key: params.idempotencyKey ?? null,
+  });
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  const payload = data as {
+    success?: boolean;
+    sales_journal_id?: string;
+    error?: string;
+    idempotent_replay?: boolean;
+  } | null;
+
+  if (!payload?.success) {
+    return {
+      success: false,
+      error: payload?.error ?? 'post_sales_journal_fifo_by_sku failed',
+    };
+  }
+
+  return {
+    success: true,
+    salesJournalId: payload.sales_journal_id,
+    idempotentReplay: Boolean(payload.idempotent_replay),
+  };
+}
+
 export async function voidSalesJournal(params: {
   salesJournalId: string;
 }): Promise<{ success: boolean; error?: string }> {
