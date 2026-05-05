@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Eye, Plus, Trash2 } from 'lucide-react';
+import { DateFilter } from '../components/DateFilter';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
+import { formatDateForInput, type DateRange } from '../utils/dateRange';
 import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import {
   postSalesJournal,
@@ -96,6 +98,47 @@ interface ModalDraftLine extends SalesJournalLineInput {
   key: string;
 }
 
+interface SalesJournalHistoryRow {
+  id: string;
+  business_date: string;
+  outlet_id: string;
+  notes: string | null;
+  lines: { product_batch: string; quantity_sold: number }[];
+}
+
+/** Group fetched lines under each journal id, ordered by created_at per journal. */
+function linesByJournalFromDb(
+  rows: {
+    sales_journal_id: string;
+    product_batch: string;
+    quantity_sold: string | number;
+    created_at: string;
+  }[]
+): Map<string, { product_batch: string; quantity_sold: number }[]> {
+  const buckets = new Map<
+    string,
+    { product_batch: string; quantity_sold: number; created_at: string }[]
+  >();
+  for (const row of rows) {
+    const jid = row.sales_journal_id;
+    if (!buckets.has(jid)) buckets.set(jid, []);
+    buckets.get(jid)!.push({
+      product_batch: row.product_batch,
+      quantity_sold: Number(row.quantity_sold),
+      created_at: row.created_at,
+    });
+  }
+  const out = new Map<string, { product_batch: string; quantity_sold: number }[]>();
+  for (const [jid, arr] of buckets) {
+    arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    out.set(
+      jid,
+      arr.map(({ product_batch, quantity_sold }) => ({ product_batch, quantity_sold }))
+    );
+  }
+  return out;
+}
+
 export function Sales() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
@@ -109,9 +152,7 @@ export function Sales() {
   const [inventoryEmptyNotice, setInventoryEmptyNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
-  const [history, setHistory] = useState<
-    { id: string; business_date: string; outlet_id: string; notes: string | null }[]
-  >([]);
+  const [history, setHistory] = useState<SalesJournalHistoryRow[]>([]);
 
   const [journalModalOpen, setJournalModalOpen] = useState(false);
   const [modalJournalId, setModalJournalId] = useState<string | null>(null);
@@ -124,6 +165,7 @@ export function Sales() {
   const [modalNotes, setModalNotes] = useState('');
   const [modalLines, setModalLines] = useState<ModalDraftLine[]>([]);
   const [modalMessage, setModalMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  const [journalDateRange, setJournalDateRange] = useState<DateRange | null>(null);
 
   const recentJournalBusy = modalLoading || modalSaving || modalDeleting;
 
@@ -208,18 +250,49 @@ export function Sales() {
   }, [outletId]);
 
   const loadHistory = useCallback(async () => {
-    const { data } = await supabase
-      .from('sales_journals')
-      .select('id, business_date, outlet_id, notes')
+    let q = supabase.from('sales_journals').select('id, business_date, outlet_id, notes');
+
+    if (journalDateRange) {
+      q = q
+        .gte('business_date', formatDateForInput(journalDateRange.start))
+        .lte('business_date', formatDateForInput(journalDateRange.end));
+    }
+
+    const { data: journals, error: jErr } = await q
+      .order('business_date', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(25);
-    setHistory((data ?? []) as typeof history);
-  }, []);
+      .limit(journalDateRange ? 500 : 25);
+
+    if (jErr) return;
+
+    const list = journals ?? [];
+    const ids = list.map((j) => j.id);
+
+    let lineMap = new Map<string, { product_batch: string; quantity_sold: number }[]>();
+
+    if (ids.length > 0) {
+      const { data: jl, error: lErr } = await supabase
+        .from('sales_journal_lines')
+        .select('sales_journal_id,product_batch,quantity_sold,created_at')
+        .in('sales_journal_id', ids);
+      lineMap = linesByJournalFromDb(!lErr && jl ? jl : []);
+    }
+
+    setHistory(
+      list.map((j) => ({
+        ...j,
+        lines: lineMap.get(j.id) ?? [],
+      }))
+    );
+  }, [journalDateRange]);
 
   useEffect(() => {
     void loadOutlets();
+  }, [loadOutlets]);
+
+  useEffect(() => {
     void loadHistory();
-  }, [loadOutlets, loadHistory]);
+  }, [loadHistory]);
 
   useEffect(() => {
     setInventoryEmptyNotice(false);
@@ -562,13 +635,23 @@ export function Sales() {
       </form>
 
       <div>
-        <h2 className="mb-3 text-sm font-semibold text-gray-700">Recent journals</h2>
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <h2 className="text-sm font-semibold text-gray-700">Recent journals</h2>
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <DateFilter onFilterChange={(range) => setJournalDateRange(range)} />
+            <p className="max-w-xs text-xs text-gray-500 sm:text-right">
+              Filters the list by each journal&apos;s <strong className="font-medium text-gray-600">business date</strong>.
+              {!journalDateRange && ' With no filter, the 25 most recent journals are shown.'}
+            </p>
+          </div>
+        </div>
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white text-sm">
           <table className="w-full">
             <thead className="border-b bg-gray-50">
               <tr>
                 <th className="px-4 py-2 text-left font-medium text-gray-600">Date</th>
                 <th className="px-4 py-2 text-left font-medium text-gray-600">Outlet</th>
+                <th className="px-4 py-2 text-left font-medium text-gray-600 min-w-[12rem]">Qty sold</th>
                 <th className="px-4 py-2 text-left font-medium text-gray-600">Notes</th>
                 <th className="px-4 py-2 text-right font-medium text-gray-600">Actions</th>
               </tr>
@@ -576,19 +659,36 @@ export function Sales() {
             <tbody className="divide-y">
               {history.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
                     No journals yet
                   </td>
                 </tr>
               ) : (
                 history.map((h) => (
                   <tr key={h.id}>
-                    <td className="px-4 py-2">{h.business_date}</td>
-                    <td className="px-4 py-2">
+                    <td className="whitespace-nowrap px-4 py-2 align-top">{h.business_date}</td>
+                    <td className="px-4 py-2 align-top whitespace-nowrap">
                       {outlets.find((o) => o.id === h.outlet_id)?.name ?? h.outlet_id.slice(0, 8)}
                     </td>
-                    <td className="px-4 py-2 text-gray-600">{h.notes ?? '—'}</td>
-                    <td className="px-4 py-2 text-right">
+                    <td className="px-4 py-2 align-top">
+                      {h.lines.length === 0 ? (
+                        <span className="text-gray-400">—</span>
+                      ) : (
+                        <ul className="space-y-1 font-mono text-xs text-gray-800 sm:text-sm">
+                          {h.lines.map((ln, i) => (
+                            <li key={`${h.id}-${i}-${ln.product_batch}`}>
+                              <span className="font-semibold">{ln.quantity_sold}</span>
+                              <span className="mx-1 text-gray-400">×</span>
+                              <span className="break-all">{ln.product_batch}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </td>
+                    <td className="max-w-[10rem] px-4 py-2 align-top text-gray-600 sm:max-w-xs">
+                      {h.notes ?? '—'}
+                    </td>
+                    <td className="px-4 py-2 text-right align-top">
                       <button
                         type="button"
                         onClick={() => void loadJournalIntoModal(h.id)}
