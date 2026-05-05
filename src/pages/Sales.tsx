@@ -24,6 +24,9 @@ const blankLines = (): LineRow[] => [
   { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0, production_date_label: null },
 ];
 
+/** Page size for Recent journals list; use Next to load more. */
+const HISTORY_PAGE_SIZE = 25;
+
 interface OutletInventoryLot {
   expiry_date: string | null;
   manufactured_at: string | null;
@@ -188,6 +191,8 @@ export function Sales() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [history, setHistory] = useState<SalesJournalHistoryRow[]>([]);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
 
   const [fifoSkus, setFifoSkus] = useState<string[]>([]);
   const [fifoSkusLoading, setFifoSkusLoading] = useState(false);
@@ -328,49 +333,76 @@ export function Sales() {
     setLoading(false);
   }, [outletId]);
 
-  const loadHistory = useCallback(async (): Promise<boolean> => {
-    let q = supabase.from('sales_journals').select('id, business_date, outlet_id, notes');
-
-    if (journalDateRange) {
-      q = q
-        .gte('business_date', formatDateForInput(journalDateRange.start))
-        .lte('business_date', formatDateForInput(journalDateRange.end));
-    }
-
-    const { data: journals, error: jErr } = await q
-      .order('business_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(journalDateRange ? 500 : 25);
-
-    if (jErr) {
-      console.error('[Sales] Failed to load sales journals:', jErr);
-      return false;
-    }
-
-    const list = journals ?? [];
-    const ids = list.map((j) => j.id);
-
-    let lineMap = new Map<string, { product_batch: string; quantity_sold: number }[]>();
-
-    if (ids.length > 0) {
-      const { data: jl, error: lErr } = await supabase
-        .from('sales_journal_lines')
-        .select('sales_journal_id,product_batch,quantity_sold,created_at')
-        .in('sales_journal_id', ids);
-      if (lErr) {
-        console.error('[Sales] Failed to load sales journal lines:', lErr);
+  const loadHistory = useCallback(
+    async (opts?: { mode?: 'replace' | 'append'; beforeLength?: number }): Promise<boolean> => {
+      const mode = opts?.mode ?? 'replace';
+      if (mode === 'append' && opts?.beforeLength === undefined) {
+        console.error('[Sales] loadHistory append requires beforeLength');
+        return false;
       }
-      lineMap = linesByJournalFromDb(!lErr && jl ? jl : []);
-    }
+      const offset = mode === 'replace' ? 0 : Math.max(0, opts!.beforeLength!);
 
-    setHistory(
-      list.map((j) => ({
+      let q = supabase.from('sales_journals').select('id, business_date, outlet_id, notes');
+
+      if (journalDateRange) {
+        q = q
+          .gte('business_date', formatDateForInput(journalDateRange.start))
+          .lte('business_date', formatDateForInput(journalDateRange.end));
+      }
+
+      const { data: journals, error: jErr } = await q
+        .order('business_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + HISTORY_PAGE_SIZE - 1);
+
+      if (jErr) {
+        console.error('[Sales] Failed to load sales journals:', jErr);
+        return false;
+      }
+
+      const list = journals ?? [];
+      const ids = list.map((j) => j.id);
+
+      let lineMap = new Map<string, { product_batch: string; quantity_sold: number }[]>();
+
+      if (ids.length > 0) {
+        const { data: jl, error: lErr } = await supabase
+          .from('sales_journal_lines')
+          .select('sales_journal_id,product_batch,quantity_sold,created_at')
+          .in('sales_journal_id', ids);
+        if (lErr) {
+          console.error('[Sales] Failed to load sales journal lines:', lErr);
+        }
+        lineMap = linesByJournalFromDb(!lErr && jl ? jl : []);
+      }
+
+      const mapped = list.map((j) => ({
         ...j,
         lines: lineMap.get(j.id) ?? [],
-      }))
-    );
-    return true;
-  }, [journalDateRange]);
+      }));
+
+      if (mode === 'replace') {
+        setHistory(mapped);
+      } else {
+        setHistory((prev) => [...prev, ...mapped]);
+      }
+
+      setHistoryHasMore(mapped.length === HISTORY_PAGE_SIZE);
+      return true;
+    },
+    [journalDateRange]
+  );
+
+  async function handleLoadMoreHistory() {
+    const start = history.length;
+    setHistoryLoadingMore(true);
+    try {
+      await loadHistory({ mode: 'append', beforeLength: start });
+    } finally {
+      setHistoryLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     void loadOutlets();
@@ -379,6 +411,10 @@ export function Sales() {
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    setHistoryLoadingMore(false);
+  }, [journalDateRange]);
 
   useEffect(() => {
     setInventoryEmptyNotice(false);
@@ -870,7 +906,9 @@ export function Sales() {
             <DateFilter onFilterChange={(range) => setJournalDateRange(range)} />
             <p className="max-w-xs text-xs text-gray-500 sm:text-right">
               Filters the list by each journal&apos;s <strong className="font-medium text-gray-600">business date</strong>.
-              {!journalDateRange && ' With no filter, the 25 most recent journals are shown.'}
+              {' '}
+              Loads {HISTORY_PAGE_SIZE} at a time; use <strong className="font-medium text-gray-600">Next</strong> below
+              for older journals.
             </p>
           </div>
         </div>
@@ -932,6 +970,26 @@ export function Sales() {
               )}
             </tbody>
           </table>
+          {history.length > 0 && historyHasMore ? (
+            <div className="flex flex-col items-center gap-2 border-t border-gray-100 bg-gray-50/80 px-4 py-3 sm:flex-row sm:justify-center">
+              <button
+                type="button"
+                onClick={() => void handleLoadMoreHistory()}
+                disabled={historyLoadingMore}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+              >
+                {historyLoadingMore ? 'Loading…' : 'Next'}
+              </button>
+              <p className="text-xs text-gray-500">
+                Showing {history.length} journal{history.length === 1 ? '' : 's'}
+                {historyHasMore ? ' · more available' : ''}
+              </p>
+            </div>
+          ) : history.length > 0 ? (
+            <div className="border-t border-gray-100 bg-gray-50/50 px-4 py-2 text-center text-xs text-gray-500">
+              Showing all {history.length} loaded journal{history.length === 1 ? '' : 's'}
+            </div>
+          ) : null}
         </div>
       </div>
 
