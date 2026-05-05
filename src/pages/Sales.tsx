@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Eye, Plus, Trash2 } from 'lucide-react';
+import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
 import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
-import { postSalesJournal, type SalesJournalLineInput } from '../utils/visibilityService';
+import {
+  postSalesJournal,
+  replaceSalesJournal,
+  voidSalesJournal,
+  type SalesJournalLineInput,
+} from '../utils/visibilityService';
 import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
@@ -86,6 +92,10 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
   });
 }
 
+interface ModalDraftLine extends SalesJournalLineInput {
+  key: string;
+}
+
 export function Sales() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
@@ -102,6 +112,93 @@ export function Sales() {
   const [history, setHistory] = useState<
     { id: string; business_date: string; outlet_id: string; notes: string | null }[]
   >([]);
+
+  const [journalModalOpen, setJournalModalOpen] = useState(false);
+  const [modalJournalId, setModalJournalId] = useState<string | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalDeleting, setModalDeleting] = useState(false);
+  const [modalEditMode, setModalEditMode] = useState(false);
+  const [modalOutletId, setModalOutletId] = useState('');
+  const [modalBusinessDate, setModalBusinessDate] = useState('');
+  const [modalNotes, setModalNotes] = useState('');
+  const [modalLines, setModalLines] = useState<ModalDraftLine[]>([]);
+  const [modalMessage, setModalMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+
+  const recentJournalBusy = modalLoading || modalSaving || modalDeleting;
+
+  const populateModalFromJournal = useCallback(async (journalId: string): Promise<boolean> => {
+    const { data: header, error: hErr } = await supabase
+      .from('sales_journals')
+      .select('id,business_date,outlet_id,notes')
+      .eq('id', journalId)
+      .maybeSingle();
+
+    if (hErr || !header) {
+      setModalMessage({ tone: 'err', text: hErr?.message ?? 'Journal not found.' });
+      setModalLines([]);
+      return false;
+    }
+
+    const { data: jl, error: lErr } = await supabase
+      .from('sales_journal_lines')
+      .select('product_batch,quantity_sold')
+      .eq('sales_journal_id', journalId)
+      .order('created_at');
+
+    if (lErr) {
+      setModalMessage({ tone: 'err', text: lErr.message });
+      setModalLines([]);
+      return false;
+    }
+
+    setModalMessage(null);
+    setModalOutletId(header.outlet_id);
+    setModalBusinessDate(header.business_date);
+    setModalNotes(header.notes ?? '');
+    setModalLines(
+      (jl ?? []).map((row) => ({
+        key: crypto.randomUUID(),
+        product_batch: row.product_batch,
+        quantity_sold: Number(row.quantity_sold),
+      }))
+    );
+    return true;
+  }, []);
+
+  const loadJournalIntoModal = useCallback(
+    async (journalId: string) => {
+      setJournalModalOpen(true);
+      setModalJournalId(journalId);
+      setModalLoading(true);
+      setModalMessage(null);
+      setModalEditMode(false);
+      setModalOutletId('');
+      setModalBusinessDate('');
+      setModalNotes('');
+      setModalLines([]);
+      try {
+        await populateModalFromJournal(journalId);
+      } finally {
+        setModalLoading(false);
+      }
+    },
+    [populateModalFromJournal]
+  );
+
+  const closeJournalModal = useCallback(() => {
+    setJournalModalOpen(false);
+    setModalJournalId(null);
+    setModalLoading(false);
+    setModalSaving(false);
+    setModalDeleting(false);
+    setModalEditMode(false);
+    setModalMessage(null);
+    setModalOutletId('');
+    setModalBusinessDate('');
+    setModalNotes('');
+    setModalLines([]);
+  }, []);
 
   const loadOutlets = useCallback(async () => {
     const { data } = await supabase.from('outlets').select('*').order('name');
@@ -205,6 +302,82 @@ export function Sales() {
       void loadHistory();
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleModalDelete() {
+    if (!modalJournalId) return;
+    if (
+      !window.confirm(
+        'Delete this journal? Outlet stock will be restored for each line.'
+      )
+    )
+      return;
+    setModalMessage(null);
+    setModalDeleting(true);
+    try {
+      const res = await voidSalesJournal({ salesJournalId: modalJournalId });
+      if (!res.success) {
+        setModalMessage({ tone: 'err', text: res.error ?? 'Failed to void journal.' });
+        return;
+      }
+      await loadHistory();
+      closeJournalModal();
+      setMessage({ tone: 'ok', text: 'Sales journal deleted and stock restored.' });
+    } finally {
+      setModalDeleting(false);
+    }
+  }
+
+  async function handleModalSave() {
+    if (!modalJournalId) return;
+    const cleaned = modalLines
+      .map((l) => ({
+        product_batch: l.product_batch.trim(),
+        quantity_sold: Number(l.quantity_sold),
+      }))
+      .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
+    if (!cleaned.length) {
+      setModalMessage({ tone: 'err', text: 'Keep at least one line with batch and quantity.' });
+      return;
+    }
+
+    setModalMessage(null);
+    setModalSaving(true);
+    try {
+      const res = await replaceSalesJournal({
+        existingSalesJournalId: modalJournalId,
+        businessDate: modalBusinessDate,
+        lines: cleaned,
+        notes: modalNotes.trim() || undefined,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      if (!res.success) {
+        setModalMessage({ tone: 'err', text: res.error ?? 'Failed to update journal.' });
+        return;
+      }
+      await loadHistory();
+      closeJournalModal();
+      setMessage({
+        tone: 'ok',
+        text: res.idempotentReplay
+          ? 'Journal update replayed (idempotent).'
+          : `Sales journal updated${res.salesJournalId ? ` (${res.salesJournalId.slice(0, 8)}…)` : ''}.`,
+      });
+    } finally {
+      setModalSaving(false);
+    }
+  }
+
+  async function cancelModalEdit() {
+    if (!modalJournalId) return;
+    setModalLoading(true);
+    setModalMessage(null);
+    try {
+      await populateModalFromJournal(modalJournalId);
+    } finally {
+      setModalEditMode(false);
+      setModalLoading(false);
     }
   }
 
@@ -397,12 +570,13 @@ export function Sales() {
                 <th className="px-4 py-2 text-left font-medium text-gray-600">Date</th>
                 <th className="px-4 py-2 text-left font-medium text-gray-600">Outlet</th>
                 <th className="px-4 py-2 text-left font-medium text-gray-600">Notes</th>
+                <th className="px-4 py-2 text-right font-medium text-gray-600">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {history.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={4} className="px-4 py-6 text-center text-gray-400">
                     No journals yet
                   </td>
                 </tr>
@@ -414,6 +588,16 @@ export function Sales() {
                       {outlets.find((o) => o.id === h.outlet_id)?.name ?? h.outlet_id.slice(0, 8)}
                     </td>
                     <td className="px-4 py-2 text-gray-600">{h.notes ?? '—'}</td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => void loadJournalIntoModal(h.id)}
+                        disabled={recentJournalBusy}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        <Eye size={14} aria-hidden /> View
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -421,6 +605,206 @@ export function Sales() {
           </table>
         </div>
       </div>
+
+      <Modal
+        isOpen={journalModalOpen}
+        onClose={() => closeJournalModal()}
+        title={modalJournalId ? `Journal ${modalJournalId.slice(0, 8)}…` : 'Journal'}
+        size="lg"
+      >
+        {modalLoading && modalLines.length === 0 ? (
+          <p className="text-sm text-gray-500">Loading…</p>
+        ) : (
+          <div className="space-y-4">
+            {modalMessage && (
+              <div
+                className={`rounded-lg px-3 py-2 text-sm ${
+                  modalMessage.tone === 'ok' ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-800'
+                }`}
+              >
+                {modalMessage.text}
+              </div>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="text-xs font-medium text-gray-500">Outlet</p>
+                <p className="text-sm text-gray-900">
+                  {outlets.find((o) => o.id === modalOutletId)?.name ??
+                    (modalOutletId ? modalOutletId.slice(0, 8) + '…' : '—')}
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Business date</label>
+                <input
+                  type="date"
+                  value={modalBusinessDate}
+                  onChange={(e) => setModalBusinessDate(e.target.value)}
+                  disabled={!modalEditMode}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-600"
+                  required={modalEditMode}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Notes</label>
+              <textarea
+                value={modalNotes}
+                onChange={(e) => setModalNotes(e.target.value)}
+                disabled={!modalEditMode}
+                rows={2}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-600"
+              />
+            </div>
+
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-medium text-gray-700">Lines</label>
+                {modalEditMode && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setModalLines((prev) => [
+                        ...prev,
+                        { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 },
+                      ])
+                    }
+                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    <Plus size={14} /> Add line
+                  </button>
+                )}
+              </div>
+              {!modalEditMode ? (
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-sm">
+                    <thead className="border-b bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Product batch</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Qty sold</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {modalLines.length === 0 ? (
+                        <tr>
+                          <td colSpan={2} className="px-3 py-4 text-center text-gray-400">
+                            No lines
+                          </td>
+                        </tr>
+                      ) : (
+                        modalLines.map((ln) => (
+                          <tr key={ln.key}>
+                            <td className="px-3 py-2 font-medium text-gray-900">{ln.product_batch}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                              {ln.quantity_sold}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {modalLines.map((ln, mi) => (
+                    <div key={ln.key} className="flex flex-wrap items-end gap-2">
+                      <div className="min-w-[120px] flex-1">
+                        <input
+                          value={ln.product_batch}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setModalLines((prev) =>
+                              prev.map((row, i) => (i === mi ? { ...row, product_batch: v } : row))
+                            );
+                          }}
+                          placeholder="Product batch"
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="w-28">
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={ln.quantity_sold || ''}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            setModalLines((prev) =>
+                              prev.map((row, i) =>
+                                i === mi ? { ...row, quantity_sold: Number.isFinite(v) ? v : 0 } : row
+                              )
+                            );
+                          }}
+                          placeholder="Qty"
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={modalLines.length <= 1}
+                        onClick={() => setModalLines((prev) => prev.filter((_, i) => i !== mi))}
+                        className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-30"
+                        aria-label="Remove line"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-4">
+              {!modalEditMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setModalEditMode(true)}
+                    disabled={recentJournalBusy}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleModalDelete()}
+                    disabled={recentJournalBusy}
+                    className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {modalDeleting ? 'Deleting…' : 'Delete'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => closeJournalModal()}
+                    className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+                  >
+                    Close
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void cancelModalEdit()}
+                    disabled={modalSaving}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleModalSave()}
+                    disabled={modalSaving}
+                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {modalSaving ? 'Saving…' : 'Save changes'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
