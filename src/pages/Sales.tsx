@@ -328,7 +328,7 @@ export function Sales() {
     setLoading(false);
   }, [outletId]);
 
-  const loadHistory = useCallback(async () => {
+  const loadHistory = useCallback(async (): Promise<boolean> => {
     let q = supabase.from('sales_journals').select('id, business_date, outlet_id, notes');
 
     if (journalDateRange) {
@@ -342,7 +342,10 @@ export function Sales() {
       .order('created_at', { ascending: false })
       .limit(journalDateRange ? 500 : 25);
 
-    if (jErr) return;
+    if (jErr) {
+      console.error('[Sales] Failed to load sales journals:', jErr);
+      return false;
+    }
 
     const list = journals ?? [];
     const ids = list.map((j) => j.id);
@@ -354,6 +357,9 @@ export function Sales() {
         .from('sales_journal_lines')
         .select('sales_journal_id,product_batch,quantity_sold,created_at')
         .in('sales_journal_id', ids);
+      if (lErr) {
+        console.error('[Sales] Failed to load sales journal lines:', lErr);
+      }
       lineMap = linesByJournalFromDb(!lErr && jl ? jl : []);
     }
 
@@ -363,6 +369,7 @@ export function Sales() {
         lines: lineMap.get(j.id) ?? [],
       }))
     );
+    return true;
   }, [journalDateRange]);
 
   useEffect(() => {
@@ -522,6 +529,7 @@ export function Sales() {
 
   async function handleModalDelete() {
     if (!modalJournalId) return;
+    const journalIdToDelete = modalJournalId;
     if (
       !window.confirm(
         'Delete this journal? Outlet stock will be restored for each line.'
@@ -531,14 +539,21 @@ export function Sales() {
     setModalMessage(null);
     setModalDeleting(true);
     try {
-      const res = await voidSalesJournal({ salesJournalId: modalJournalId });
+      const res = await voidSalesJournal({ salesJournalId: journalIdToDelete });
       if (!res.success) {
         setModalMessage({ tone: 'err', text: res.error ?? 'Failed to void journal.' });
         return;
       }
-      await loadHistory();
+      // Drop immediately so the list stays correct even if the refetch fails (previously stale state persisted).
+      setHistory((prev) => prev.filter((h) => h.id !== journalIdToDelete));
+      const refreshed = await loadHistory();
       closeJournalModal();
-      setMessage({ tone: 'ok', text: 'Sales journal deleted and stock restored.' });
+      setMessage({
+        tone: 'ok',
+        text: refreshed
+          ? 'Sales journal deleted and stock restored.'
+          : 'Sales journal deleted and stock restored. If the journal still appears, refresh the page.',
+      });
     } finally {
       setModalDeleting(false);
     }
