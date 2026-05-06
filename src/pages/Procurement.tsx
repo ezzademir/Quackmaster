@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Search, ChevronDown, CreditCard as Edit2, Trash2, PackagePlus, AlertCircle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, Search, PackagePlus, AlertCircle, ChevronRight } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
@@ -43,10 +43,12 @@ function SupplierModal({
   supplier,
   onClose,
   onSave,
+  onDelete,
 }: {
   supplier: Supplier | null;
   onClose: () => void;
   onSave: () => void;
+  onDelete?: () => Promise<boolean>;
 }) {
   const blank = { name: '', contact_person: '', email: '', phone: '', address: '', city: '', country: '', payment_terms: '' };
   const [form, setForm] = useState(supplier ? {
@@ -60,6 +62,7 @@ function SupplierModal({
     payment_terms: supplier.payment_terms ?? '',
   } : blank);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   async function handleSave() {
@@ -105,6 +108,7 @@ function SupplierModal({
         metadata: { entity_label: form.name },
       });
 
+      setSaving(false);
       onSave();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save supplier');
@@ -137,13 +141,35 @@ function SupplierModal({
         {field('Country', 'country')}
         {field('Payment Terms', 'payment_terms')}
       </div>
-      <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-          Cancel
-        </button>
-        <button onClick={handleSave} disabled={saving} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          {supplier && onDelete && (
+            <button
+              type="button"
+              disabled={saving || deleting}
+              onClick={async () => {
+                setDeleting(true);
+                try {
+                  const ok = await onDelete();
+                  if (ok) onClose();
+                } finally {
+                  setDeleting(false);
+                }
+              }}
+              className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
+            >
+              {deleting ? 'Deleting…' : 'Delete supplier'}
+            </button>
+          )}
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving || deleting} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
     </Modal>
   );
@@ -154,10 +180,12 @@ function MaterialModal({
   material,
   onClose,
   onSave,
+  onDelete,
 }: {
   material: RawMaterial | null;
   onClose: () => void;
   onSave: () => void;
+  onDelete?: () => Promise<boolean>;
 }) {
   const [form, setForm] = useState({
     name: material?.name ?? '',
@@ -167,6 +195,7 @@ function MaterialModal({
     reorder_level: material?.reorder_level?.toString() ?? '10',
   });
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   async function handleSave() {
@@ -218,6 +247,7 @@ function MaterialModal({
         metadata: { entity_label: form.name },
       });
 
+      setSaving(false);
       onSave();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save material');
@@ -258,11 +288,33 @@ function MaterialModal({
           </div>
         </div>
       </div>
-      <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
-        <button onClick={handleSave} disabled={saving} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          {material && onDelete && (
+            <button
+              type="button"
+              disabled={saving || deleting}
+              onClick={async () => {
+                setDeleting(true);
+                try {
+                  const ok = await onDelete();
+                  if (ok) onClose();
+                } finally {
+                  setDeleting(false);
+                }
+              }}
+              className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
+            >
+              {deleting ? 'Deleting…' : 'Delete material'}
+            </button>
+          )}
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+          <button onClick={handleSave} disabled={saving || deleting} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
     </Modal>
   );
@@ -279,93 +331,6 @@ type POWithDetails = PurchaseOrder & {
   supplier?: Supplier;
   items?: (PurchaseOrderItem & { material?: RawMaterial })[];
 };
-
-function PurchaseOrderManageMenu({
-  order,
-  onView,
-  onEdit,
-  onDelete,
-}: {
-  order: POWithDetails;
-  onView: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const isDraft = order.status === 'draft';
-
-  useEffect(() => {
-    if (!open) return;
-    function onDocMouseDown(e: MouseEvent) {
-      if (rootRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    }
-    document.addEventListener('mousedown', onDocMouseDown);
-    return () => document.removeEventListener('mousedown', onDocMouseDown);
-  }, [open]);
-
-  return (
-    <div className="relative" ref={rootRef}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors"
-      >
-        Manage
-        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 z-30 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 text-sm shadow-lg"
-          role="menu"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50"
-            onClick={() => {
-              setOpen(false);
-              onView();
-            }}
-          >
-            View details
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!isDraft}
-            title={isDraft ? undefined : 'Only draft orders can be edited'}
-            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
-            onClick={() => {
-              if (!isDraft) return;
-              setOpen(false);
-              onEdit();
-            }}
-          >
-            Edit order
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!isDraft}
-            title={isDraft ? undefined : 'Only draft orders can be deleted'}
-            className="w-full px-3 py-2 text-left text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
-            onClick={() => {
-              if (!isDraft) return;
-              setOpen(false);
-              onDelete();
-            }}
-          >
-            Delete order
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function NewPOModal({
   suppliers,
@@ -705,10 +670,14 @@ function PODetailModal({
   po,
   onClose,
   onStatusChange,
+  onEdit,
+  onDelete,
 }: {
   po: POWithDetails;
   onClose: () => void;
   onStatusChange: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -875,21 +844,33 @@ function PODetailModal({
       </div>
 
       <div className="mt-6 flex flex-wrap justify-between gap-3">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {po.status === 'draft' && (
-            <button onClick={() => changeStatus('ordered')} disabled={saving}
+            <button type="button" onClick={() => changeStatus('ordered')} disabled={saving}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
               Mark as Ordered
             </button>
           )}
           {(po.status === 'ordered' || po.status === 'partial') && (
-            <button onClick={handleMarkReceived} disabled={saving}
+            <button type="button" onClick={handleMarkReceived} disabled={saving}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors">
               {saving ? 'Processing…' : 'Mark Received & Update Stock'}
             </button>
           )}
+          {po.status === 'draft' && onEdit && (
+            <button type="button" onClick={onEdit} disabled={saving}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors">
+              Edit order
+            </button>
+          )}
+          {po.status === 'draft' && onDelete && (
+            <button type="button" onClick={onDelete} disabled={saving}
+              className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors">
+              Delete order
+            </button>
+          )}
         </div>
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
+        <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
       </div>
     </Modal>
   );
@@ -932,10 +913,14 @@ export function Procurement() {
 
   useEffect(() => { loadAll(); }, []);
 
-  async function deleteSupplier(id: string) {
-    if (!confirm('Delete this supplier?')) return;
+  async function deleteSupplier(id: string): Promise<boolean> {
+    if (!confirm('Delete this supplier?')) return false;
     const s = suppliers.find((x) => x.id === id);
-    await supabase.from('suppliers').delete().eq('id', id);
+    const { error } = await supabase.from('suppliers').delete().eq('id', id);
+    if (error) {
+      alert(error.message);
+      return false;
+    }
     await writeLedgerEntry({
       action: 'deleted',
       entityType: 'supplier',
@@ -945,13 +930,18 @@ export function Procurement() {
       beforeData: s ? { name: s.name } : {},
       metadata: { entity_label: s?.name ?? id },
     });
-    loadAll();
+    await loadAll();
+    return true;
   }
 
-  async function deleteMaterial(id: string) {
-    if (!confirm('Delete this raw material?')) return;
+  async function deleteMaterial(id: string): Promise<boolean> {
+    if (!confirm('Delete this raw material?')) return false;
     const m = materials.find((x) => x.id === id);
-    await supabase.from('raw_materials').delete().eq('id', id);
+    const { error } = await supabase.from('raw_materials').delete().eq('id', id);
+    if (error) {
+      alert(error.message);
+      return false;
+    }
     await writeLedgerEntry({
       action: 'deleted',
       entityType: 'raw_material',
@@ -961,7 +951,8 @@ export function Procurement() {
       beforeData: m ? { name: m.name } : {},
       metadata: { entity_label: m?.name ?? id },
     });
-    loadAll();
+    await loadAll();
+    return true;
   }
 
   async function deletePurchaseOrder(po: POWithDetails) {
@@ -1083,7 +1074,7 @@ export function Procurement() {
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Amount</th>
                       <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Items</th>
-                      <th className="whitespace-nowrap px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Actions</th>
+                      <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -1098,13 +1089,14 @@ export function Procurement() {
                           <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">MYR {order.total_amount?.toFixed(2) ?? '0.00'}</td>
                           <td className="px-4 md:px-6 py-4"><StatusBadge status={order.status} /></td>
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{(order.items ?? []).length} line(s)</td>
-                          <td className="whitespace-nowrap px-4 md:px-6 py-4">
-                            <PurchaseOrderManageMenu
-                              order={order}
-                              onView={() => setViewPO(order)}
-                              onEdit={() => setEditPO(order)}
-                              onDelete={() => deletePurchaseOrder(order)}
-                            />
+                          <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setViewPO(order)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                            >
+                              Manage <ChevronRight size={14} aria-hidden />
+                            </button>
                           </td>
                         </tr>
                       ))
@@ -1126,7 +1118,7 @@ export function Procurement() {
                     <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Email</th>
                     <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Phone</th>
                     <th className="hidden xl:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Payment Terms</th>
-                    <th className="w-20 px-4 md:px-6 py-3" />
+                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1140,11 +1132,17 @@ export function Procurement() {
                         <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.email ?? '—'}</td>
                         <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.phone ?? '—'}</td>
                         <td className="hidden xl:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.payment_terms ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => { setEditSupplier(s); setShowSupplierModal(true); }} className="text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
-                            <button onClick={() => deleteSupplier(s.id)} className="text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
-                          </div>
+                        <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditSupplier(s);
+                              setShowSupplierModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                          >
+                            Manage <ChevronRight size={14} aria-hidden />
+                          </button>
                         </td>
                       </tr>
                     ))
@@ -1165,7 +1163,7 @@ export function Procurement() {
                     <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Cost Price</th>
                     <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reorder</th>
                     <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Description</th>
-                    <th className="w-20 px-4 md:px-6 py-3" />
+                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1184,11 +1182,17 @@ export function Procurement() {
                         <td className="px-4 md:px-6 py-4 text-right text-gray-900 text-xs sm:text-sm">MYR {m.cost_price != null ? m.cost_price.toFixed(2) : '—'}</td>
                         <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs sm:text-sm">{m.reorder_level ?? 10}</td>
                         <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm max-w-xs truncate">{m.description ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => { setEditMaterial(m); setShowMaterialModal(true); }} className="text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
-                            <button onClick={() => deleteMaterial(m.id)} className="text-gray-400 hover:text-red-600 transition-colors"><Trash2 size={15} /></button>
-                          </div>
+                        <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditMaterial(m);
+                              setShowMaterialModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                          >
+                            Manage <ChevronRight size={14} aria-hidden />
+                          </button>
                         </td>
                       </tr>
                     ))
@@ -1226,7 +1230,16 @@ export function Procurement() {
         <PODetailModal
           po={viewPO}
           onClose={() => setViewPO(null)}
-          onStatusChange={() => { setViewPO(null); loadAll(); }}
+          onStatusChange={() => {
+            setViewPO(null);
+            loadAll();
+          }}
+          onEdit={() => {
+            const p = viewPO;
+            setViewPO(null);
+            if (p) setEditPO(p);
+          }}
+          onDelete={() => deletePurchaseOrder(viewPO)}
         />
       )}
       {showSupplierModal && (
@@ -1234,6 +1247,11 @@ export function Procurement() {
           supplier={editSupplier as Supplier | null}
           onClose={() => setShowSupplierModal(false)}
           onSave={() => { setShowSupplierModal(false); loadAll(); }}
+          onDelete={
+            typeof editSupplier === 'object' && editSupplier
+              ? async () => deleteSupplier(editSupplier.id)
+              : undefined
+          }
         />
       )}
       {showMaterialModal && (
@@ -1241,6 +1259,11 @@ export function Procurement() {
           material={editMaterial as RawMaterial | null}
           onClose={() => setShowMaterialModal(false)}
           onSave={() => { setShowMaterialModal(false); loadAll(); }}
+          onDelete={
+            typeof editMaterial === 'object' && editMaterial
+              ? async () => deleteMaterial(editMaterial.id)
+              : undefined
+          }
         />
       )}
     </div>

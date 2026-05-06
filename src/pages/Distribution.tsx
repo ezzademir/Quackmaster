@@ -1100,7 +1100,7 @@ export function Distribution() {
                               onClick={() => setViewSO(so)}
                               className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
                             >
-                              View <ChevronRight size={14} />
+                              Manage <ChevronRight size={14} />
                             </button>
                             {isAdmin && supplyOrderAllowsAdminHardDelete(so.status) && (
                               <button
