@@ -6,8 +6,9 @@ import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import type { RawMaterial, Outlet } from '../types';
+import { OutletStockTakeTab } from '../components/outletStockTake/OutletStockTakeTab';
 
-type Tab = 'hub' | 'outlets';
+type Tab = 'hub' | 'outlets' | 'stock_take';
 
 interface HubRow {
   id: string;
@@ -330,6 +331,7 @@ export function Inventory() {
           <div className="flex gap-6">
             <button className={tabClass('hub')} onClick={() => setTab('hub')}>Hub Inventory</button>
             <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
+            <button className={tabClass('stock_take')} onClick={() => setTab('stock_take')}>Outlet stock take</button>
           </div>
           <div className="flex flex-col items-end gap-1">
             <DateFilter onFilterChange={handleDateFilterChange} />
@@ -428,6 +430,15 @@ export function Inventory() {
                 </div>
               </div>
             </div>
+          )}
+
+          {tab === 'stock_take' && (
+            <OutletStockTakeTab
+              outlets={outlets}
+              onApplied={() => {
+                void loadOutletInventory(selectedOutlet || undefined);
+              }}
+            />
           )}
 
           {tab === 'outlets' && (
