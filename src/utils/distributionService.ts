@@ -502,12 +502,12 @@ export async function createOutletTransfer(params: CreateOutletTransferParams): 
     const { data, error } = await retryWithBackoff(async () =>
       supabase.rpc('create_outlet_transfer', {
         p_from_outlet_id: params.fromOutletId,
-        p_to_outlet_id: params.toOutletId,
-        p_notes: params.notes ?? null,
         p_lines: params.lines.map((l) => ({
           outlet_inventory_id: l.outletInventoryId,
           quantity: l.quantity,
         })),
+        p_notes: params.notes ?? null,
+        p_to_outlet_id: params.toOutletId,
       })
     );
 
