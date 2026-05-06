@@ -7,6 +7,7 @@ import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, formatValidationErrors } from '../utils/validation';
 import { retryWithBackoff } from '../utils/errorHandling';
 import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
+import { useAuth } from '../utils/auth';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
 type Tab = 'orders' | 'suppliers' | 'materials';
@@ -920,6 +921,7 @@ function PODetailModal({
 
 // ---- Main Procurement Page ----
 export function Procurement() {
+  const { isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>('orders');
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
@@ -1178,16 +1180,7 @@ export function Procurement() {
                           <td className="px-4 md:px-6 py-4"><StatusBadge status={order.status} /></td>
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{(order.items ?? []).length} line(s)</td>
                           <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
-                            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                              {purchaseOrderCanRemove(order) && (
-                                <button
-                                  type="button"
-                                  onClick={() => deletePurchaseOrder(order)}
-                                  className="text-xs font-medium text-red-600 hover:text-red-800"
-                                >
-                                  Delete
-                                </button>
-                              )}
+                            <div className="flex flex-wrap items-center justify-end gap-2">
                               <button
                                 type="button"
                                 onClick={() => setViewPO(order)}
@@ -1195,6 +1188,21 @@ export function Procurement() {
                               >
                                 Manage <ChevronRight size={14} aria-hidden />
                               </button>
+                              {isAdmin && purchaseOrderCanRemove(order) && (
+                                <button
+                                  type="button"
+                                  onClick={() => deletePurchaseOrder(order)}
+                                  className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
+                                  title={
+                                    purchaseOrderUseCancelRpc(order)
+                                      ? 'Cancel purchase order and reverse hub receipts (admin)'
+                                      : 'Delete purchase order (admin)'
+                                  }
+                                >
+                                  <Trash2 size={14} aria-hidden />
+                                  Delete
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
