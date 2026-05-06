@@ -958,6 +958,8 @@ interface OutletStockRow {
   outletName: string;
   /** Period view: units received in range; all-time view: on-hand at outlet */
   onHand: number;
+  /** Sum of sellable quantity (available) across outlet_inventory rows — after reservations */
+  availableSellable: number;
   /** Dispatched, not yet received — in transit; not included in on hand until receipt */
   awaitingReceiptQty: number;
   /** Pending supply orders — hub reserved only */
@@ -1039,7 +1041,7 @@ export function Distribution() {
       supabase.from('supply_orders').select(`*, outlet:outlet_id(*)`).order('created_at', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
       supabase.from('production_runs').select('actual_output, production_date').eq('status', 'completed'),
-      supabase.from('outlet_inventory').select('outlet_id, quantity_on_hand'),
+      supabase.from('outlet_inventory').select('outlet_id, quantity_on_hand, reserved_quantity, available_quantity'),
       supabase
         .from('hub_inventory')
         .select(
@@ -1109,11 +1111,16 @@ export function Distribution() {
     const currentAvailable = hubLines.reduce((sum, r) => sum + Math.max(0, r.available), 0);
 
     const qtyByOutlet = new Map<string, number>();
+    const availByOutlet = new Map<string, number>();
     for (const inv of outletInv ?? []) {
       const oid = (inv as { outlet_id: string }).outlet_id;
       if (!oid) continue;
       const q = Number((inv as { quantity_on_hand: number }).quantity_on_hand ?? 0);
+      const res = Number((inv as { reserved_quantity?: number }).reserved_quantity ?? 0);
+      const stored = (inv as { available_quantity?: number | null }).available_quantity;
+      const avail = hubRowAvailableQuantity(q, res, stored);
       qtyByOutlet.set(oid, (qtyByOutlet.get(oid) ?? 0) + q);
+      availByOutlet.set(oid, (availByOutlet.get(oid) ?? 0) + Math.max(0, avail));
     }
 
     const outletInventoryBreakdown = outlets_list
@@ -1121,6 +1128,7 @@ export function Distribution() {
         outletId: o.id,
         outletName: o.name,
         onHand: qtyByOutlet.get(o.id) ?? 0,
+        availableSellable: availByOutlet.get(o.id) ?? 0,
         awaitingReceiptQty: awaitingReceiptByOutlet.get(o.id) ?? 0,
         pendingSupplyQty: pendingQtyByOutlet.get(o.id) ?? 0,
         currentOnHandSnapshot: undefined,
@@ -1205,6 +1213,14 @@ export function Distribution() {
     return m;
   }, [stockMetrics.outletInventory]);
 
+  const snapshotOutletAvailableById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const row of stockMetrics.outletInventory) {
+      m.set(row.outletId, row.availableSellable);
+    }
+    return m;
+  }, [stockMetrics.outletInventory]);
+
   const distributionDisplay = useMemo(() => {
     if (!dateRange) {
       const totalAwaiting = stockMetrics.outletInventory.reduce((s, o) => s + o.awaitingReceiptQty, 0);
@@ -1268,6 +1284,7 @@ export function Distribution() {
       outletId: o.id,
       outletName: o.name,
       onHand: receivedInPeriodByOutlet.get(o.id) ?? 0,
+      availableSellable: snapshotOutletAvailableById.get(o.id) ?? 0,
       awaitingReceiptQty: awaitingReceiptByOutlet.get(o.id) ?? 0,
       pendingSupplyQty: pendingQtyByOutlet.get(o.id) ?? 0,
       currentOnHandSnapshot: snapshotOutletOnHandById.get(o.id) ?? 0,
@@ -1288,7 +1305,7 @@ export function Distribution() {
       totalAwaitingReceipt,
       outletInventory,
     };
-  }, [dateRange, orders, outlets, completedProductionRuns, stockMetrics, snapshotOutletOnHandById]);
+  }, [dateRange, orders, outlets, completedProductionRuns, stockMetrics, snapshotOutletOnHandById, snapshotOutletAvailableById]);
 
   async function executeAdminDeleteSupplyOrder(so: SOWithOutlet): Promise<boolean> {
     const result = await adminDeleteSupplyOrder({
@@ -1499,9 +1516,10 @@ export function Distribution() {
               </>
             ) : (
               <>
-                On-hand totals update when the outlet <strong className="font-medium text-gray-700">confirms receipt</strong>.
-                Dispatch removes stock from the hub; outlet inventory increases only after receive.
-              </>
+              On-hand totals update when the outlet <strong className="font-medium text-gray-700">confirms receipt</strong>.
+              Dispatch removes stock from the hub; outlet inventory increases only after receive. Large number is physical on hand;
+              smaller line is <strong className="font-medium text-gray-700">available to sell</strong> (after transfers/supply reservations).
+            </>
             )}
           </p>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
@@ -1511,6 +1529,12 @@ export function Distribution() {
                   <span className="text-sm font-medium text-gray-700">{inv.outletName}</span>
                   <span className="text-lg font-bold text-gray-900">{inv.onHand.toLocaleString()}</span>
                 </div>
+                <p className="text-[11px] leading-snug text-gray-600">
+                  Available to sell (after reservations):{' '}
+                  <span className="font-semibold tabular-nums text-gray-800">
+                    {inv.availableSellable.toLocaleString()}
+                  </span>
+                </p>
                 <p className="text-xs text-gray-500">
                   {distributionDisplay.isFiltered ? (
                     <>

@@ -16,7 +16,7 @@ import {
   Users,
   CircleDollarSign,
   Trash2,
-  GitBranch,
+  Scale,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 
@@ -36,7 +36,7 @@ const opsNav = [
 const adminNav = [
   { path: '/users', label: 'Users', icon: Users, exact: false },
   { path: '/ledger', label: 'Data Ledger', icon: BookOpenText, exact: false },
-  { path: '/genealogy', label: 'Lots', icon: GitBranch, exact: true },
+  { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
   { path: '/settings', label: 'Settings', icon: Settings, exact: false },
 ];
 

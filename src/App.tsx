@@ -17,6 +17,7 @@ import { Sales } from './pages/Sales';
 import { Waste } from './pages/Waste';
 import { Genealogy } from './pages/Genealogy';
 import { Ledger } from './pages/Ledger';
+import { Reconciliation } from './pages/Reconciliation';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
 
@@ -68,6 +69,11 @@ function LedgerGate() {
 function SettingsGate() {
   const { isAdmin } = useAuth();
   return isAdmin ? <Settings /> : <Navigate to="/" replace />;
+}
+
+function ReconciliationGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Reconciliation /> : <Navigate to="/" replace />;
 }
 
 function GenealogyGate() {
@@ -126,6 +132,7 @@ function App() {
               <Route path="/waste" element={<Waste />} />
               <Route path="/users" element={<UsersGate />} />
               <Route path="/ledger" element={<LedgerGate />} />
+              <Route path="/reconciliation" element={<ReconciliationGate />} />
               <Route path="/genealogy" element={<GenealogyGate />} />
               <Route path="/settings" element={<SettingsGate />} />
               <Route path="*" element={<Navigate to="/" replace />} />

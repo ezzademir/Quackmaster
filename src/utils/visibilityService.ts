@@ -3,6 +3,8 @@ import { supabase } from './supabase';
 export interface SalesJournalLineInput {
   product_batch: string;
   quantity_sold: number;
+  /** When set, deduct from this outlet_inventory row only (traceable void). */
+  outlet_inventory_id?: string;
 }
 
 export async function postSalesJournal(params: {
@@ -12,10 +14,16 @@ export async function postSalesJournal(params: {
   notes?: string;
   idempotencyKey?: string;
 }): Promise<{ success: boolean; salesJournalId?: string; error?: string; idempotentReplay?: boolean }> {
-  const lines = params.lines.map((l) => ({
-    product_batch: l.product_batch.trim(),
-    quantity_sold: l.quantity_sold,
-  }));
+  const lines = params.lines.map((l) => {
+    const base: Record<string, unknown> = {
+      product_batch: l.product_batch.trim(),
+      quantity_sold: l.quantity_sold,
+    };
+    if (l.outlet_inventory_id) {
+      base.outlet_inventory_id = l.outlet_inventory_id;
+    }
+    return base;
+  });
 
   const { data, error } = await supabase.rpc('post_sales_journal', {
     p_outlet_id: params.outletId,

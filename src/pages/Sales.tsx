@@ -5,6 +5,7 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
 import { formatDateForInput, type DateRange } from '../utils/dateRange';
 import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
+import { useAuth } from '../utils/auth';
 import {
   postSalesJournal,
   postSalesJournalFifoBySku,
@@ -127,6 +128,7 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
       key: crypto.randomUUID(),
       product_batch: batch,
       quantity_sold: avail,
+      outlet_inventory_id: row.id,
       production_date_label: formatProductionDateLabel(lot?.manufactured_at),
     };
   });
@@ -178,6 +180,7 @@ function linesByJournalFromDb(
 }
 
 export function Sales() {
+  const { isAdmin } = useAuth();
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
   const [businessDate, setBusinessDate] = useState(() =>
@@ -529,6 +532,7 @@ export function Sales() {
       .map((l) => ({
         product_batch: l.product_batch.trim(),
         quantity_sold: Number(l.quantity_sold),
+        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
       }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
@@ -657,7 +661,9 @@ export function Sales() {
         <h1 className="text-2xl font-bold text-gray-900">Outlet sales journal</h1>
         <p className="mt-1 text-sm text-gray-500">
           Post a <span className="font-medium text-gray-700">FIFO sale by SKU</span> for quick outlet
-          depletion, or use manual lines below for specific batches or non-FIFO corrections.
+          depletion. Manual batch lines allocate <span className="font-medium text-gray-700">FIFO across lot rows</span> by
+          expiry; lines loaded from inventory include a row id for exact traceability. Void or replace journals is{' '}
+          <span className="font-medium text-gray-700">admin only</span>.
         </p>
       </div>
 
@@ -1144,22 +1150,26 @@ export function Sales() {
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-4">
               {!modalEditMode ? (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => setModalEditMode(true)}
-                    disabled={recentJournalBusy}
-                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleModalDelete()}
-                    disabled={recentJournalBusy}
-                    className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
-                  >
-                    {modalDeleting ? 'Deleting…' : 'Delete'}
-                  </button>
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setModalEditMode(true)}
+                        disabled={recentJournalBusy}
+                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleModalDelete()}
+                        disabled={recentJournalBusy}
+                        className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        {modalDeleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => closeJournalModal()}
@@ -1178,14 +1188,16 @@ export function Sales() {
                   >
                     Cancel
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleModalSave()}
-                    disabled={modalSaving}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-                  >
-                    {modalSaving ? 'Saving…' : 'Save changes'}
-                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => void handleModalSave()}
+                      disabled={modalSaving}
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                    >
+                      {modalSaving ? 'Saving…' : 'Save changes'}
+                    </button>
+                  )}
                 </>
               )}
             </div>

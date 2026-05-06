@@ -34,52 +34,6 @@ export interface SupplyOrderCreationResult {
   errors: string[];
 }
 
-/** Increase outlet_inventory when the outlet confirms receipt. */
-async function bumpOutletStock(
-  outletId: string,
-  productBatch: string,
-  qty: number
-): Promise<{ success: boolean; error?: string }> {
-  const { data: existing, error: selErr } = await supabase
-    .from('outlet_inventory')
-    .select('id, quantity_on_hand, reserved_quantity')
-    .eq('outlet_id', outletId)
-    .eq('product_batch', productBatch)
-    .maybeSingle();
-
-  if (selErr) return { success: false, error: selErr.message };
-
-  const iso = new Date().toISOString();
-
-  if (existing) {
-    const newQoh = Number(existing.quantity_on_hand) + qty;
-    const reserved = Number(existing.reserved_quantity ?? 0);
-    const { error } = await supabase
-      .from('outlet_inventory')
-      .update({
-        quantity_on_hand: newQoh,
-        available_quantity: newQoh - reserved,
-        last_updated: iso,
-        updated_at: iso,
-      })
-      .eq('id', existing.id);
-    if (error) return { success: false, error: error.message };
-  } else {
-    const { error } = await supabase.from('outlet_inventory').insert({
-      outlet_id: outletId,
-      product_batch: productBatch,
-      quantity_on_hand: qty,
-      reserved_quantity: 0,
-      available_quantity: qty,
-      last_updated: iso,
-      updated_at: iso,
-    });
-    if (error) return { success: false, error: error.message };
-  }
-
-  return { success: true };
-}
-
 /**
  * Create supply order with atomic reservation of inventory
  * Ensures all items are available before creating the order
@@ -273,59 +227,23 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
 }
 
 /**
- * Confirm receipt at outlet — credit outlet_inventory (stock lands at outlet).
+ * Confirm receipt at outlet — credit outlet_inventory via atomic DB RPC.
  */
 export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order, error: orderErr } = await supabase
-      .from('supply_orders')
-      .select('id, status, outlet_id')
-      .eq('id', supplyOrderId)
-      .single();
-
-    if (orderErr || !order) {
-      return { success: false, error: 'Supply order not found' };
-    }
-
-    if (order.status !== 'dispatched') {
-      return { success: false, error: `Cannot receive order with status: ${order.status}` };
-    }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('quantity, product_batch')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const bumped = await bumpOutletStock(
-          order.outlet_id,
-          line.product_batch,
-          Number(line.quantity)
-        );
-        if (!bumped.success) {
-          return { success: false, error: bumped.error ?? 'Failed to credit outlet inventory' };
-        }
-      }
-    }
-
-    await retryWithBackoff(async () => await
-      supabase
-        .from('supply_orders')
-        .update({ status: 'received', received_date: new Date().toISOString().split('T')[0] })
-        .eq('id', supplyOrderId)
-    );
-
-    const receivedDate = new Date().toISOString().split('T')[0];
-    await writeLedgerEntry({
-      action: 'received',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'received', received_date: receivedDate },
-      metadata: { entity_label: 'Supply order received at outlet' },
+    const { data, error } = await supabase.rpc('receive_supply_order', {
+      p_supply_order_id: supplyOrderId,
+      p_idempotency_key: crypto.randomUUID(),
     });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    const payload = data as { success?: boolean; error?: string } | null;
+    if (payload && payload.success === false) {
+      return { success: false, error: payload.error ?? 'receive_supply_order failed' };
+    }
 
     return { success: true };
   } catch (err) {

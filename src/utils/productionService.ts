@@ -115,101 +115,39 @@ export async function completeProductionRun(
       };
     }
 
-    // Update production run status
-    await retryWithBackoff(async () => await
-      supabase.from('production_runs').update({ status: 'completed' }).eq('id', params.productionRunId)
-    );
-
-    // Create product batch in hub inventory
     const batchId = params.productBatch || `BATCH-${Date.now()}`;
-    const { data: hubBatch, error: batchErr } = await retryWithBackoff(async () => await
-      supabase
-        .from('hub_inventory')
-        .insert({
-          product_batch: batchId,
-          quantity_on_hand: params.actualOutput,
-          reserved_quantity: 0,
-          available_quantity: params.actualOutput,
-          last_updated: new Date().toISOString(),
-        })
-        .select('id')
-        .single()
+    const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
+      supabase.rpc('post_production_completion_inventory', {
+        p_production_run_id: params.productionRunId,
+        p_product_batch: batchId,
+        p_finished_quantity: params.actualOutput,
+      })
     );
 
-    if (batchErr || !hubBatch) {
-      throw new Error(`Failed to create inventory batch: ${batchErr?.message}`);
+    if (rpcErr) {
+      return {
+        success: false,
+        qcReport,
+        message: 'Production inventory post failed',
+        error: rpcErr.message,
+        inventoryPosted: false,
+      };
     }
 
-    // Log inventory posting
-    await writeLedgerEntry({
-      action: 'created',
-      entityType: 'hub_inventory',
-      entityId: hubBatch.id,
-      module: 'production',
-      operation: 'insert',
-      afterData: {
-        product_batch: batchId,
-        quantity_on_hand: params.actualOutput,
-        available_quantity: params.actualOutput,
-      },
-      referenceId: params.productionRunId,
-      metadata: {
-        qc_status: qcResult.status,
-        yield_percentage: qcResult.yieldPercentage,
-      },
-    });
+    const rpcPayload = rpcData as {
+      success?: boolean;
+      error?: string;
+      hub_inventory_id?: string;
+    } | null;
 
-    // Deduct consumed materials from inventory
-    const { data: materials, error: materialsErr } = await supabase
-      .from('production_run_materials')
-      .select('raw_material_id, quantity_consumed')
-      .eq('production_run_id', params.productionRunId);
-
-    if (materialsErr) {
-      throw new Error(`Failed to load consumed materials: ${materialsErr.message}`);
-    }
-
-    // Update hub inventory for each consumed material
-    for (const material of materials ?? []) {
-      const { data: existing } = await supabase
-        .from('hub_inventory')
-        .select('id, quantity_on_hand, reserved_quantity')
-        .eq('raw_material_id', material.raw_material_id)
-        .maybeSingle();
-
-      if (existing) {
-        const newQty = Math.max(0, existing.quantity_on_hand - material.quantity_consumed);
-        const newAvailable = newQty - (existing.reserved_quantity || 0);
-
-        await retryWithBackoff(async () => await
-          supabase
-            .from('hub_inventory')
-            .update({
-              quantity_on_hand: newQty,
-              available_quantity: newAvailable,
-              last_updated: new Date().toISOString(),
-            })
-            .eq('id', existing.id)
-        );
-
-        await writeLedgerEntry({
-          action: 'updated',
-          entityType: 'hub_inventory',
-          entityId: existing.id,
-          module: 'production',
-          operation: 'update',
-          beforeData: {
-            quantity_on_hand: existing.quantity_on_hand,
-            available_quantity: existing.quantity_on_hand - (existing.reserved_quantity || 0),
-          },
-          afterData: {
-            quantity_on_hand: newQty,
-            available_quantity: newAvailable,
-          },
-          deltaData: { quantity_consumed: material.quantity_consumed },
-          referenceId: params.productionRunId,
-        });
-      }
+    if (rpcPayload?.success === false) {
+      return {
+        success: false,
+        qcReport,
+        message: rpcPayload.error ?? 'Inventory post rejected',
+        error: rpcPayload.error,
+        inventoryPosted: false,
+      };
     }
 
     await writeLedgerEntry({
@@ -224,7 +162,7 @@ export async function completeProductionRun(
         qc_status: qcResult.status,
         output_quantity: params.actualOutput,
         product_batch: batchId,
-        hub_inventory_id: hubBatch.id,
+        hub_inventory_id: rpcPayload?.hub_inventory_id ?? null,
       },
       metadata: { entity_label: `Production completed · ${batchId}`, summary: 'production_completed' },
     });
