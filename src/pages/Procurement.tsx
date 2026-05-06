@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Eye, CreditCard as Edit2, Trash2, PackagePlus, AlertCircle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Search, ChevronDown, CreditCard as Edit2, Trash2, PackagePlus, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
@@ -279,6 +279,93 @@ type POWithDetails = PurchaseOrder & {
   supplier?: Supplier;
   items?: (PurchaseOrderItem & { material?: RawMaterial })[];
 };
+
+function PurchaseOrderManageMenu({
+  order,
+  onView,
+  onEdit,
+  onDelete,
+}: {
+  order: POWithDetails;
+  onView: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const isDraft = order.status === 'draft';
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      if (rootRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors"
+      >
+        Manage
+        <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 z-30 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 text-sm shadow-lg"
+          role="menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50"
+            onClick={() => {
+              setOpen(false);
+              onView();
+            }}
+          >
+            View details
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!isDraft}
+            title={isDraft ? undefined : 'Only draft orders can be edited'}
+            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+            onClick={() => {
+              if (!isDraft) return;
+              setOpen(false);
+              onEdit();
+            }}
+          >
+            Edit order
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!isDraft}
+            title={isDraft ? undefined : 'Only draft orders can be deleted'}
+            className="w-full px-3 py-2 text-left text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+            onClick={() => {
+              if (!isDraft) return;
+              setOpen(false);
+              onDelete();
+            }}
+          >
+            Delete order
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function NewPOModal({
   suppliers,
@@ -996,7 +1083,7 @@ export function Procurement() {
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Amount</th>
                       <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Items</th>
-                      <th className="w-28 px-4 md:px-6 py-3" />
+                      <th className="whitespace-nowrap px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -1011,37 +1098,13 @@ export function Procurement() {
                           <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">MYR {order.total_amount?.toFixed(2) ?? '0.00'}</td>
                           <td className="px-4 md:px-6 py-4"><StatusBadge status={order.status} /></td>
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{(order.items ?? []).length} line(s)</td>
-                          <td className="px-4 md:px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                title="View order"
-                                onClick={() => setViewPO(order)}
-                                className="text-gray-400 hover:text-blue-600 transition-colors"
-                              >
-                                <Eye size={15} aria-hidden />
-                              </button>
-                              {order.status === 'draft' && (
-                                <>
-                                  <button
-                                    type="button"
-                                    title="Edit order"
-                                    onClick={() => setEditPO(order)}
-                                    className="text-gray-400 hover:text-blue-600 transition-colors"
-                                  >
-                                    <Edit2 size={15} aria-hidden />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Delete draft order"
-                                    onClick={() => deletePurchaseOrder(order)}
-                                    className="text-gray-400 hover:text-red-600 transition-colors"
-                                  >
-                                    <Trash2 size={15} aria-hidden />
-                                  </button>
-                                </>
-                              )}
-                            </div>
+                          <td className="whitespace-nowrap px-4 md:px-6 py-4">
+                            <PurchaseOrderManageMenu
+                              order={order}
+                              onView={() => setViewPO(order)}
+                              onEdit={() => setEditPO(order)}
+                              onDelete={() => deletePurchaseOrder(order)}
+                            />
                           </td>
                         </tr>
                       ))
