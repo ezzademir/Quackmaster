@@ -4,7 +4,7 @@ import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
-import { isDateInRange, type DateRange } from '../utils/dateRange';
+import { isDateInRange, isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import {
   dispatchSupplyOrder,
   confirmSupplyOrderReceipt,
@@ -38,19 +38,6 @@ function formatSupplyCalendarDate(value: string | undefined | null): string {
   const d = new Date(trimmed);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString();
-}
-
-/** Calendar `date` / ISO string compared in local noon to avoid timezone drift */
-function calendarDateAtNoon(value: string | undefined | null): string {
-  if (value == null || value === '') return '';
-  const t = String(value).trim();
-  return t.includes('T') ? t : `${t}T12:00:00`;
-}
-
-function isCalendarInRange(value: string | undefined | null, range: DateRange): boolean {
-  const d = calendarDateAtNoon(value);
-  if (!d) return false;
-  return isDateInRange(d, range);
 }
 
 /** Admin hard-delete is allowed for these statuses (RPC reverses inventory when applicable). */
@@ -753,7 +740,7 @@ export function Distribution() {
     }
 
     const totalGenerated = completedProductionRuns.reduce((sum, r) => {
-      if (!isCalendarInRange(r.production_date, dateRange)) return sum;
+      if (!isCalendarDateInRange(r.production_date, dateRange)) return sum;
       return sum + Number(r.actual_output ?? 0);
     }, 0);
 
@@ -788,7 +775,7 @@ export function Distribution() {
       if (st === 'pending') {
         pendingQtyByOutlet.set(oid, (pendingQtyByOutlet.get(oid) ?? 0) + q);
       }
-      if (st === 'received' && isCalendarInRange(so.received_date, dateRange)) {
+      if (st === 'received' && isCalendarDateInRange(so.received_date, dateRange)) {
         receivedInPeriodByOutlet.set(oid, (receivedInPeriodByOutlet.get(oid) ?? 0) + q);
       }
     }

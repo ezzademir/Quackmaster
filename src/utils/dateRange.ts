@@ -84,6 +84,19 @@ export function isDateInRange(date: Date | string, range: DateRange): boolean {
   return d >= range.start && d <= range.end;
 }
 
+/** Calendar `date` / ISO date string compared at local noon to avoid UTC midnight drift */
+function calendarDateAtNoon(value: string | undefined | null): string {
+  if (value == null || value === '') return '';
+  const t = String(value).trim();
+  return t.includes('T') ? t : `${t}T12:00:00`;
+}
+
+export function isCalendarDateInRange(value: string | undefined | null, range: DateRange): boolean {
+  const d = calendarDateAtNoon(value);
+  if (!d) return false;
+  return isDateInRange(d, range);
+}
+
 export function formatDateForInput(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');

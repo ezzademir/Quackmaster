@@ -3,6 +3,8 @@
  * Ensures data integrity at all boundaries
  */
 
+import { formatDateForInput } from './dateRange';
+
 export interface ValidationError {
   field: string;
   message: string;
@@ -122,11 +124,15 @@ export function validatePurchaseOrder(data: Record<string, unknown>): Validation
   if (supplierErr) errors.push(supplierErr);
 
   if (data.expected_delivery_date && typeof data.expected_delivery_date === 'string') {
-    const date = new Date(data.expected_delivery_date);
-    if (isNaN(date.getTime())) {
+    const trimmed = data.expected_delivery_date.trim();
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    if (!isoDate.test(trimmed)) {
       errors.push({ field: 'expected_delivery_date', message: 'Invalid delivery date format' });
-    } else if (date < new Date()) {
-      errors.push({ field: 'expected_delivery_date', message: 'Delivery date cannot be in the past' });
+    } else {
+      const today = formatDateForInput(new Date());
+      if (trimmed < today) {
+        errors.push({ field: 'expected_delivery_date', message: 'Delivery date cannot be in the past' });
+      }
     }
   }
 

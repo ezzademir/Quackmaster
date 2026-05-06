@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, CreditCard as Edit2, Trash2, ChevronRight, PackagePlus, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, formatValidationErrors } from '../utils/validation';
 import { retryWithBackoff } from '../utils/errorHandling';
+import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
 type Tab = 'orders' | 'suppliers' | 'materials';
@@ -712,6 +714,7 @@ export function Procurement() {
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [orders, setOrders] = useState<POWithDetails[]>([]);
   const [search, setSearch] = useState('');
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Modal state
@@ -772,10 +775,17 @@ export function Procurement() {
     loadAll();
   }
 
-  const filteredOrders = orders.filter((o) =>
-    o.order_number.toLowerCase().includes(search.toLowerCase()) ||
-    (o.supplier as Supplier | null)?.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredOrders = useMemo(() => {
+    let list = orders.filter(
+      (o) =>
+        o.order_number.toLowerCase().includes(search.toLowerCase()) ||
+        (o.supplier as Supplier | null)?.name.toLowerCase().includes(search.toLowerCase())
+    );
+    if (dateRange) {
+      list = list.filter((o) => isCalendarDateInRange(o.order_date, dateRange));
+    }
+    return list;
+  }, [orders, search, dateRange]);
 
   const tabClass = (t: Tab) =>
     `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
@@ -815,10 +825,20 @@ export function Procurement() {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          <button className={tabClass('orders')} onClick={() => setTab('orders')}>Purchase Orders</button>
-          <button className={tabClass('suppliers')} onClick={() => setTab('suppliers')}>Suppliers</button>
-          <button className={tabClass('materials')} onClick={() => setTab('materials')}>Raw Materials</button>
+        <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div className="flex gap-6">
+            <button type="button" className={tabClass('orders')} onClick={() => setTab('orders')}>Purchase Orders</button>
+            <button type="button" className={tabClass('suppliers')} onClick={() => setTab('suppliers')}>Suppliers</button>
+            <button type="button" className={tabClass('materials')} onClick={() => setTab('materials')}>Raw Materials</button>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <DateFilter onFilterChange={(range) => setDateRange(range)} />
+            {dateRange && (
+              <p className="max-w-xs text-right text-xs text-gray-500">
+                Filter applies to each order&apos;s <strong className="font-medium text-gray-600">order date</strong>.
+              </p>
+            )}
+          </div>
         </nav>
       </div>
 
