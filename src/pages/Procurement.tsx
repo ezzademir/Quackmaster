@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, CreditCard as Edit2, Trash2, ChevronRight, PackagePlus, AlertCircle } from 'lucide-react';
+import { Plus, Search, Eye, CreditCard as Edit2, Trash2, PackagePlus, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
@@ -30,6 +30,12 @@ function nextOrderNumber(existing: string[]): string {
   const nums = existing.map((n) => parseInt(n.replace('PO-', ''), 10)).filter(Boolean);
   const max = nums.length > 0 ? Math.max(...nums) : 0;
   return `PO-${String(max + 1).padStart(4, '0')}`;
+}
+
+function dateInputFromIso(value: string | undefined): string {
+  if (!value) return '';
+  const s = String(value).trim();
+  return s.length >= 10 ? s.slice(0, 10) : s;
 }
 
 // ---- Supplier Modal ----
@@ -269,24 +275,46 @@ interface POLine {
   unit_price: string;
 }
 
+type POWithDetails = PurchaseOrder & {
+  supplier?: Supplier;
+  items?: (PurchaseOrderItem & { material?: RawMaterial })[];
+};
+
 function NewPOModal({
   suppliers,
   materials,
   existingNumbers,
+  existingOrder,
   onClose,
   onSave,
 }: {
   suppliers: Supplier[];
   materials: RawMaterial[];
   existingNumbers: string[];
+  /** When set, form updates this draft PO (header + replaced line items). */
+  existingOrder?: POWithDetails | null;
   onClose: () => void;
   onSave: () => void;
 }) {
-  const [supplier_id, setSupplierId] = useState('');
-  const [order_date, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
-  const [expected_delivery_date, setExpectedDelivery] = useState('');
-  const [notes, setNotes] = useState('');
-  const [lines, setLines] = useState<POLine[]>([{ raw_material_id: '', quantity_ordered: '', unit_price: '' }]);
+  const editing = Boolean(existingOrder);
+  const initialLines: POLine[] =
+    existingOrder?.items?.length ?
+      existingOrder.items.map((i) => ({
+        raw_material_id: i.raw_material_id,
+        quantity_ordered: String(i.quantity_ordered),
+        unit_price: String(i.unit_price),
+      }))
+    : [{ raw_material_id: '', quantity_ordered: '', unit_price: '' }];
+
+  const [supplier_id, setSupplierId] = useState(existingOrder?.supplier_id ?? '');
+  const [order_date, setOrderDate] = useState(
+    editing && existingOrder ? dateInputFromIso(existingOrder.order_date) : new Date().toISOString().split('T')[0]
+  );
+  const [expected_delivery_date, setExpectedDelivery] = useState(
+    existingOrder?.expected_delivery_date ? dateInputFromIso(existingOrder.expected_delivery_date) : ''
+  );
+  const [notes, setNotes] = useState(existingOrder?.notes ?? '');
+  const [lines, setLines] = useState<POLine[]>(initialLines);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -344,6 +372,85 @@ function NewPOModal({
     setSaving(true);
 
     try {
+      const buildItems = (purchaseOrderId: string) =>
+        validLines.map((l) => {
+          const qty = parseFloat(l.quantity_ordered);
+          const price = parseFloat(l.unit_price);
+          return {
+            purchase_order_id: purchaseOrderId,
+            raw_material_id: l.raw_material_id,
+            quantity_ordered: qty,
+            quantity_ordered_base: qty,
+            quantity_received: 0,
+            unit_price: price,
+            line_total: qty * price,
+          };
+        });
+
+      if (editing && existingOrder) {
+        if (existingOrder.status !== 'draft') {
+          setError('Only draft orders can be edited.');
+          setSaving(false);
+          return;
+        }
+
+        const { error: updErr } = await retryWithBackoff(async () =>
+          await supabase
+            .from('purchase_orders')
+            .update({
+              supplier_id,
+              order_date,
+              expected_delivery_date: expected_delivery_date || null,
+              notes: notes || null,
+              total_amount: total,
+            })
+            .eq('id', existingOrder.id)
+        );
+
+        if (updErr) {
+          setError(updErr.message);
+          setSaving(false);
+          return;
+        }
+
+        const { error: delErr } = await retryWithBackoff(async () =>
+          await supabase.from('purchase_order_items').delete().eq('purchase_order_id', existingOrder.id)
+        );
+
+        if (delErr) {
+          setError(delErr.message);
+          setSaving(false);
+          return;
+        }
+
+        const items = buildItems(existingOrder.id);
+        const { error: itemErr } = await retryWithBackoff(async () => await supabase.from('purchase_order_items').insert(items));
+
+        if (itemErr) {
+          setError(itemErr.message);
+          setSaving(false);
+          return;
+        }
+
+        await writeLedgerEntry({
+          action: 'updated',
+          entityType: 'purchase_order',
+          entityId: existingOrder.id,
+          module: 'procurement',
+          operation: 'update',
+          afterData: {
+            order_number: existingOrder.order_number,
+            supplier_id,
+            total_amount: total,
+            item_count: items.length,
+          },
+          metadata: { entity_label: existingOrder.order_number },
+        });
+
+        onSave();
+        return;
+      }
+
       const order_number = nextOrderNumber(existingNumbers);
       const { data: po, error: poErr } = await retryWithBackoff(async () => await
         supabase
@@ -367,19 +474,7 @@ function NewPOModal({
         return;
       }
 
-      const items = validLines.map((l) => {
-        const qty = parseFloat(l.quantity_ordered);
-        const price = parseFloat(l.unit_price);
-        return {
-          purchase_order_id: po.id,
-          raw_material_id: l.raw_material_id,
-          quantity_ordered: qty,
-          quantity_ordered_base: qty,
-          quantity_received: 0,
-          unit_price: price,
-          line_total: qty * price,
-        };
-      });
+      const items = buildItems(po.id);
 
       const { error: itemErr } = await retryWithBackoff(async () => await
         supabase.from('purchase_order_items').insert(items)
@@ -409,13 +504,18 @@ function NewPOModal({
 
       onSave();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create purchase order');
+      setError(err instanceof Error ? err.message : 'Failed to save purchase order');
       setSaving(false);
     }
   }
 
   return (
-    <Modal isOpen onClose={onClose} title="New Purchase Order" size="xl">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={editing && existingOrder ? `Edit Purchase Order · ${existingOrder.order_number}` : 'New Purchase Order'}
+      size="xl"
+    >
       {error && <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="space-y-5">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
@@ -505,7 +605,7 @@ function NewPOModal({
       <div className="mt-6 flex justify-end gap-3">
         <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
         <button onClick={handleSave} disabled={saving} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
-          {saving ? 'Saving…' : 'Create Order'}
+          {saving ? 'Saving…' : editing ? 'Save Changes' : 'Create Order'}
         </button>
       </div>
     </Modal>
@@ -513,10 +613,6 @@ function NewPOModal({
 }
 
 // ---- PO Detail ----
-type POWithDetails = PurchaseOrder & {
-  supplier?: Supplier;
-  items?: (PurchaseOrderItem & { material?: RawMaterial })[];
-};
 
 function PODetailModal({
   po,
@@ -724,6 +820,7 @@ export function Procurement() {
 
   // Modal state
   const [showNewPO, setShowNewPO] = useState(false);
+  const [editPO, setEditPO] = useState<POWithDetails | null>(null);
   const [viewPO, setViewPO] = useState<POWithDetails | null>(null);
   const [editSupplier, setEditSupplier] = useState<Supplier | null | 'new'>('new' as never);
   const [showSupplierModal, setShowSupplierModal] = useState(false);
@@ -777,6 +874,36 @@ export function Procurement() {
       beforeData: m ? { name: m.name } : {},
       metadata: { entity_label: m?.name ?? id },
     });
+    loadAll();
+  }
+
+  async function deletePurchaseOrder(po: POWithDetails) {
+    if (po.status !== 'draft') return;
+    if (
+      !confirm(`Delete draft purchase order ${po.order_number}? You cannot undo this.`)
+    ) {
+      return;
+    }
+
+    const { error } = await retryWithBackoff(async () => await supabase.from('purchase_orders').delete().eq('id', po.id));
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await writeLedgerEntry({
+      action: 'deleted',
+      entityType: 'purchase_order',
+      entityId: po.id,
+      module: 'procurement',
+      operation: 'delete',
+      beforeData: { order_number: po.order_number, status: po.status },
+      metadata: { entity_label: po.order_number },
+    });
+
+    if (viewPO?.id === po.id) setViewPO(null);
+    if (editPO?.id === po.id) setEditPO(null);
     loadAll();
   }
 
@@ -869,7 +996,7 @@ export function Procurement() {
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Amount</th>
                       <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Items</th>
-                      <th className="w-16 px-4 md:px-6 py-3" />
+                      <th className="w-28 px-4 md:px-6 py-3" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -885,9 +1012,36 @@ export function Procurement() {
                           <td className="px-4 md:px-6 py-4"><StatusBadge status={order.status} /></td>
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{(order.items ?? []).length} line(s)</td>
                           <td className="px-4 md:px-6 py-4">
-                            <button onClick={() => setViewPO(order)} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800">
-                              View <ChevronRight size={14} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                title="View order"
+                                onClick={() => setViewPO(order)}
+                                className="text-gray-400 hover:text-blue-600 transition-colors"
+                              >
+                                <Eye size={15} aria-hidden />
+                              </button>
+                              {order.status === 'draft' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    title="Edit order"
+                                    onClick={() => setEditPO(order)}
+                                    className="text-gray-400 hover:text-blue-600 transition-colors"
+                                  >
+                                    <Edit2 size={15} aria-hidden />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Delete draft order"
+                                    onClick={() => deletePurchaseOrder(order)}
+                                    className="text-gray-400 hover:text-red-600 transition-colors"
+                                  >
+                                    <Trash2 size={15} aria-hidden />
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -986,11 +1140,23 @@ export function Procurement() {
       {/* Modals */}
       {showNewPO && (
         <NewPOModal
+          key="new-po"
           suppliers={suppliers}
           materials={materials}
           existingNumbers={orders.map((o) => o.order_number)}
           onClose={() => setShowNewPO(false)}
           onSave={() => { setShowNewPO(false); loadAll(); }}
+        />
+      )}
+      {editPO && (
+        <NewPOModal
+          key={editPO.id}
+          suppliers={suppliers}
+          materials={materials}
+          existingNumbers={orders.map((o) => o.order_number)}
+          existingOrder={editPO}
+          onClose={() => setEditPO(null)}
+          onSave={() => { setEditPO(null); loadAll(); }}
         />
       )}
       {viewPO && (
