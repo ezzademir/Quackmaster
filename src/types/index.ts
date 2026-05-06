@@ -128,12 +128,37 @@ export interface OutletInventory {
   id: string;
   outlet_id: string;
   product_batch: string;
+  lot_id?: string | null;
   quantity_on_hand: number;
   reserved_quantity?: number;
   available_quantity?: number;
   last_updated: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface OutletTransfer {
+  id: string;
+  transfer_number: string;
+  from_outlet_id: string;
+  to_outlet_id: string;
+  status: 'pending' | 'dispatched' | 'received' | 'cancelled';
+  total_quantity: number;
+  dispatch_date?: string | null;
+  received_date?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutletTransferLine {
+  id: string;
+  outlet_transfer_id: string;
+  source_outlet_inventory_id: string;
+  product_batch: string;
+  quantity: number;
+  lot_id?: string | null;
+  created_at: string;
 }
 
 export interface SupplyOrder {

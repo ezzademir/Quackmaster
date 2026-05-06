@@ -465,3 +465,106 @@ export async function adminDeleteOutlet(options: {
     };
   }
 }
+
+// ---- Outlet transfers (outlet_inventory → outlet) ----
+
+export interface OutletTransferLineInput {
+  outletInventoryId: string;
+  quantity: number;
+}
+
+export interface CreateOutletTransferParams {
+  fromOutletId: string;
+  toOutletId: string;
+  lines: OutletTransferLineInput[];
+  notes?: string;
+}
+
+type OutletTransferRpc = {
+  success?: boolean;
+  error?: string;
+  outlet_transfer_id?: string;
+  transfer_number?: string;
+};
+
+/** Two-step outlet transfer (pending reserves source → dispatched deducts source → received credits dest). */
+export async function createOutletTransfer(params: CreateOutletTransferParams): Promise<{
+  success: boolean;
+  outletTransferId?: string;
+  transferNumber?: string;
+  error?: string;
+}> {
+  try {
+    if (params.fromOutletId === params.toOutletId) {
+      return { success: false, error: 'Source and destination outlet must differ' };
+    }
+
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('create_outlet_transfer', {
+        p_from_outlet_id: params.fromOutletId,
+        p_to_outlet_id: params.toOutletId,
+        p_notes: params.notes ?? null,
+        p_lines: params.lines.map((l) => ({
+          outlet_inventory_id: l.outletInventoryId,
+          quantity: l.quantity,
+        })),
+      })
+    );
+
+    if (error) return { success: false, error: error.message };
+
+    const r = data as OutletTransferRpc | null;
+    if (!r?.success) return { success: false, error: r?.error ?? 'Failed to create outlet transfer' };
+
+    return {
+      success: true,
+      outletTransferId: r.outlet_transfer_id,
+      transferNumber: r.transfer_number,
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to create outlet transfer' };
+  }
+}
+
+export async function dispatchOutletTransfer(transferId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('dispatch_outlet_transfer', { p_transfer_id: transferId })
+    );
+    if (error) return { success: false, error: error.message };
+    const r = data as OutletTransferRpc | null;
+    if (!r?.success) return { success: false, error: r?.error ?? 'Dispatch failed' };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Dispatch failed' };
+  }
+}
+
+export async function receiveOutletTransfer(transferId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('receive_outlet_transfer', { p_transfer_id: transferId })
+    );
+    if (error) return { success: false, error: error.message };
+    const r = data as OutletTransferRpc | null;
+    if (!r?.success) return { success: false, error: r?.error ?? 'Receive failed' };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Receive failed' };
+  }
+}
+
+/** Pending: releases reservation on source. Dispatched: restores quantity on source (goods never landed at destination). */
+export async function cancelOutletTransfer(transferId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('cancel_outlet_transfer', { p_transfer_id: transferId })
+    );
+    if (error) return { success: false, error: error.message };
+    const r = data as OutletTransferRpc | null;
+    if (!r?.success) return { success: false, error: r?.error ?? 'Cancel failed' };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Cancel failed' };
+  }
+}

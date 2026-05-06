@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle, ArrowLeftRight } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
@@ -11,9 +11,13 @@ import {
   createSupplyOrder,
   adminDeleteOutlet,
   adminDeleteSupplyOrder,
+  createOutletTransfer,
+  dispatchOutletTransfer,
+  receiveOutletTransfer,
+  cancelOutletTransfer,
 } from '../utils/distributionService';
 import { validateSupplyOrder } from '../utils/validation';
-import type { Outlet, SupplyOrder } from '../types';
+import type { Outlet, OutletTransfer, OutletInventory, OutletTransferLine, SupplyOrder } from '../types';
 import { useAuth } from '../utils/auth';
 import {
   aggregateFinishedGoodsHubTotals,
@@ -21,7 +25,7 @@ import {
   type FinishedHubTotals,
 } from '../utils/hubInventoryMath';
 
-type Tab = 'orders' | 'outlets';
+type Tab = 'orders' | 'outlets' | 'transfers';
 
 /** Calendar date from DB `date` or timestamptz — avoids UTC midnight shifting the displayed day */
 function formatSupplyCalendarDate(value: string | undefined | null): string {
@@ -475,6 +479,462 @@ function SODetailModal({
   );
 }
 
+type OTWithOutlets = OutletTransfer & { from_outlet?: Outlet; to_outlet?: Outlet };
+
+function outletTransferDateForRangeFilter(ot: OTWithOutlets): string {
+  const st = normalizeSOStatus(ot.status);
+  const created = ot.created_at?.trim?.() ?? '';
+  if (st === 'pending' || st === 'cancelled') return created.includes('T') ? created : `${created}`;
+  const d = ot.dispatch_date?.trim?.();
+  if (d && d !== '') return d.includes('T') ? d : `${d}T12:00:00`;
+  return created;
+}
+
+function normalizeTransferLinesForRpc(
+  raw: Array<{ outletInventoryId: string; qtyStr: string }>
+): { outletInventoryId: string; quantity: number }[] | null {
+  const qtyByInv = new Map<string, number>();
+  for (const row of raw) {
+    const id = row.outletInventoryId.trim();
+    const q = parseFloat(row.qtyStr);
+    if (!id || !Number.isFinite(q) || q <= 0) continue;
+    qtyByInv.set(id, (qtyByInv.get(id) ?? 0) + q);
+  }
+  if (qtyByInv.size === 0) return null;
+  return [...qtyByInv.entries()].map(([outletInventoryId, quantity]) => ({
+    outletInventoryId,
+    quantity,
+  }));
+}
+
+/** New outlet-to-outlet stock transfer */
+function NewOutletTransferModal({
+  outlets,
+  onClose,
+  onSave,
+}: {
+  outlets: Outlet[];
+  onClose: () => void;
+  onSave: () => void | Promise<void>;
+}) {
+  const [from_outlet_id, setFromOutletId] = useState('');
+  const [to_outlet_id, setToOutletId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [rows, setRows] = useState([{ outletInventoryId: '', qtyStr: '' }]);
+  const [invRows, setInvRows] = useState<OutletInventory[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (!from_outlet_id) {
+        setInvRows([]);
+        return;
+      }
+      const { data, error: e } = await supabase
+        .from('outlet_inventory')
+        .select('id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity')
+        .eq('outlet_id', from_outlet_id)
+        .order('product_batch');
+
+      if (!cancelled) {
+        if (e) setInvRows([]);
+        else setInvRows((data ?? []) as OutletInventory[]);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [from_outlet_id]);
+
+  function availableFor(row: OutletInventory): number {
+    const r = Number(row.reserved_quantity ?? 0);
+    const q = Number(row.quantity_on_hand ?? 0);
+    const a = row.available_quantity;
+    if (a != null && Number.isFinite(Number(a))) return Math.max(0, Number(a));
+    return Math.max(0, q - r);
+  }
+
+  async function handleSave() {
+    setError('');
+    if (!from_outlet_id || !to_outlet_id || from_outlet_id === to_outlet_id) {
+      setError('Select two different outlets');
+      return;
+    }
+    const lines = normalizeTransferLinesForRpc(rows);
+    if (!lines?.length) {
+      setError('Add at least one line with a batch row and quantity');
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await createOutletTransfer({
+        fromOutletId: from_outlet_id,
+        toOutletId: to_outlet_id,
+        lines,
+        notes,
+      });
+      if (!result.success) {
+        setError(result.error ?? 'Failed to create transfer');
+        return;
+      }
+      await onSave();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title="New outlet transfer" size="lg">
+      {error && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg bg-red-50 p-3">
+          <AlertCircle size={18} className="mt-0.5 flex-shrink-0 text-red-600" />
+          <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+      <div className="space-y-4">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">From outlet *</label>
+            <select
+              value={from_outlet_id}
+              onChange={(e) => {
+                setFromOutletId(e.target.value);
+                setRows([{ outletInventoryId: '', qtyStr: '' }]);
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="">Select…</option>
+              {outlets.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} ({o.location_code})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">To outlet *</label>
+            <select
+              value={to_outlet_id}
+              onChange={(e) => setToOutletId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="">Select…</option>
+              {outlets.map((o) =>
+                o.id !== from_outlet_id ? (
+                  <option key={o.id} value={o.id}>
+                    {o.name} ({o.location_code})
+                  </option>
+                ) : null
+              )}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Lines *</label>
+          <p className="mb-2 text-xs text-gray-500">
+            Pick source inventory rows at the from outlet; quantity cannot exceed available (on hand minus reserved).
+          </p>
+          {!from_outlet_id ? (
+            <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-6 text-center text-sm text-gray-500">
+              Choose a source outlet to load batches.
+            </p>
+          ) : invRows.length === 0 ? (
+            <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-4 text-sm text-amber-900">
+              No outlet inventory for this outlet yet. Receive stock from a supply order first.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {rows.map((line, idx) => (
+                <div key={`${idx}-${line.outletInventoryId}`} className="flex flex-wrap items-end gap-2">
+                  <select
+                    value={line.outletInventoryId}
+                    onChange={(e) => {
+                      const next = [...rows];
+                      next[idx] = { ...next[idx], outletInventoryId: e.target.value };
+                      setRows(next);
+                    }}
+                    className="min-w-[12rem] flex-1 rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="">Batch…</option>
+                    {invRows.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.product_batch} (avail {availableFor(r).toFixed(2)})
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Qty"
+                    value={line.qtyStr}
+                    onChange={(e) => {
+                      const next = [...rows];
+                      next[idx] = { ...next[idx], qtyStr: e.target.value };
+                      setRows(next);
+                    }}
+                    className="w-28 rounded-lg border border-gray-300 px-2 py-2 text-right text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                  {rows.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setRows(rows.filter((_, i) => i !== idx))}
+                      className="rounded-lg border border-gray-200 px-2 py-2 text-xs text-red-600 hover:bg-red-50"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setRows([...rows, { outletInventoryId: '', qtyStr: '' }])}
+                className="text-xs font-medium text-teal-600 hover:text-teal-800"
+              >
+                + Add line
+              </button>
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+      </div>
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-60 transition-colors"
+        >
+          {saving ? 'Creating…' : 'Create transfer'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function TransferDetailModal({
+  transfer,
+  onClose,
+  onStatusChange,
+}: {
+  transfer: OTWithOutlets;
+  onClose: () => void;
+  onStatusChange: () => void | Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [lines, setLines] = useState<OutletTransferLine[]>([]);
+  const [loadErr, setLoadErr] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoadErr('');
+      const { data, error } = await supabase
+        .from('outlet_transfer_lines')
+        .select('*')
+        .eq('outlet_transfer_id', transfer.id)
+        .order('created_at');
+      if (cancelled) return;
+      if (error) setLoadErr(error.message);
+      else setLines((data ?? []) as OutletTransferLine[]);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [transfer.id]);
+
+  async function runDispatch() {
+    setSaving(true);
+    try {
+      const r = await dispatchOutletTransfer(transfer.id);
+      if (!r.success) {
+        alert(r.error ?? 'Dispatch failed');
+        return;
+      }
+      await onStatusChange();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runReceive() {
+    setSaving(true);
+    try {
+      const r = await receiveOutletTransfer(transfer.id);
+      if (!r.success) {
+        alert(r.error ?? 'Receive failed');
+        return;
+      }
+      await onStatusChange();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runCancel() {
+    const st = normalizeSOStatus(transfer.status);
+    const detail =
+      st === 'pending'
+        ? 'Reserved quantity at the source outlet will be released.'
+        : 'Stock that left the source on dispatch will be returned to the source outlet (nothing was received at destination).';
+    if (!confirm(`Cancel transfer ${transfer.transfer_number}?\n\n${detail}`)) return;
+    setSaving(true);
+    try {
+      const r = await cancelOutletTransfer(transfer.id);
+      if (!r.success) {
+        alert(r.error ?? 'Cancel failed');
+        return;
+      }
+      await onStatusChange();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const statusNorm = normalizeSOStatus(transfer.status);
+  const showDispatchDate = statusNorm === 'dispatched' || statusNorm === 'received';
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Transfer: ${transfer.transfer_number}`} size="xl">
+      {loadErr && <p className="mb-3 text-sm text-red-600">{loadErr}</p>}
+      <div className="space-y-4">
+        <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
+          <div>
+            <p className="text-xs text-gray-500">From</p>
+            <p className="font-semibold text-gray-900">{transfer.from_outlet?.name ?? '—'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">To</p>
+            <p className="font-semibold text-gray-900">{transfer.to_outlet?.name ?? '—'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">Status</p>
+            <StatusBadge status={transfer.status} />
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">Total qty</p>
+            <p className="font-semibold text-gray-900">{Number(transfer.total_quantity ?? 0).toLocaleString()}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">Dispatched</p>
+            <p className="font-semibold text-gray-900">
+              {showDispatchDate ? formatSupplyCalendarDate(transfer.dispatch_date) : '—'}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">Received</p>
+            <p className="font-semibold text-gray-900">
+              {transfer.received_date ? formatSupplyCalendarDate(transfer.received_date) : '—'}
+            </p>
+          </div>
+          {transfer.notes && (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-gray-500">Notes</p>
+              <p className="text-sm text-gray-900">{transfer.notes}</p>
+            </div>
+          )}
+        </div>
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="w-full text-sm">
+            <thead className="border-b border-gray-200 bg-gray-50">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold text-gray-700">Product batch</th>
+                <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {lines.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="px-3 py-6 text-center text-gray-400">
+                    No lines loaded
+                  </td>
+                </tr>
+              ) : (
+                lines.map((ln) => (
+                  <tr key={ln.id}>
+                    <td className="px-3 py-2 font-medium text-gray-900">{ln.product_batch}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">{Number(ln.quantity).toLocaleString()}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          {transfer.status === 'pending' && (
+            <>
+              <button
+                type="button"
+                onClick={() => void runDispatch()}
+                disabled={saving}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60 transition-colors"
+              >
+                {saving ? 'Dispatching…' : 'Dispatch'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runCancel()}
+                disabled={saving}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+              >
+                Cancel transfer
+              </button>
+            </>
+          )}
+          {transfer.status === 'dispatched' && (
+            <>
+              <button
+                type="button"
+                onClick={() => void runReceive()}
+                disabled={saving}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+              >
+                {saving ? 'Saving…' : 'Mark received at destination'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void runCancel()}
+                disabled={saving}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+              >
+                Undo dispatch (return to source)
+              </button>
+            </>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 // ---- Main Distribution Page ----
 function normalizeSOStatus(status: string | undefined): string {
   return String(status ?? '').toLowerCase().trim();
@@ -554,10 +1014,13 @@ export function Distribution() {
     }
     return m;
   }, [stockMetrics.outletInventory]);
+  const [transfers, setTransfers] = useState<OTWithOutlets[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [showNewSO, setShowNewSO] = useState(false);
+  const [showNewTransfer, setShowNewTransfer] = useState(false);
   const [viewSO, setViewSO] = useState<SOWithOutlet | null>(null);
+  const [viewTransfer, setViewTransfer] = useState<OTWithOutlets | null>(null);
   const [editOutlet, setEditOutlet] = useState<Outlet | null>(null);
   const [showOutletModal, setShowOutletModal] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
@@ -565,8 +1028,14 @@ export function Distribution() {
 
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
-    const [{ data: sos }, { data: outs }, { data: prodRuns }, { data: outletInv }, { data: hubProducts }] =
-      await Promise.all([
+    const [
+      { data: sos },
+      { data: outs },
+      { data: prodRuns },
+      { data: outletInv },
+      { data: hubProducts },
+      { data: ots },
+    ] = await Promise.all([
       supabase.from('supply_orders').select(`*, outlet:outlet_id(*)`).order('created_at', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
       supabase.from('production_runs').select('actual_output, production_date').eq('status', 'completed'),
@@ -577,6 +1046,10 @@ export function Distribution() {
           'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date)'
         )
         .is('raw_material_id', null),
+      supabase
+        .from('outlet_transfers')
+        .select(`*, from_outlet:from_outlet_id(*), to_outlet:to_outlet_id(*)`)
+        .order('created_at', { ascending: false }),
     ]);
 
     const orders = sos as SOWithOutlet[] ?? [];
@@ -656,6 +1129,7 @@ export function Distribution() {
 
     setOrders(orders);
     setOutlets(outlets_list);
+    setTransfers((ots ?? []) as OTWithOutlets[]);
     setHubProductLines(hubLines);
     setHubProductQty(currentAvailable);
     setStockMetrics({
@@ -690,6 +1164,11 @@ export function Distribution() {
       )
       .on(
         'postgres_changes',
+        { event: '*', schema: 'public', table: 'outlet_transfers' },
+        () => void loadAll({ silent: true })
+      )
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'production_runs' },
         () => void loadAll({ silent: true })
       )
@@ -713,6 +1192,10 @@ export function Distribution() {
   const filteredOrders = dateRange
     ? orders.filter((o) => isDateInRange(supplyOrderDateForRangeFilter(o), dateRange))
     : orders;
+
+  const filteredTransfers = dateRange
+    ? transfers.filter((t) => isDateInRange(outletTransferDateForRangeFilter(t), dateRange))
+    : transfers;
 
   const snapshotOutletOnHandById = useMemo(() => {
     const m = new Map<string, number>();
@@ -863,7 +1346,9 @@ export function Distribution() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Distribution</h1>
-          <p className="mt-1 text-sm text-gray-500">Manage Quackteow outlets and supply orders from Hub</p>
+          <p className="mt-1 text-sm text-gray-500">
+            Manage outlets, hub supply orders, and outlet-to-outlet stock transfers
+          </p>
         </div>
         {tab === 'orders' && (
           <button onClick={() => setShowNewSO(true)}
@@ -877,12 +1362,19 @@ export function Distribution() {
             <Plus size={16} /> Add Outlet
           </button>
         )}
+        {tab === 'transfers' && (
+          <button onClick={() => setShowNewTransfer(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors">
+            <Plus size={16} /> New transfer
+          </button>
+        )}
       </div>
 
       <div className="border-b border-gray-200">
         <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div className="flex gap-6">
             <button type="button" className={tabClass('orders')} onClick={() => setTab('orders')}>Supply Orders</button>
+            <button type="button" className={tabClass('transfers')} onClick={() => setTab('transfers')}>Outlet transfers</button>
             <button type="button" className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlets</button>
           </div>
           <DateFilter onFilterChange={handleDateFilterChange} />
@@ -1196,6 +1688,66 @@ export function Distribution() {
               )}
             </div>
           )}
+
+          {tab === 'transfers' && (
+            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+              <table className="w-full text-sm">
+                <thead className="border-b border-gray-200 bg-gray-50">
+                  <tr>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Transfer #</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">From</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">To</th>
+                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Qty</th>
+                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
+                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
+                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredTransfers.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-6 py-12 text-center">
+                        <ArrowLeftRight className="mx-auto mb-3 text-gray-300" size={40} />
+                        <p className="text-gray-400">No outlet transfers yet</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredTransfers.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{tx.transfer_number}</td>
+                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{tx.from_outlet?.name ?? '—'}</td>
+                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{tx.to_outlet?.name ?? '—'}</td>
+                        <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">
+                          {Number(tx.total_quantity).toLocaleString()}
+                        </td>
+                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
+                          {tx.dispatch_date ? formatSupplyCalendarDate(tx.dispatch_date) : '—'}
+                        </td>
+                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
+                          {tx.received_date ? formatSupplyCalendarDate(tx.received_date) : '—'}
+                        </td>
+                        <td className="px-4 md:px-6 py-4">
+                          <StatusBadge status={tx.status} />
+                        </td>
+                        <td className="px-4 md:px-6 py-4">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setViewTransfer(tx)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                            >
+                              Manage <ChevronRight size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
 
@@ -1221,6 +1773,26 @@ export function Distribution() {
           }}
           isAdmin={isAdmin}
           executeAdminDelete={executeAdminDeleteSupplyOrder}
+        />
+      )}
+      {showNewTransfer && (
+        <NewOutletTransferModal
+          outlets={outlets}
+          onClose={() => setShowNewTransfer(false)}
+          onSave={async () => {
+            await loadAll({ silent: true });
+            setShowNewTransfer(false);
+          }}
+        />
+      )}
+      {viewTransfer && (
+        <TransferDetailModal
+          transfer={viewTransfer}
+          onClose={() => setViewTransfer(null)}
+          onStatusChange={async () => {
+            await loadAll({ silent: true });
+            setViewTransfer(null);
+          }}
         />
       )}
       {showOutletModal && (
