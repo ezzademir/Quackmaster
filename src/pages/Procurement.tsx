@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, PackagePlus, AlertCircle, ChevronRight } from 'lucide-react';
+import { Plus, Search, PackagePlus, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
@@ -331,6 +331,48 @@ type POWithDetails = PurchaseOrder & {
   supplier?: Supplier;
   items?: (PurchaseOrderItem & { material?: RawMaterial })[];
 };
+
+function purchaseOrderNeedsStockReversal(po: POWithDetails): boolean {
+  return (po.items ?? []).some((i) => (Number(i.quantity_received) || 0) > 0);
+}
+
+/** Drafts; or ordered with no receipts (plain DELETE, no RPC). */
+function purchaseOrderCanSimpleDelete(po: POWithDetails): boolean {
+  const status = String(po.status ?? '').trim().toLowerCase();
+  if (status === 'draft') return true;
+  if (status !== 'ordered') return false;
+  const items = po.items ?? [];
+  return items.every((i) => (Number(i.quantity_received) || 0) === 0);
+}
+
+/** Use DB RPC: receipt reversal was applied, or status is partial/received (delete after optional no-op reversal). */
+function purchaseOrderUseCancelRpc(po: POWithDetails): boolean {
+  if (purchaseOrderNeedsStockReversal(po)) return true;
+  const st = String(po.status ?? '').trim().toLowerCase();
+  return st === 'partial' || st === 'received';
+}
+
+/** Row / modal Delete is allowed whenever simple delete or cancel RPC applies. */
+function purchaseOrderCanRemove(po: POWithDetails): boolean {
+  return purchaseOrderCanSimpleDelete(po) || purchaseOrderUseCancelRpc(po);
+}
+
+function rpcCancelPoErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'not_authenticated':
+      return 'You must be signed in to cancel a purchase order.';
+    case 'insufficient_hub_quantity':
+      return 'Cannot cancel: hub no longer holds enough quantity to undo receipts (inventory may have been used). Reduce usage or reverse manually before deleting.';
+    case 'hub_below_reserved':
+      return 'Cannot cancel: reversing receipts would drop hub stock below reserved quantity.';
+    case 'cannot_cancel_missing_hub_row':
+      return 'Cannot cancel: hub inventory row is missing for a received material.';
+    case 'po_not_found':
+      return 'This purchase order no longer exists.';
+    default:
+      return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
+  }
+}
 
 function NewPOModal({
   suppliers,
@@ -863,10 +905,10 @@ function PODetailModal({
               Edit order
             </button>
           )}
-          {po.status === 'draft' && onDelete && (
+          {purchaseOrderCanRemove(po) && onDelete && (
             <button type="button" onClick={onDelete} disabled={saving}
               className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors">
-              Delete order
+              {purchaseOrderUseCancelRpc(po) ? 'Cancel & delete order' : 'Delete order'}
             </button>
           )}
         </div>
@@ -956,12 +998,58 @@ export function Procurement() {
   }
 
   async function deletePurchaseOrder(po: POWithDetails) {
-    if (po.status !== 'draft') return;
-    if (
-      !confirm(`Delete draft purchase order ${po.order_number}? You cannot undo this.`)
-    ) {
+    if (!purchaseOrderCanRemove(po)) {
+      alert('This purchase order cannot be removed in its current state.');
       return;
     }
+
+    if (purchaseOrderUseCancelRpc(po)) {
+      const lines = po.items ?? [];
+      const qty = lines.reduce((a, i) => a + (Number(i.quantity_received) || 0), 0);
+      const hint =
+        qty > 0
+          ? ' Received quantities will be deducted from hub inventory and weighted-average raw material costs will be adjusted.'
+          : '';
+      if (
+        !confirm(
+          `Cancel and permanently delete purchase order ${po.order_number}?${hint} You cannot undo this.`
+        )
+      )
+        return;
+
+      type CancelPoResult = { success?: boolean; error?: string; reversal_lines?: unknown };
+      let rpcPayload: CancelPoResult | null = null;
+      const { data: rpcRaw, error: rpcErr } = await retryWithBackoff(async () =>
+        supabase.rpc('cancel_purchase_order', { p_po_id: po.id })
+      );
+
+      if (rpcErr) {
+        alert(rpcErr.message);
+        return;
+      }
+
+      if (rpcRaw != null && typeof rpcRaw === 'object' && !Array.isArray(rpcRaw)) {
+        rpcPayload = rpcRaw as CancelPoResult;
+      }
+
+      if (rpcPayload?.success !== true) {
+        alert(rpcCancelPoErrorMessage(rpcPayload?.error));
+        return;
+      }
+
+      if (viewPO?.id === po.id) setViewPO(null);
+      if (editPO?.id === po.id) setEditPO(null);
+      loadAll();
+      return;
+    }
+
+    if (!purchaseOrderCanSimpleDelete(po)) return;
+
+    const isDraft = String(po.status ?? '').trim().toLowerCase() === 'draft';
+    const message = isDraft
+      ? `Delete draft purchase order ${po.order_number}? You cannot undo this.`
+      : `Delete purchase order ${po.order_number}? It has not received any stock yet. You cannot undo this.`;
+    if (!confirm(message)) return;
 
     const { error } = await retryWithBackoff(async () => await supabase.from('purchase_orders').delete().eq('id', po.id));
 
@@ -1090,13 +1178,24 @@ export function Procurement() {
                           <td className="px-4 md:px-6 py-4"><StatusBadge status={order.status} /></td>
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{(order.items ?? []).length} line(s)</td>
                           <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => setViewPO(order)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                            >
-                              Manage <ChevronRight size={14} aria-hidden />
-                            </button>
+                            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                              {purchaseOrderCanRemove(order) && (
+                                <button
+                                  type="button"
+                                  onClick={() => deletePurchaseOrder(order)}
+                                  className="text-xs font-medium text-red-600 hover:text-red-800"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setViewPO(order)}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                              >
+                                Manage <ChevronRight size={14} aria-hidden />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
