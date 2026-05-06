@@ -367,14 +367,19 @@ function NewPOModal({
         return;
       }
 
-      const items = validLines.map((l) => ({
-        purchase_order_id: po.id,
-        raw_material_id: l.raw_material_id,
-        quantity_ordered: parseFloat(l.quantity_ordered),
-        quantity_received: 0,
-        unit_price: parseFloat(l.unit_price),
-        line_total: parseFloat(l.quantity_ordered) * parseFloat(l.unit_price),
-      }));
+      const items = validLines.map((l) => {
+        const qty = parseFloat(l.quantity_ordered);
+        const price = parseFloat(l.unit_price);
+        return {
+          purchase_order_id: po.id,
+          raw_material_id: l.raw_material_id,
+          quantity_ordered: qty,
+          quantity_ordered_base: qty,
+          quantity_received: 0,
+          unit_price: price,
+          line_total: qty * price,
+        };
+      });
 
       const { error: itemErr } = await retryWithBackoff(async () => await
         supabase.from('purchase_order_items').insert(items)
