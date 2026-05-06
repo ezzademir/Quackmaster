@@ -64,7 +64,7 @@ function AdjustModal({
     const reserved = row.reserved_quantity ?? 0;
     if (newQty < reserved) {
       setError(
-        `On hand cannot be below reserved (${reserved}). Release reservations (e.g. cancel or fulfill pending supply lines) before reducing stock.`
+        `On hand cannot be below reserved (${reserved}). Go to Distribution → open the pending supply order → Cancel order to release hub reservations, or dispatch/receive those lines first.`
       );
       return;
     }

@@ -252,7 +252,8 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
 }
 
 /**
- * Cancel pending supply order (releases reservations) or cancel dispatched order (no outlet reversal — stock was never credited at outlet).
+ * Cancel a **pending** supply order: releases hub reservations, sets status to cancelled, writes ledger.
+ * Inventory-safe only while still pending. For dispatched/received reversals, use `adminDeleteSupplyOrder` (RPC restores hub / outlet).
  */
 export async function cancelSupplyOrder(
   supplyOrderId: string,
@@ -265,26 +266,46 @@ export async function cancelSupplyOrder(
       .eq('id', supplyOrderId)
       .single();
 
-    if (!order || order.status === 'received') {
-      return { success: false, error: 'Cannot cancel received orders' };
+    if (!order) {
+      return { success: false, error: 'Supply order not found' };
     }
 
-    if (order.status === 'pending') {
-      const { data: lines } = await supabase
-        .from('supply_order_lines')
-        .select('hub_inventory_id, quantity')
-        .eq('supply_order_id', supplyOrderId);
+    const st = String(order.status ?? '').toLowerCase().trim();
+    if (st === 'cancelled') {
+      return { success: true };
+    }
+    if (st !== 'pending') {
+      if (st === 'received') {
+        return {
+          success: false,
+          error:
+            'Received orders cannot be cancelled this way. An administrator can use Delete order to reverse inventory.',
+        };
+      }
+      if (st === 'dispatched') {
+        return {
+          success: false,
+          error:
+            'Dispatched orders cannot be cancelled this way — hub stock was already fulfilled. An administrator can use Delete order to reverse the hub shipment.',
+        };
+      }
+      return { success: false, error: `Cannot cancel supply order with status “${st}”.` };
+    }
 
-      if (lines?.length) {
-        for (const line of lines) {
-          const result = await releaseReservation(
-            line.hub_inventory_id,
-            Number(line.quantity),
-            supplyOrderId
-          );
-          if (!result.success) {
-            return { success: false, error: result.error ?? 'Failed to release reservation' };
-          }
+    const { data: lines } = await supabase
+      .from('supply_order_lines')
+      .select('hub_inventory_id, quantity')
+      .eq('supply_order_id', supplyOrderId);
+
+    if (lines?.length) {
+      for (const line of lines) {
+        const result = await releaseReservation(
+          line.hub_inventory_id,
+          Number(line.quantity),
+          supplyOrderId
+        );
+        if (!result.success) {
+          return { success: false, error: result.error ?? 'Failed to release reservation' };
         }
       }
     }

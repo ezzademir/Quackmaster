@@ -9,6 +9,7 @@ import {
   dispatchSupplyOrder,
   confirmSupplyOrderReceipt,
   createSupplyOrder,
+  cancelSupplyOrder,
   adminDeleteOutlet,
   adminDeleteSupplyOrder,
   createOutletTransfer,
@@ -378,7 +379,35 @@ function SODetailModal({
   executeAdminDelete: (order: SOWithOutlet) => Promise<boolean>;
 }) {
   const [saving, setSaving] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
   const canHardDelete = isAdmin && supplyOrderAllowsAdminHardDelete(so.status);
+
+  async function askCancelOrder() {
+    const st = normalizeSOStatus(so.status);
+    if (st !== 'pending') return;
+    const detail = supplyOrderAdminDeleteConfirmDetail('pending');
+    if (
+      !confirm(
+        `Cancel supply order ${so.supply_order_number}?\n\n${detail}\n\nThe order will stay in the list with status Cancelled (audit trail).`
+      )
+    )
+      return;
+    setSaving(true);
+    try {
+      const result = await cancelSupplyOrder(so.id, cancelReason.trim());
+      if (!result.success) {
+        alert(result.error ?? 'Could not cancel order');
+        return;
+      }
+      setCancelReason('');
+      await onStatusChange();
+      onClose();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not cancel order');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function askAdminDelete() {
     if (!canHardDelete) return;
@@ -433,6 +462,7 @@ function SODetailModal({
 
   const statusNorm = String(so.status ?? '').toLowerCase().trim();
   const showDispatchedOn = statusNorm === 'dispatched' || statusNorm === 'received';
+  const isPending = normalizeSOStatus(so.status) === 'pending';
 
   return (
     <Modal isOpen onClose={onClose} title={`Supply Order: ${so.supply_order_number}`} size="md">
@@ -447,9 +477,28 @@ function SODetailModal({
           {so.received_date && <div><p className="text-xs text-gray-500">Received date</p><p className="font-semibold text-gray-900">{formatSupplyCalendarDate(so.received_date)}</p></div>}
           {so.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{so.notes}</p></div>}
         </div>
+        {isPending && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-600">Cancellation reason (optional)</label>
+            <input
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Outlet requested hold, wrong batch selected…"
+              disabled={saving}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+            />
+          </div>
+        )}
       </div>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
+        <div className="flex max-w-full flex-col gap-2">
+          {canHardDelete && isPending && (
+            <p className="text-xs text-gray-500 max-w-prose">
+              Prefer <span className="font-medium text-gray-700">Cancel order</span> to keep a cancelled record with history;{' '}
+              <span className="font-medium text-gray-700">Delete order</span> removes the row entirely (admin).
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
           {canHardDelete && (
             <button
               type="button"
@@ -460,7 +509,17 @@ function SODetailModal({
               {saving ? 'Deleting…' : 'Delete order'}
             </button>
           )}
-          {so.status === 'pending' && (
+          {isPending && (
+            <button
+              type="button"
+              onClick={() => void askCancelOrder()}
+              disabled={saving}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+            >
+              {saving ? 'Cancelling…' : 'Cancel order'}
+            </button>
+          )}
+          {isPending && (
             <button onClick={markDispatched} disabled={saving}
               className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60 transition-colors">
               {saving ? 'Dispatching…' : 'Dispatch'}
@@ -472,6 +531,7 @@ function SODetailModal({
               {saving ? 'Saving…' : 'Mark as Received by Outlet'}
             </button>
           )}
+          </div>
         </div>
         <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
       </div>
