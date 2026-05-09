@@ -424,13 +424,18 @@ function NewRunModal({
         return;
       }
       if (runMaterials.length > 0) {
-        await supabase.from('production_run_materials').insert(
+        const { error: materialsErr } = await supabase.from('production_run_materials').insert(
           runMaterials.map((m) => ({
             production_run_id: run.id,
             raw_material_id: m.raw_material_id,
             quantity_consumed: parseFloat(m.quantity_consumed) || 0,
           }))
         );
+        if (materialsErr) {
+          setError(`Failed to save production materials: ${materialsErr.message}`);
+          setSaving(false);
+          return;
+        }
       }
 
       // Get recipe for QC evaluation

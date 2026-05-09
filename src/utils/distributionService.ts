@@ -9,7 +9,6 @@ import {
   checkInventoryAvailability,
   reserveInventory,
   releaseReservation,
-  fulfillReservation,
 } from './inventory';
 import { retryWithBackoff } from './errorHandling';
 
@@ -166,59 +165,26 @@ export async function createSupplyOrder(
 }
 
 /**
- * Dispatch supply order — fulfill hub reservations (goods leave hub). Outlet on-hand is credited on receipt.
+ * Dispatch supply order — atomically fulfill hub reservations (goods leave hub).
+ * Outlet on-hand is credited on receipt.
  */
 export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order, error: orderErr } = await supabase
-      .from('supply_orders')
-      .select('id, status, outlet_id')
-      .eq('id', supplyOrderId)
-      .single();
-
-    if (orderErr || !order) {
-      return { success: false, error: 'Supply order not found' };
-    }
-
-    if (order.status !== 'pending') {
-      return { success: false, error: `Cannot dispatch order with status: ${order.status}` };
-    }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('hub_inventory_id, quantity, product_batch')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const result = await fulfillReservation(
-          line.hub_inventory_id,
-          Number(line.quantity),
-          supplyOrderId
-        );
-        if (!result.success) {
-          return { success: false, error: result.error ?? 'Failed to fulfill hub reservation' };
-        }
-      }
-    }
-
-    await retryWithBackoff(async () => await
-      supabase
-        .from('supply_orders')
-        .update({ status: 'dispatched', dispatch_date: new Date().toISOString().split('T')[0] })
-        .eq('id', supplyOrderId)
-    );
-
-    const dispatchDate = new Date().toISOString().split('T')[0];
-    await writeLedgerEntry({
-      action: 'dispatched',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'dispatched', dispatch_date: dispatchDate },
-      metadata: { entity_label: 'Supply order dispatched' },
+    const { data, error } = await supabase.rpc('dispatch_supply_order', {
+      p_supply_order_id: supplyOrderId,
     });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    const payload = data as { success?: boolean; error?: string; status?: string } | null;
+    if (payload?.success === false) {
+      return {
+        success: false,
+        error: formatSupplyOrderRpcError(payload, 'dispatch'),
+      };
+    }
 
     return { success: true };
   } catch (err) {
@@ -260,74 +226,51 @@ export async function cancelSupplyOrder(
   reason: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order } = await supabase
-      .from('supply_orders')
-      .select('id, status')
-      .eq('id', supplyOrderId)
-      .single();
-
-    if (!order) {
-      return { success: false, error: 'Supply order not found' };
-    }
-
-    const st = String(order.status ?? '').toLowerCase().trim();
-    if (st === 'cancelled') {
-      return { success: true };
-    }
-    if (st !== 'pending') {
-      if (st === 'received') {
-        return {
-          success: false,
-          error:
-            'Received orders cannot be cancelled this way. An administrator can use Delete order to reverse inventory.',
-        };
-      }
-      if (st === 'dispatched') {
-        return {
-          success: false,
-          error:
-            'Dispatched orders cannot be cancelled this way — hub stock was already fulfilled. An administrator can use Delete order to reverse the hub shipment.',
-        };
-      }
-      return { success: false, error: `Cannot cancel supply order with status “${st}”.` };
-    }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('hub_inventory_id, quantity')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const result = await releaseReservation(
-          line.hub_inventory_id,
-          Number(line.quantity),
-          supplyOrderId
-        );
-        if (!result.success) {
-          return { success: false, error: result.error ?? 'Failed to release reservation' };
-        }
-      }
-    }
-
-    await retryWithBackoff(async () => await
-      supabase.from('supply_orders').update({ status: 'cancelled' }).eq('id', supplyOrderId)
-    );
-
-    await writeLedgerEntry({
-      action: 'cancelled',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'cancelled' },
-      metadata: { entity_label: 'Supply order cancelled', cancellation_reason: reason },
+    const { data, error } = await supabase.rpc('cancel_supply_order', {
+      p_supply_order_id: supplyOrderId,
+      p_reason: reason,
     });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    const payload = data as { success?: boolean; error?: string; status?: string } | null;
+    if (payload?.success === false) {
+      return {
+        success: false,
+        error: formatSupplyOrderRpcError(payload, 'cancel'),
+      };
+    }
 
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to cancel' };
   }
+}
+
+function formatSupplyOrderRpcError(
+  payload: { error?: string; status?: string },
+  action: 'dispatch' | 'cancel'
+): string {
+  const status = String(payload.status ?? '').toLowerCase().trim();
+  if (payload.error === 'supply_order_not_found') return 'Supply order not found';
+  if (payload.error === 'not_authenticated_or_inactive') return 'You do not have permission to update this supply order';
+  if (payload.error === 'supply_order_has_no_lines') return 'Supply order has no lines to dispatch';
+  if (payload.error === 'invalid_status_for_dispatch') return `Cannot dispatch order with status: ${status || 'unknown'}`;
+  if (payload.error === 'invalid_status_for_cancel') {
+    if (status === 'received') {
+      return 'Received orders cannot be cancelled this way. An administrator can use Delete order to reverse inventory.';
+    }
+    if (status === 'dispatched') {
+      return 'Dispatched orders cannot be cancelled this way — hub stock was already fulfilled. An administrator can use Delete order to reverse the hub shipment.';
+    }
+    return `Cannot cancel supply order with status: ${status || 'unknown'}`;
+  }
+  if (payload.error === 'insufficient_reserved_quantity') {
+    return `Supply order reservations changed before ${action}; reload and try again.`;
+  }
+  return payload.error ?? `Could not ${action} supply order`;
 }
 
 function generateSupplyOrderNumber(): string {
