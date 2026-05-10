@@ -5,12 +5,6 @@
 
 import { supabase } from './supabase';
 import { writeLedgerEntry } from './ledger';
-import {
-  checkInventoryAvailability,
-  reserveInventory,
-  releaseReservation,
-  fulfillReservation,
-} from './inventory';
 import { retryWithBackoff } from './errorHandling';
 
 export interface SupplyOrderItem {
@@ -34,6 +28,14 @@ export interface SupplyOrderCreationResult {
   errors: string[];
 }
 
+type SupplyOrderRpcResult = {
+  success?: boolean;
+  error?: string;
+  status?: string;
+  supply_order_id?: string;
+  supply_order_number?: string;
+};
+
 /**
  * Create supply order with atomic reservation of inventory
  * Ensures all items are available before creating the order
@@ -41,126 +43,52 @@ export interface SupplyOrderCreationResult {
 export async function createSupplyOrder(
   params: SupplyOrderParams
 ): Promise<SupplyOrderCreationResult> {
-  const errors: string[] = [];
-  const reservations: SupplyOrderCreationResult['reservations'] = [];
-
   try {
-    for (const item of params.items) {
-      const check = await checkInventoryAvailability(item.hubInventoryId, item.quantity);
-      if (!check.canReserve) {
-        errors.push(`Item ${item.product_batch}: ${check.message}`);
-      }
+    if (!params.items.length) {
+      return { success: false, reservations: [], errors: ['Add at least one item.'] };
     }
 
-    if (errors.length > 0) {
-      return { success: false, reservations: [], errors };
-    }
-
-    const { data: supplyOrder, error: orderErr } = await retryWithBackoff(async () => await
-      supabase
-        .from('supply_orders')
-        .insert({
-          outlet_id: params.outletId,
-          supply_order_number: generateSupplyOrderNumber(),
-          supply_date: params.supplyDate,
-          dispatch_date: params.supplyDate,
-          status: 'pending',
-          total_quantity: params.items.reduce((sum, item) => sum + item.quantity, 0),
-          notes: params.notes || null,
-        })
-        .select('id')
-        .single()
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('create_supply_order', {
+        p_outlet_id: params.outletId,
+        p_supply_date: params.supplyDate,
+        p_notes: params.notes ?? null,
+        p_items: params.items.map((item) => ({
+          hub_inventory_id: item.hubInventoryId,
+          product_batch: item.product_batch,
+          quantity: item.quantity,
+        })),
+      })
     );
 
-    if (orderErr || !supplyOrder) {
-      throw new Error(`Failed to create supply order: ${orderErr?.message}`);
-    }
-
-    for (const item of params.items) {
-      try {
-        const result = await retryWithBackoff(async () => await
-          reserveInventory({
-            hubInventoryId: item.hubInventoryId,
-            quantity: item.quantity,
-            referenceType: 'supply_order',
-            referenceId: supplyOrder.id,
-            reason: `Supply order to outlet ${params.outletId}`,
-          })
-        );
-
-        if (result.success) {
-          reservations.push({ item, reserved: true });
-        } else {
-          throw new Error(result.error || 'Unknown reservation error');
-        }
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        reservations.push({ item, reserved: false, error: errorMsg });
-        errors.push(`Failed to reserve ${item.product_batch}: ${errorMsg}`);
-      }
-    }
-
-    if (errors.length > 0) {
-      for (const res of reservations) {
-        if (res.reserved) {
-          await releaseReservation(res.item.hubInventoryId, res.item.quantity, supplyOrder.id);
-        }
-      }
-      await supabase.from('supply_orders').delete().eq('id', supplyOrder.id);
-      return { success: false, reservations, errors };
-    }
-
-    const { error: linesErr } = await supabase.from('supply_order_lines').insert(
-      params.items.map((item) => ({
-        supply_order_id: supplyOrder.id,
-        hub_inventory_id: item.hubInventoryId,
-        product_batch: item.product_batch,
-        quantity: item.quantity,
-      }))
-    );
-
-    if (linesErr) {
-      for (const res of reservations) {
-        if (res.reserved) {
-          await releaseReservation(res.item.hubInventoryId, res.item.quantity, supplyOrder.id);
-        }
-      }
-      await supabase.from('supply_orders').delete().eq('id', supplyOrder.id);
+    if (error) {
       return {
         success: false,
-        reservations,
-        errors: [`Failed to save order lines: ${linesErr.message}`],
+        reservations: [],
+        errors: [`Failed to create supply order: ${error.message}`],
       };
     }
 
-    const totalQty = params.items.reduce((sum, item) => sum + item.quantity, 0);
-    await writeLedgerEntry({
-      action: 'created',
-      entityType: 'supply_order',
-      entityId: supplyOrder.id,
-      module: 'distribution',
-      operation: 'insert',
-      afterData: {
-        outlet_id: params.outletId,
-        status: 'pending',
-        item_count: params.items.length,
-        total_quantity: totalQty,
-        notes: params.notes || null,
-      },
-      metadata: { entity_label: 'Supply order created', outlet_id: params.outletId },
-    });
+    const payload = data as SupplyOrderRpcResult | null;
+    if (!payload?.success) {
+      return {
+        success: false,
+        reservations: [],
+        errors: [payload?.error ?? 'Failed to create supply order'],
+      };
+    }
 
     return {
       success: true,
-      supplyOrderId: supplyOrder.id,
-      reservations,
+      supplyOrderId: payload.supply_order_id,
+      reservations: params.items.map((item) => ({ item, reserved: true })),
       errors: [],
     };
   } catch (err) {
     return {
       success: false,
-      reservations,
-      errors: [...errors, err instanceof Error ? err.message : 'Unknown error'],
+      reservations: [],
+      errors: [err instanceof Error ? err.message : 'Unknown error'],
     };
   }
 }
@@ -170,55 +98,18 @@ export async function createSupplyOrder(
  */
 export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order, error: orderErr } = await supabase
-      .from('supply_orders')
-      .select('id, status, outlet_id')
-      .eq('id', supplyOrderId)
-      .single();
-
-    if (orderErr || !order) {
-      return { success: false, error: 'Supply order not found' };
-    }
-
-    if (order.status !== 'pending') {
-      return { success: false, error: `Cannot dispatch order with status: ${order.status}` };
-    }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('hub_inventory_id, quantity, product_batch')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const result = await fulfillReservation(
-          line.hub_inventory_id,
-          Number(line.quantity),
-          supplyOrderId
-        );
-        if (!result.success) {
-          return { success: false, error: result.error ?? 'Failed to fulfill hub reservation' };
-        }
-      }
-    }
-
-    await retryWithBackoff(async () => await
-      supabase
-        .from('supply_orders')
-        .update({ status: 'dispatched', dispatch_date: new Date().toISOString().split('T')[0] })
-        .eq('id', supplyOrderId)
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('dispatch_supply_order', { p_supply_order_id: supplyOrderId })
     );
 
-    const dispatchDate = new Date().toISOString().split('T')[0];
-    await writeLedgerEntry({
-      action: 'dispatched',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'dispatched', dispatch_date: dispatchDate },
-      metadata: { entity_label: 'Supply order dispatched' },
-    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    const payload = data as SupplyOrderRpcResult | null;
+    if (!payload?.success) {
+      return { success: false, error: payload?.error ?? 'Failed to dispatch' };
+    }
 
     return { success: true };
   } catch (err) {
@@ -260,79 +151,40 @@ export async function cancelSupplyOrder(
   reason: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order } = await supabase
-      .from('supply_orders')
-      .select('id, status')
-      .eq('id', supplyOrderId)
-      .single();
+    const { data, error } = await retryWithBackoff(async () =>
+      supabase.rpc('cancel_supply_order_pending', {
+        p_supply_order_id: supplyOrderId,
+        p_reason: reason,
+      })
+    );
 
-    if (!order) {
-      return { success: false, error: 'Supply order not found' };
+    if (error) {
+      return { success: false, error: error.message };
     }
 
-    const st = String(order.status ?? '').toLowerCase().trim();
-    if (st === 'cancelled') {
-      return { success: true };
-    }
-    if (st !== 'pending') {
-      if (st === 'received') {
+    const payload = data as SupplyOrderRpcResult | null;
+    if (!payload?.success) {
+      if (payload?.error === 'invalid_status_for_cancel' && payload.status === 'received') {
         return {
           success: false,
           error:
             'Received orders cannot be cancelled this way. An administrator can use Delete order to reverse inventory.',
         };
       }
-      if (st === 'dispatched') {
+      if (payload?.error === 'invalid_status_for_cancel' && payload.status === 'dispatched') {
         return {
           success: false,
           error:
             'Dispatched orders cannot be cancelled this way — hub stock was already fulfilled. An administrator can use Delete order to reverse the hub shipment.',
         };
       }
-      return { success: false, error: `Cannot cancel supply order with status “${st}”.` };
+      return { success: false, error: payload?.error ?? 'Failed to cancel' };
     }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('hub_inventory_id, quantity')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const result = await releaseReservation(
-          line.hub_inventory_id,
-          Number(line.quantity),
-          supplyOrderId
-        );
-        if (!result.success) {
-          return { success: false, error: result.error ?? 'Failed to release reservation' };
-        }
-      }
-    }
-
-    await retryWithBackoff(async () => await
-      supabase.from('supply_orders').update({ status: 'cancelled' }).eq('id', supplyOrderId)
-    );
-
-    await writeLedgerEntry({
-      action: 'cancelled',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'cancelled' },
-      metadata: { entity_label: 'Supply order cancelled', cancellation_reason: reason },
-    });
 
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to cancel' };
   }
-}
-
-function generateSupplyOrderNumber(): string {
-  const timestamp = Date.now().toString().slice(-8);
-  return `SO-${timestamp}`;
 }
 
 /** Hard-delete a supply order (admin RPC). Releases reservations (pending), restores hub (dispatched/received), reduces outlet (received). Cancelled = delete row only. */

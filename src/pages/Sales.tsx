@@ -143,7 +143,7 @@ interface SalesJournalHistoryRow {
   business_date: string;
   outlet_id: string;
   notes: string | null;
-  lines: { product_batch: string; quantity_sold: number }[];
+  lines: SalesJournalLineInput[];
 }
 
 /** Group fetched lines under each journal id, ordered by created_at per journal. */
@@ -152,12 +152,13 @@ function linesByJournalFromDb(
     sales_journal_id: string;
     product_batch: string;
     quantity_sold: string | number;
+    outlet_inventory_id?: string | null;
     created_at: string;
   }[]
-): Map<string, { product_batch: string; quantity_sold: number }[]> {
+): Map<string, SalesJournalLineInput[]> {
   const buckets = new Map<
     string,
-    { product_batch: string; quantity_sold: number; created_at: string }[]
+    (SalesJournalLineInput & { created_at: string })[]
   >();
   for (const row of rows) {
     const jid = row.sales_journal_id;
@@ -165,15 +166,20 @@ function linesByJournalFromDb(
     buckets.get(jid)!.push({
       product_batch: row.product_batch,
       quantity_sold: Number(row.quantity_sold),
+      ...(row.outlet_inventory_id ? { outlet_inventory_id: row.outlet_inventory_id } : {}),
       created_at: row.created_at,
     });
   }
-  const out = new Map<string, { product_batch: string; quantity_sold: number }[]>();
+  const out = new Map<string, SalesJournalLineInput[]>();
   for (const [jid, arr] of buckets) {
     arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     out.set(
       jid,
-      arr.map(({ product_batch, quantity_sold }) => ({ product_batch, quantity_sold }))
+      arr.map(({ product_batch, quantity_sold, outlet_inventory_id }) => ({
+        product_batch,
+        quantity_sold,
+        ...(outlet_inventory_id ? { outlet_inventory_id } : {}),
+      }))
     );
   }
   return out;
@@ -271,7 +277,7 @@ export function Sales() {
 
     const { data: jl, error: lErr } = await supabase
       .from('sales_journal_lines')
-      .select('product_batch,quantity_sold')
+      .select('product_batch,quantity_sold,outlet_inventory_id')
       .eq('sales_journal_id', journalId)
       .order('created_at');
 
@@ -290,6 +296,7 @@ export function Sales() {
         key: crypto.randomUUID(),
         product_batch: row.product_batch,
         quantity_sold: Number(row.quantity_sold),
+        ...(row.outlet_inventory_id ? { outlet_inventory_id: row.outlet_inventory_id } : {}),
       }))
     );
     return true;
@@ -372,7 +379,7 @@ export function Sales() {
       if (ids.length > 0) {
         const { data: jl, error: lErr } = await supabase
           .from('sales_journal_lines')
-          .select('sales_journal_id,product_batch,quantity_sold,created_at')
+          .select('sales_journal_id,product_batch,quantity_sold,outlet_inventory_id,created_at')
           .in('sales_journal_id', ids);
         if (lErr) {
           console.error('[Sales] Failed to load sales journal lines:', lErr);
@@ -605,6 +612,7 @@ export function Sales() {
       .map((l) => ({
         product_batch: l.product_batch.trim(),
         quantity_sold: Number(l.quantity_sold),
+        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
       }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
