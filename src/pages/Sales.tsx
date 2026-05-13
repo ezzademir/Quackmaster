@@ -271,7 +271,7 @@ export function Sales() {
 
     const { data: jl, error: lErr } = await supabase
       .from('sales_journal_lines')
-      .select('product_batch,quantity_sold')
+      .select('product_batch,quantity_sold,outlet_inventory_id')
       .eq('sales_journal_id', journalId)
       .order('created_at');
 
@@ -290,6 +290,7 @@ export function Sales() {
         key: crypto.randomUUID(),
         product_batch: row.product_batch,
         quantity_sold: Number(row.quantity_sold),
+        outlet_inventory_id: row.outlet_inventory_id ?? undefined,
       }))
     );
     return true;
@@ -605,6 +606,7 @@ export function Sales() {
       .map((l) => ({
         product_batch: l.product_batch.trim(),
         quantity_sold: Number(l.quantity_sold),
+        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
       }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
