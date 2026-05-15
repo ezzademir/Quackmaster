@@ -14,7 +14,8 @@ import {
 import { retryWithBackoff } from './errorHandling';
 
 export interface SupplyOrderItem {
-  product_batch: string;
+  /** Finished-goods batch label; null for raw-material hub lines. */
+  product_batch: string | null;
   hubInventoryId: string;
   quantity: number;
 }
@@ -48,7 +49,7 @@ export async function createSupplyOrder(
     for (const item of params.items) {
       const check = await checkInventoryAvailability(item.hubInventoryId, item.quantity);
       if (!check.canReserve) {
-        errors.push(`Item ${item.product_batch}: ${check.message}`);
+        errors.push(`Item ${item.product_batch ?? 'raw material'}: ${check.message}`);
       }
     }
 
@@ -96,7 +97,7 @@ export async function createSupplyOrder(
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         reservations.push({ item, reserved: false, error: errorMsg });
-        errors.push(`Failed to reserve ${item.product_batch}: ${errorMsg}`);
+        errors.push(`Failed to reserve ${item.product_batch ?? 'raw material'}: ${errorMsg}`);
       }
     }
 
@@ -114,7 +115,7 @@ export async function createSupplyOrder(
       params.items.map((item) => ({
         supply_order_id: supplyOrder.id,
         hub_inventory_id: item.hubInventoryId,
-        product_batch: item.product_batch,
+        product_batch: item.product_batch ?? null,
         quantity: item.quantity,
       }))
     );

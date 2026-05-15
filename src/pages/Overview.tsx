@@ -141,7 +141,8 @@ export function Overview() {
             .order('name'),
           supabase
             .from('outlet_inventory')
-            .select('product_batch, quantity_on_hand, reserved_quantity, available_quantity'),
+            .select('product_batch, quantity_on_hand, reserved_quantity, available_quantity')
+            .is('raw_material_id', null),
           supabase
             .from('production_runs')
             .select('recipe_id, yield_percentage')

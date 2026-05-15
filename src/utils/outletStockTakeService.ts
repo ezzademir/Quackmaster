@@ -89,7 +89,9 @@ export interface OutletStockTakeLineRow {
   variance: number;
   line_remark: string | null;
   outlet_inventory?: {
-    product_batch: string;
+    product_batch?: string | null;
+    raw_material_id?: string | null;
+    material?: { name?: string | null; unit_of_measure?: string | null } | null;
     lot?: { product_batch_label: string | null; expiry_date: string | null } | null;
   } | null;
 }
@@ -115,6 +117,8 @@ export async function getOutletStockTakeSessionDetail(sessionId: string): Promis
       *,
       outlet_inventory:outlet_inventory_id (
         product_batch,
+        raw_material_id,
+        material:raw_material_id ( name, unit_of_measure ),
         lot:inventory_lots ( product_batch_label, expiry_date )
       )
     `

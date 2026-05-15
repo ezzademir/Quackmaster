@@ -239,6 +239,7 @@ export function Sales() {
         .from('outlet_inventory')
         .select('product_batch, lot:inventory_lots(product_batch_label)')
         .eq('outlet_id', oid)
+        .is('raw_material_id', null)
         .gt('quantity_on_hand', 0);
       if (error) throw error;
       if (gen !== fifoSkusGenRef.current) return;
@@ -447,6 +448,7 @@ export function Sales() {
             'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at)'
           )
           .eq('outlet_id', outletSnap)
+          .is('raw_material_id', null)
           .gt('quantity_on_hand', 0);
 
         if (error) throw error;

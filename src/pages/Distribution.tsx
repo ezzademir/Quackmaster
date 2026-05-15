@@ -362,6 +362,194 @@ function NewSupplyOrderModal({
   );
 }
 
+type HubRmLineRow = {
+  id: string;
+  raw_material_id: string;
+  label: string;
+  unit: string;
+  available: number;
+};
+
+/** Supply hub raw materials to an outlet (parallel to finished-goods supply orders). */
+function NewRawMaterialSupplyModal({
+  outlets,
+  hubRmLines,
+  onClose,
+  onSave,
+}: {
+  outlets: Outlet[];
+  hubRmLines: HubRmLineRow[];
+  onClose: () => void;
+  onSave: () => void | Promise<void>;
+}) {
+  const [outlet_id, setOutletId] = useState('');
+  const [supply_date, setSupplyDate] = useState(new Date().toISOString().split('T')[0]);
+  const [notes, setNotes] = useState('');
+  const [qtyByHubId, setQtyByHubId] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setQtyByHubId(Object.fromEntries(hubRmLines.map((l) => [l.id, ''])));
+  }, [hubRmLines]);
+
+  async function handleSave() {
+    setError('');
+    const validation = validateSupplyOrder({
+      outlet_id,
+      supply_date,
+      total_quantity: 1,
+    });
+    if (!validation.isValid) {
+      setError(validation.errors.map((e) => e.message).join('; '));
+      return;
+    }
+
+    const items: { hubInventoryId: string; quantity: number; product_batch: null }[] = [];
+    for (const line of hubRmLines) {
+      const raw = qtyByHubId[line.id]?.trim() ?? '';
+      if (raw === '') continue;
+      const q = parseFloat(raw);
+      if (!Number.isFinite(q) || q <= 0) {
+        setError(`Invalid quantity for ${line.label}`);
+        return;
+      }
+      if (q > line.available + 1e-9) {
+        setError(`${line.label}: cannot exceed ${line.available.toFixed(2)} available at hub`);
+        return;
+      }
+      items.push({ hubInventoryId: line.id, quantity: q, product_batch: null });
+    }
+
+    if (items.length === 0) {
+      setError('Enter a quantity greater than zero for at least one ingredient.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await createSupplyOrder({
+        outletId: outlet_id,
+        supplyDate: supply_date,
+        items,
+        notes: notes.trim() || undefined,
+      });
+      if (!result.success) {
+        setError(result.errors.join('; '));
+        return;
+      }
+      await onSave();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create order');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const anyRmStock = hubRmLines.some((l) => l.available > 1e-9);
+
+  return (
+    <Modal isOpen onClose={onClose} title="Ingredient supply order" size="lg">
+      {error && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg bg-red-50 p-3">
+          <AlertCircle size={18} className="mt-0.5 flex-shrink-0 text-red-600" />
+          <div>
+            <p className="text-sm font-medium text-red-900">Error</p>
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        </div>
+      )}
+      <div className="space-y-4">
+        <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Ships raw materials from hub inventory to the outlet. Lines use the same dispatch / receive flow as
+          finished-goods supply orders.
+        </div>
+        {!anyRmStock && (
+          <p className="text-sm text-gray-600">No raw material stock recorded at hub. Receive purchases or adjust hub inventory first.</p>
+        )}
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Outlet *</label>
+          <select
+            value={outlet_id}
+            onChange={(e) => setOutletId(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="">Select outlet…</option>
+            {outlets.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name} ({o.location_code})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Supply date *</label>
+          <input
+            type="date"
+            value={supply_date}
+            onChange={(e) => setSupplyDate(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Quantities</label>
+          <p className="mb-2 text-xs text-gray-500">Enter quantity to ship per hub ingredient row (only non-zero rows are included).</p>
+          <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-gray-200">
+            {hubRmLines.length === 0 ? (
+              <p className="p-4 text-sm text-gray-500">No hub ingredient rows.</p>
+            ) : (
+              hubRmLines.map((line) => (
+                <div key={line.id} className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-2 last:border-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900">{line.label}</p>
+                    <p className="text-xs text-gray-500">
+                      Hub avail {line.available.toFixed(2)} {line.unit || ''}
+                    </p>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0"
+                    value={qtyByHubId[line.id] ?? ''}
+                    disabled={line.available <= 1e-9}
+                    onChange={(e) => setQtyByHubId((p) => ({ ...p, [line.id]: e.target.value }))}
+                    className="w-28 rounded-lg border border-gray-300 px-2 py-1 text-sm tabular-nums disabled:opacity-50"
+                  />
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+        </div>
+      </div>
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          onClick={onClose}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || !anyRmStock}
+          className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-60 transition-colors"
+        >
+          {saving ? 'Processing…' : 'Create Order'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 // ---- Supply Order Detail Modal ----
 type SOWithOutlet = SupplyOrder & { outlet?: Outlet };
 
@@ -594,8 +782,11 @@ function NewOutletTransferModal({
       }
       const { data, error: e } = await supabase
         .from('outlet_inventory')
-        .select('id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity')
+        .select(
+          'id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity'
+        )
         .eq('outlet_id', from_outlet_id)
+        .is('raw_material_id', null)
         .order('product_batch');
 
       if (!cancelled) {
@@ -1080,6 +1271,8 @@ export function Distribution() {
   const [loading, setLoading] = useState(true);
 
   const [showNewSO, setShowNewSO] = useState(false);
+  const [showNewRMSO, setShowNewRMSO] = useState(false);
+  const [hubRmLines, setHubRmLines] = useState<HubRmLineRow[]>([]);
   const [showNewTransfer, setShowNewTransfer] = useState(false);
   const [viewSO, setViewSO] = useState<SOWithOutlet | null>(null);
   const [viewTransfer, setViewTransfer] = useState<OTWithOutlets | null>(null);
@@ -1096,18 +1289,28 @@ export function Distribution() {
       { data: prodRuns },
       { data: outletInv },
       { data: hubProducts },
+      { data: hubRmRaw },
       { data: ots },
     ] = await Promise.all([
       supabase.from('supply_orders').select(`*, outlet:outlet_id(*)`).order('created_at', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
       supabase.from('production_runs').select('actual_output, production_date').eq('status', 'completed'),
-      supabase.from('outlet_inventory').select('outlet_id, quantity_on_hand, reserved_quantity, available_quantity'),
+      supabase
+        .from('outlet_inventory')
+        .select('outlet_id, quantity_on_hand, reserved_quantity, available_quantity')
+        .is('raw_material_id', null),
       supabase
         .from('hub_inventory')
         .select(
           'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date)'
         )
         .is('raw_material_id', null),
+      supabase
+        .from('hub_inventory')
+        .select(
+          'id, raw_material_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, material:raw_material_id(name, unit_of_measure)'
+        )
+        .not('raw_material_id', 'is', null),
       supabase
         .from('outlet_transfers')
         .select(`*, from_outlet:from_outlet_id(*), to_outlet:to_outlet_id(*)`)
@@ -1164,6 +1367,27 @@ export function Distribution() {
       if (ad !== bd) return ad - bd;
       return (a.last_updated ?? '').localeCompare(b.last_updated ?? '');
     });
+
+    const rmLinesForModal: HubRmLineRow[] = (hubRmRaw ?? []).map((row: Record<string, unknown>) => {
+      const mat = row.material as { name?: string; unit_of_measure?: string } | null;
+      const reserved = Number(row.reserved_quantity ?? 0);
+      const onHand = Number(row.quantity_on_hand ?? 0);
+      const avail = hubRowAvailableQuantity(
+        onHand,
+        reserved,
+        row.available_quantity != null ? Number(row.available_quantity) : null
+      );
+      const name = mat?.name?.trim() || 'Ingredient';
+      return {
+        id: String(row.id),
+        raw_material_id: String(row.raw_material_id),
+        label: name,
+        unit: mat?.unit_of_measure?.trim() ?? '',
+        available: avail,
+      };
+    });
+    rmLinesForModal.sort((a, b) => a.label.localeCompare(b.label));
+    setHubRmLines(rmLinesForModal);
 
     setHubFinishedAtp(aggregateFinishedGoodsHubTotals(hubProducts ?? []));
 
@@ -1428,10 +1652,22 @@ export function Distribution() {
           </p>
         </div>
         {tab === 'orders' && (
-          <button onClick={() => setShowNewSO(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors">
-            <Plus size={16} /> New Supply Order
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowNewRMSO(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50 transition-colors"
+            >
+              <Plus size={16} /> Ingredient supply
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowNewSO(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors"
+            >
+              <Plus size={16} /> New Supply Order
+            </button>
+          </div>
         )}
         {tab === 'outlets' && (
           <button onClick={() => { setEditOutlet(null); setShowOutletModal(true); }}
@@ -1844,6 +2080,17 @@ export function Distribution() {
           onSave={async () => {
             await loadAll({ silent: true });
             setShowNewSO(false);
+          }}
+        />
+      )}
+      {showNewRMSO && (
+        <NewRawMaterialSupplyModal
+          outlets={outlets}
+          hubRmLines={hubRmLines}
+          onClose={() => setShowNewRMSO(false)}
+          onSave={async () => {
+            await loadAll({ silent: true });
+            setShowNewRMSO(false);
           }}
         />
       )}

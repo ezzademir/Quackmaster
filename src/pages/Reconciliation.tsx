@@ -39,7 +39,8 @@ export function Reconciliation() {
       const { data: inv, error: iErr } = await supabase
         .from('outlet_inventory')
         .select('quantity_on_hand, reserved_quantity, available_quantity')
-        .eq('outlet_id', outletId);
+        .eq('outlet_id', outletId)
+        .is('raw_material_id', null);
 
       if (iErr) throw new Error(iErr.message);
 

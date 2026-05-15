@@ -129,7 +129,8 @@ export interface HubInventory {
 export interface OutletInventory {
   id: string;
   outlet_id: string;
-  product_batch: string;
+  raw_material_id?: string | null;
+  product_batch?: string | null;
   lot_id?: string | null;
   quantity_on_hand: number;
   reserved_quantity?: number;
@@ -157,7 +158,7 @@ export interface OutletTransferLine {
   id: string;
   outlet_transfer_id: string;
   source_outlet_inventory_id: string;
-  product_batch: string;
+  product_batch?: string | null;
   quantity: number;
   lot_id?: string | null;
   created_at: string;

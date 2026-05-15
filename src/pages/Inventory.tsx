@@ -27,7 +27,10 @@ interface HubRow {
 interface OutletRow {
   id: string;
   outlet_name: string;
-  product_batch: string;
+  product_batch?: string | null;
+  raw_material_id?: string | null;
+  /** Finished-goods batch or raw material display */
+  display_name: string;
   quantity_on_hand: number;
   reserved_quantity: number;
   available_quantity: number;
@@ -172,22 +175,34 @@ export function Inventory() {
   }, []);
 
   const loadOutletInventory = useCallback(async (outletId?: string) => {
-    const query = supabase.from('outlet_inventory').select(`*, outlet:outlet_id(*)`).order('last_updated', { ascending: false });
+    const query = supabase
+      .from('outlet_inventory')
+      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure)`)
+      .order('last_updated', { ascending: false });
     if (outletId) query.eq('outlet_id', outletId);
     const { data } = await query;
-    const rows: OutletRow[] = (data ?? []).map((inv) => ({
-      id: inv.id,
-      outlet_name: (inv.outlet as Outlet | null)?.name ?? '—',
-      product_batch: inv.product_batch,
-      quantity_on_hand: inv.quantity_on_hand,
-      reserved_quantity: inv.reserved_quantity ?? 0,
-      available_quantity: hubRowAvailableQuantity(
-        inv.quantity_on_hand,
-        inv.reserved_quantity ?? 0,
-        inv.available_quantity
-      ),
-      last_updated: inv.last_updated,
-    }));
+    const rows: OutletRow[] = (data ?? []).map((inv) => {
+      const mat = inv.material as { name?: string; unit_of_measure?: string } | null;
+      const isRm = !!inv.raw_material_id;
+      const display_name = isRm
+        ? [mat?.name?.trim() || 'Ingredient', mat?.unit_of_measure?.trim()].filter(Boolean).join(' · ') || 'Ingredient'
+        : inv.product_batch?.trim() || '—';
+      return {
+        id: inv.id,
+        outlet_name: (inv.outlet as Outlet | null)?.name ?? '—',
+        product_batch: inv.product_batch,
+        raw_material_id: inv.raw_material_id ?? undefined,
+        display_name,
+        quantity_on_hand: inv.quantity_on_hand,
+        reserved_quantity: inv.reserved_quantity ?? 0,
+        available_quantity: hubRowAvailableQuantity(
+          inv.quantity_on_hand,
+          inv.reserved_quantity ?? 0,
+          inv.available_quantity
+        ),
+        last_updated: inv.last_updated,
+      };
+    });
     setOutletRows(rows);
   }, []);
 
@@ -456,7 +471,7 @@ export function Inventory() {
                   <thead className="border-b border-gray-200 bg-gray-50">
                     <tr>
                       <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Batch</th>
+                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Batch / ingredient</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
@@ -470,7 +485,7 @@ export function Inventory() {
                       filteredOutletRows.map((row) => (
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.outlet_name}</td>
-                          <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{row.product_batch}</td>
+                          <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{row.display_name}</td>
                           <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
                           <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
