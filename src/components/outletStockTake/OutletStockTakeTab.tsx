@@ -7,6 +7,7 @@ import {
   buildOutletStockTakeCsv,
   getOutletStockTakeSessionDetail,
   listOutletStockTakeSessions,
+  outletInventoryRmSelectFailed,
   postOutletStockTake,
   type OutletStockTakeSessionRow,
   type OutletStockTakeLineRow,
@@ -67,9 +68,65 @@ function csvPrimaryLabel(
   if (!inv) return '';
   const pb = typeof inv.product_batch === 'string' ? inv.product_batch.trim() : '';
   if (pb) return pb;
-  const m = inv.material;
+  const m = inv.raw_materials ?? inv.material;
   const n = [m?.name?.trim(), m?.unit_of_measure?.trim()].filter(Boolean).join(' · ');
   return n || 'Ingredient';
+}
+
+/** PostgREST may nest RM as `raw_materials`, `material` alias, or (rare) an array; normalize for reading. */
+function nestedMaterialPayload(r: Record<string, unknown>): { name?: string | null; unit_of_measure?: string | null } | null {
+  const raw = r.raw_materials ?? r.material;
+  if (raw == null || typeof raw !== 'object') return null;
+  if (Array.isArray(raw)) {
+    const head = raw[0];
+    if (!head || typeof head !== 'object') return null;
+    return head as { name?: string | null; unit_of_measure?: string | null };
+  }
+  return raw as { name?: string | null; unit_of_measure?: string | null };
+}
+
+function describeUnknownFetchError(context: string, err: unknown): string {
+  if (err instanceof Error && err.message) return `${context}: ${err.message}`;
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string')
+    return `${context}: ${(err as { message: string }).message}`;
+  try {
+    return `${context}: ${JSON.stringify(err)}`;
+  } catch {
+    return `${context}: Unknown error`;
+  }
+}
+
+const OUTLET_INV_SELECT_WITH_RM = `
+  id,
+  raw_material_id,
+  product_batch,
+  quantity_on_hand,
+  reserved_quantity,
+  available_quantity,
+  lot:inventory_lots ( product_batch_label, expiry_date ),
+  raw_materials ( name, unit_of_measure )
+`;
+
+/** Finished-goods-only fields (pre–052 / failed embed). */
+const OUTLET_INV_SELECT_LEGACY = `
+  id,
+  product_batch,
+  quantity_on_hand,
+  reserved_quantity,
+  available_quantity,
+  lot:inventory_lots ( product_batch_label, expiry_date )
+`;
+
+async function fetchOutletInventoryRows(oid: string) {
+  let { data, error } = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_WITH_RM).eq('outlet_id', oid);
+
+  if (error && outletInventoryRmSelectFailed(error)) {
+    const fb = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', oid);
+    data = fb.data;
+    error = fb.error;
+  }
+
+  return { data, error };
 }
 
 function parseCount(raw: string): number | null {
@@ -139,33 +196,29 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       }
       setLoadingInv(true);
       setMessage(null);
-      const invSelect = `
-          id,
-          raw_material_id,
-          product_batch,
-          quantity_on_hand,
-          reserved_quantity,
-          available_quantity,
-          lot:inventory_lots ( product_batch_label, expiry_date ),
-          material:raw_material_id ( name, unit_of_measure )
-        `;
 
       try {
         if (lockedOutletId) {
-          const [{ data: inv, error: invErr }, { data: recipeRows }, { data: ringRows }] = await Promise.all([
-            supabase.from('outlet_inventory').select(invSelect).eq('outlet_id', oid),
+          const [invRes, recipeRes, ringRes] = await Promise.all([
+            fetchOutletInventoryRows(oid),
             supabase.from('recipes').select('id,name,default_product_batch').order('name'),
-            supabase.from('recipe_ingredients').select('raw_material_id, recipe:recipe_id(name)'),
+            supabase.from('recipe_ingredients').select('raw_material_id, recipes(name)'),
           ]);
-          if (invErr) throw invErr;
 
-          const recipes = (recipeRows ?? []) as RecipeMeta[];
+          if (invRes.error) throw invRes.error;
+          if (recipeRes.error) throw recipeRes.error;
+          if (ringRes.error) throw ringRes.error;
+
+          const inv = invRes.data;
+
+          const recipes = (recipeRes.data ?? []) as RecipeMeta[];
           setRecipeList(recipes);
 
           const rmToRecipes = new Map<string, string[]>();
-          for (const line of ringRows ?? []) {
+          for (const line of ringRes.data ?? []) {
             const rid = line.raw_material_id as string | undefined;
-            const nm = (line.recipe as { name?: string } | null)?.name?.trim();
+            const nested = line.recipes as { name?: string } | null | undefined;
+            const nm = nested?.name?.trim();
             if (!rid || !nm) continue;
             const arr = rmToRecipes.get(rid) ?? [];
             if (!arr.includes(nm)) arr.push(nm);
@@ -188,7 +241,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
             const lotLabel = lot?.product_batch_label?.trim() || '';
             const av = hubRowAvailableQuantity(qoh, res, r.available_quantity != null ? Number(r.available_quantity) : null);
             const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
-            const mat = r.material as { name?: string; unit_of_measure?: string } | null;
+            const mat = nestedMaterialPayload(r);
             const pb = normBatch(r.product_batch as string | null | undefined);
 
             let item_label: string;
@@ -223,8 +276,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           setRows(mapped);
         } else {
           setRecipeList([]);
-          const { data: inv, error: invErr } = await supabase.from('outlet_inventory').select(invSelect).eq('outlet_id', oid);
-          if (invErr) throw invErr;
+          const invRes = await fetchOutletInventoryRows(oid);
+          if (invRes.error) throw invRes.error;
+
+          const inv = invRes.data;
 
           const mapped: DraftRow[] = (inv ?? []).map((r: Record<string, unknown>) => {
             const qoh = Number(r.quantity_on_hand ?? 0);
@@ -233,7 +288,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
             const lotLabel = lot?.product_batch_label?.trim() || '';
             const av = hubRowAvailableQuantity(qoh, res, r.available_quantity != null ? Number(r.available_quantity) : null);
             const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
-            const mat = r.material as { name?: string; unit_of_measure?: string } | null;
+            const mat = nestedMaterialPayload(r);
             const pb = normBatch(r.product_batch as string | null | undefined);
             let item_label: string;
             let item_detail: string;
@@ -262,7 +317,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           setRows(mapped);
         }
       } catch (e) {
-        setMessage({ tone: 'err', text: e instanceof Error ? e.message : 'Failed to load outlet inventory.' });
+        setMessage({ tone: 'err', text: describeUnknownFetchError('Could not load outlet inventory', e) });
         setRows([]);
         setRecipeList([]);
       } finally {

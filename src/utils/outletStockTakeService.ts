@@ -91,6 +91,7 @@ export interface OutletStockTakeLineRow {
   outlet_inventory?: {
     product_batch?: string | null;
     raw_material_id?: string | null;
+    raw_materials?: { name?: string | null; unit_of_measure?: string | null } | null;
     material?: { name?: string | null; unit_of_measure?: string | null } | null;
     lot?: { product_batch_label: string | null; expiry_date: string | null } | null;
   } | null;
@@ -99,6 +100,45 @@ export interface OutletStockTakeLineRow {
 export interface OutletStockTakeSessionDetail extends OutletStockTakeSessionRow {
   lines: OutletStockTakeLineRow[];
 }
+
+/**
+ * PostgREST returns these codes when `outlet_inventory` RM column/embed is missing (pre-migration 052).
+ */
+export function outletInventoryRmSelectFailed(err: unknown): boolean {
+  if (err === null || err === undefined) return false;
+  const e = err as { message?: string; code?: string; details?: string };
+  const text = `${String(e.message ?? '')} ${String(e.details ?? '')}`.toLowerCase();
+  const code = String(e.code ?? '');
+  return (
+    code === '42703' ||
+    code === 'PGRST116' ||
+    code === 'PGRST200' ||
+    text.includes('raw_material_id') ||
+    text.includes('raw_materials') ||
+    (text.includes('column') && text.includes('does not exist')) ||
+    text.includes('schema cache') ||
+    text.includes('could not find') ||
+    text.includes('invalid embedding')
+  );
+}
+
+const SESSION_LINE_SELECT_WITH_RM = `
+      *,
+      outlet_inventory:outlet_inventory_id (
+        product_batch,
+        raw_material_id,
+        raw_materials ( name, unit_of_measure ),
+        lot:inventory_lots ( product_batch_label, expiry_date )
+      )
+    `;
+
+const SESSION_LINE_SELECT_LEGACY = `
+      *,
+      outlet_inventory:outlet_inventory_id (
+        product_batch,
+        lot:inventory_lots ( product_batch_label, expiry_date )
+      )
+    `;
 
 export async function getOutletStockTakeSessionDetail(sessionId: string): Promise<OutletStockTakeSessionDetail | null> {
   const { data: session, error: sErr } = await supabase
@@ -110,21 +150,21 @@ export async function getOutletStockTakeSessionDetail(sessionId: string): Promis
   if (sErr) throw sErr;
   if (!session) return null;
 
-  const { data: lines, error: lErr } = await supabase
+  let { data: lines, error: lErr } = await supabase
     .from('outlet_stock_take_lines')
-    .select(
-      `
-      *,
-      outlet_inventory:outlet_inventory_id (
-        product_batch,
-        raw_material_id,
-        material:raw_material_id ( name, unit_of_measure ),
-        lot:inventory_lots ( product_batch_label, expiry_date )
-      )
-    `
-    )
+    .select(SESSION_LINE_SELECT_WITH_RM)
     .eq('session_id', sessionId)
     .order('id', { ascending: true });
+
+  if (lErr && outletInventoryRmSelectFailed(lErr)) {
+    const fb = await supabase
+      .from('outlet_stock_take_lines')
+      .select(SESSION_LINE_SELECT_LEGACY)
+      .eq('session_id', sessionId)
+      .order('id', { ascending: true });
+    lines = fb.data;
+    lErr = fb.error;
+  }
 
   if (lErr) throw lErr;
 
