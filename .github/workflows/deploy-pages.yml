@@ -7,6 +7,11 @@ on:
 
 # Pages must exist for this repo (Settings → Pages → Source: GitHub Actions).
 # If it is unset, `deploy-pages` will fail until you enable Pages there once.
+#
+# Opt JavaScript actions into Node 24 (GitHub deprecation of Node 20 runtime for actions).
+# https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 # upload-pages-artifact → upload-artifact needs write access when using explicit permissions (default token is narrowed).
 permissions:
@@ -31,12 +36,12 @@ jobs:
       VITE_PAGES_BASE_PATH: /${{ github.event.repository.name }}/
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -64,9 +69,11 @@ jobs:
           cp dist/index.html dist/404.html
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: ./dist
+          # v4 excludes dotfiles by default; keep .nojekyll for GitHub Pages.
+          include-hidden-files: true
 
   deploy:
     runs-on: ubuntu-latest
