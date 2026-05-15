@@ -12,7 +12,7 @@ RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
-AS $$
+AS $fn$
 DECLARE
   st text;
   v_outlet_id uuid;
@@ -143,4 +143,7 @@ BEGIN
 
   DELETE FROM public.supply_orders WHERE id = p_supply_order_id;
 END;
-$$;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.admin_delete_supply_order(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.admin_delete_supply_order(uuid) TO authenticated;
