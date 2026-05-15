@@ -4,7 +4,7 @@ import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
-import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, formatValidationErrors } from '../utils/validation';
+import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, validatePoLinesAgainstSupplierCatalog, formatValidationErrors } from '../utils/validation';
 import { retryWithBackoff } from '../utils/errorHandling';
 import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
@@ -42,11 +42,16 @@ function dateInputFromIso(value: string | undefined): string {
 // ---- Supplier Modal ----
 function SupplierModal({
   supplier,
+  allMaterials,
+  initialLinkedMaterialIds,
   onClose,
   onSave,
   onDelete,
 }: {
   supplier: Supplier | null;
+  allMaterials: RawMaterial[];
+  /** Raw material IDs this supplier already supplies — must stay in sync when parent loads links. */
+  initialLinkedMaterialIds: string[];
   onClose: () => void;
   onSave: () => void;
   onDelete?: () => Promise<boolean>;
@@ -65,6 +70,25 @@ function SupplierModal({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<Set<string>>(() => new Set(initialLinkedMaterialIds));
+
+  useEffect(() => {
+    setSelectedMaterialIds(new Set(initialLinkedMaterialIds));
+  }, [supplier?.id, initialLinkedMaterialIds.join('|')]);
+
+  function toggleMaterialLink(id: string) {
+    setSelectedMaterialIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const sortedMaterials = useMemo(
+    () => [...allMaterials].sort((a, b) => a.name.localeCompare(b.name)),
+    [allMaterials]
+  );
 
   async function handleSave() {
     // Validate using validation utilities
@@ -109,6 +133,30 @@ function SupplierModal({
         metadata: { entity_label: form.name },
       });
 
+      const { error: delLinkErr } = await retryWithBackoff(
+        async () => await supabase.from('supplier_raw_materials').delete().eq('supplier_id', createdSupplierId)
+      );
+      if (delLinkErr) {
+        setError(delLinkErr.message);
+        setSaving(false);
+        return;
+      }
+
+      const linkRows = Array.from(selectedMaterialIds).map((raw_material_id) => ({
+        supplier_id: createdSupplierId,
+        raw_material_id,
+      }));
+      if (linkRows.length > 0) {
+        const { error: insLinkErr } = await retryWithBackoff(
+          async () => await supabase.from('supplier_raw_materials').insert(linkRows)
+        );
+        if (insLinkErr) {
+          setError(insLinkErr.message);
+          setSaving(false);
+          return;
+        }
+      }
+
       setSaving(false);
       onSave();
     } catch (err) {
@@ -130,7 +178,7 @@ function SupplierModal({
   );
 
   return (
-    <Modal isOpen onClose={onClose} title={supplier ? 'Edit Supplier' : 'Add Supplier'} size="lg">
+    <Modal isOpen onClose={onClose} title={supplier ? 'Edit Supplier' : 'Add Supplier'} size="xl">
       {error && <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
         {field('Supplier Name *', 'name')}
@@ -141,6 +189,32 @@ function SupplierModal({
         {field('City', 'city')}
         {field('Country', 'country')}
         {field('Payment Terms', 'payment_terms')}
+        <div className="sm:col-span-2">
+          <label className="mb-2 block text-sm font-medium text-gray-700">Raw materials this supplier sells</label>
+          <p className="mb-2 text-xs text-gray-500">
+            Only checked materials appear when creating a purchase order for this supplier.
+          </p>
+          <div className="max-h-52 space-y-1.5 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+            {sortedMaterials.length === 0 ? (
+              <p className="text-sm text-gray-400">No raw materials defined yet — add them under Raw Materials.</p>
+            ) : (
+              sortedMaterials.map((m) => (
+                <label key={m.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-white">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300"
+                    checked={selectedMaterialIds.has(m.id)}
+                    onChange={() => toggleMaterialLink(m.id)}
+                  />
+                  <span>
+                    <span className="font-medium text-gray-900">{m.name}</span>{' '}
+                    <span className="text-gray-500">({m.unit_of_measure})</span>
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
       </div>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -378,6 +452,7 @@ function rpcCancelPoErrorMessage(code: string | undefined): string {
 function NewPOModal({
   suppliers,
   materials,
+  materialsForSupplier,
   existingNumbers,
   existingOrder,
   onClose,
@@ -385,6 +460,7 @@ function NewPOModal({
 }: {
   suppliers: Supplier[];
   materials: RawMaterial[];
+  materialsForSupplier: (supplierId: string) => RawMaterial[];
   existingNumbers: string[];
   /** When set, form updates this draft PO (header + replaced line items). */
   existingOrder?: POWithDetails | null;
@@ -414,6 +490,9 @@ function NewPOModal({
   const [error, setError] = useState('');
 
   const total = lines.reduce((acc, l) => acc + (parseFloat(l.quantity_ordered) || 0) * (parseFloat(l.unit_price) || 0), 0);
+
+  const catalogMaterials = supplier_id ? materialsForSupplier(supplier_id) : [];
+  const catalogBlocked = Boolean(supplier_id && catalogMaterials.length === 0);
 
   function addLine() { setLines([...lines, { raw_material_id: '', quantity_ordered: '', unit_price: '' }]); }
   function removeLine(i: number) { setLines(lines.filter((_, idx) => idx !== i)); }
@@ -462,6 +541,16 @@ function NewPOModal({
         setError(`Line item error: ${formatValidationErrors(lineValidation.errors)}`);
         return;
       }
+    }
+
+    const allowedIds = new Set(catalogMaterials.map((m) => m.id));
+    const catalogValidation = validatePoLinesAgainstSupplierCatalog(
+      validLines.map((l) => ({ raw_material_id: l.raw_material_id })),
+      allowedIds
+    );
+    if (!catalogValidation.isValid) {
+      setError(formatValidationErrors(catalogValidation.errors));
+      return;
     }
 
     setSaving(true);
@@ -616,11 +705,41 @@ function NewPOModal({
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <label className="mb-1 block text-sm font-medium text-gray-700">Supplier *</label>
-            <select value={supplier_id} onChange={(e) => setSupplierId(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <select
+              value={supplier_id}
+              onChange={(e) => {
+                const next = e.target.value;
+                setSupplierId(next);
+                setLines((prev) =>
+                  prev.map((line) => {
+                    if (!next) return { ...line, raw_material_id: '', unit_price: '' };
+                    const allowed = new Set(materialsForSupplier(next).map((m) => m.id));
+                    if (line.raw_material_id && !allowed.has(line.raw_material_id))
+                      return { ...line, raw_material_id: '', unit_price: '' };
+                    return line;
+                  }),
+                );
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
               <option value="">Select supplier…</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
             </select>
+            {supplier_id ? (
+              catalogMaterials.length === 0 ? (
+                <p className="mt-2 text-xs text-amber-800">
+                  No linked materials for this supplier. Use Purchase Orders → Suppliers → Manage supplier and tick raw materials before ordering.
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-gray-500">
+                  {catalogMaterials.length} material{catalogMaterials.length !== 1 ? 's' : ''} linked to this supplier.
+                </p>
+              )
+            ) : null}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700">Order Date</label>
@@ -661,10 +780,20 @@ function NewPOModal({
                 {lines.map((line, i) => (
                   <tr key={i}>
                     <td className="px-3 py-2">
-                      <select value={line.raw_material_id} onChange={(e) => updateLine(i, 'raw_material_id', e.target.value)}
-                        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
-                        <option value="">Select…</option>
-                        {materials.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit_of_measure})</option>)}
+                      <select
+                        value={line.raw_material_id}
+                        onChange={(e) => updateLine(i, 'raw_material_id', e.target.value)}
+                        disabled={!supplier_id}
+                        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none disabled:bg-gray-100"
+                      >
+                        <option value="">
+                          {!supplier_id ? 'Choose supplier first' : catalogMaterials.length === 0 ? 'No materials linked' : 'Select…'}
+                        </option>
+                        {catalogMaterials.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name} ({m.unit_of_measure})
+                          </option>
+                        ))}
                       </select>
                     </td>
                     <td className="px-3 py-2">
@@ -699,7 +828,12 @@ function NewPOModal({
       </div>
       <div className="mt-6 flex justify-end gap-3">
         <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
-        <button onClick={handleSave} disabled={saving} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || catalogBlocked}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+        >
           {saving ? 'Saving…' : editing ? 'Save Changes' : 'Create Order'}
         </button>
       </div>
@@ -925,6 +1059,9 @@ export function Procurement() {
   const [tab, setTab] = useState<Tab>('orders');
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
+  const [supplierMaterialLinks, setSupplierMaterialLinks] = useState<Array<{ supplier_id: string; raw_material_id: string }>>(
+    []
+  );
   const [orders, setOrders] = useState<POWithDetails[]>([]);
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
@@ -939,18 +1076,33 @@ export function Procurement() {
   const [editMaterial, setEditMaterial] = useState<RawMaterial | null | 'new'>('new' as never);
   const [showMaterialModal, setShowMaterialModal] = useState(false);
 
+  const materialsForSupplierCatalog = useMemo(() => {
+    const map = new Map<string, RawMaterial[]>();
+    for (const l of supplierMaterialLinks) {
+      const m = materials.find((x) => x.id === l.raw_material_id);
+      if (!m) continue;
+      const arr = map.get(l.supplier_id) ?? [];
+      if (!arr.some((x) => x.id === m.id)) arr.push(m);
+      map.set(l.supplier_id, arr);
+    }
+    for (const arr of map.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+    return (supplierId: string) => map.get(supplierId) ?? [];
+  }, [supplierMaterialLinks, materials]);
+
   async function loadAll() {
     setLoading(true);
-    const [{ data: sups }, { data: mats }, { data: pos }] = await Promise.all([
+    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }] = await Promise.all([
       supabase.from('suppliers').select('*').order('name'),
       supabase.from('raw_materials').select('*').order('name'),
       supabase
         .from('purchase_orders')
         .select(`*, supplier:supplier_id(*), items:purchase_order_items(*, material:raw_material_id(*))`)
         .order('created_at', { ascending: false }),
+      supabase.from('supplier_raw_materials').select('supplier_id, raw_material_id'),
     ]);
     setSuppliers(sups ?? []);
     setMaterials(mats ?? []);
+    setSupplierMaterialLinks(links ?? []);
     setOrders(pos as POWithDetails[] ?? []);
     setLoading(false);
   }
@@ -1317,6 +1469,7 @@ export function Procurement() {
           key="new-po"
           suppliers={suppliers}
           materials={materials}
+          materialsForSupplier={materialsForSupplierCatalog}
           existingNumbers={orders.map((o) => o.order_number)}
           onClose={() => setShowNewPO(false)}
           onSave={() => { setShowNewPO(false); loadAll(); }}
@@ -1327,6 +1480,7 @@ export function Procurement() {
           key={editPO.id}
           suppliers={suppliers}
           materials={materials}
+          materialsForSupplier={materialsForSupplierCatalog}
           existingNumbers={orders.map((o) => o.order_number)}
           existingOrder={editPO}
           onClose={() => setEditPO(null)}
@@ -1351,7 +1505,13 @@ export function Procurement() {
       )}
       {showSupplierModal && (
         <SupplierModal
-          supplier={editSupplier as Supplier | null}
+          supplier={editSupplier && typeof editSupplier === 'object' ? editSupplier : null}
+          allMaterials={materials}
+          initialLinkedMaterialIds={
+            editSupplier && typeof editSupplier === 'object'
+              ? supplierMaterialLinks.filter((l) => l.supplier_id === editSupplier.id).map((l) => l.raw_material_id)
+              : []
+          }
           onClose={() => setShowSupplierModal(false)}
           onSave={() => { setShowSupplierModal(false); loadAll(); }}
           onDelete={

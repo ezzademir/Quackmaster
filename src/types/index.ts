@@ -13,6 +13,15 @@ export interface Supplier {
   updated_at: string;
 }
 
+/** Raw materials linked to a supplier (procurement catalog junction). */
+export interface SupplierRawMaterial {
+  id: string;
+  supplier_id: string;
+  raw_material_id: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface RawMaterial {
   id: string;
   name: string;

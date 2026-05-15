@@ -175,6 +175,36 @@ export function validatePurchaseOrderItem(data: Record<string, unknown>): Valida
   };
 }
 
+/** Ensure every PO line raw material is allowed for the supplier catalog. */
+export function validatePoLinesAgainstSupplierCatalog(
+  lines: { raw_material_id: string }[],
+  allowedMaterialIds: Set<string>
+): ValidationResult {
+  const errors: ValidationError[] = [];
+
+  if (allowedMaterialIds.size === 0) {
+    errors.push({
+      field: 'supplier_catalog',
+      message: 'Selected supplier has no linked raw materials — add links on the supplier first.',
+    });
+    return { isValid: false, errors };
+  }
+
+  lines.forEach((line, idx) => {
+    if (!allowedMaterialIds.has(line.raw_material_id)) {
+      errors.push({
+        field: `line_${idx}`,
+        message: `Line ${idx + 1}: material must be one linked to this supplier`,
+      });
+    }
+  });
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+  };
+}
+
 export function validateProductionRun(data: Record<string, unknown>): ValidationResult {
   const errors: ValidationError[] = [];
 
