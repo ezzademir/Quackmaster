@@ -5,6 +5,9 @@ on:
     branches: ['main']
   workflow_dispatch:
 
+# Pages must exist for this repo (Settings → Pages → Source: GitHub Actions).
+# If it is unset, `deploy-pages` will fail until you enable Pages there once.
+
 permissions:
   contents: read
   pages: write
@@ -27,9 +30,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
 
       - name: Setup Node
         uses: actions/setup-node@v4
