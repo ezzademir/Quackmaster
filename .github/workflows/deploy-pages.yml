@@ -68,12 +68,11 @@ jobs:
           touch dist/.nojekyll
           cp dist/index.html dist/404.html
 
+      # Marketplace v4 excludes dotfiles without a supported include-hidden-files input; keep v3 so dist/.nojekyll is shipped.
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
-          # v4 excludes dotfiles by default; keep .nojekyll for GitHub Pages.
-          include-hidden-files: true
 
   deploy:
     runs-on: ubuntu-latest
