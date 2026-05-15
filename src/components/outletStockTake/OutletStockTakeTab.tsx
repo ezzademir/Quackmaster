@@ -13,6 +13,8 @@ import {
   type OutletStockTakeLineRow,
 } from '../../utils/outletStockTakeService';
 
+type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
+
 type DraftRow = {
   id: string;
   raw_material_id: string | null;
@@ -31,6 +33,22 @@ type DraftRow = {
 
 function normBatch(pb: string | null | undefined): string {
   return String(pb ?? '').trim();
+}
+
+/** Map raw_material_id → distinct recipe names (from recipe_ingredients embed). */
+function buildRmToRecipes(ingredientLines: unknown[]): Map<string, string[]> {
+  const rmToRecipes = new Map<string, string[]>();
+  for (const line of ingredientLines) {
+    const row = line as { raw_material_id?: string; recipes?: { name?: string } | null };
+    const rid = row.raw_material_id;
+    const nm = row.recipes?.name?.trim();
+    if (!rid || !nm) continue;
+    const arr = rmToRecipes.get(rid) ?? [];
+    if (!arr.includes(nm)) arr.push(nm);
+    rmToRecipes.set(rid, arr);
+  }
+  for (const arr of rmToRecipes.values()) arr.sort((a, b) => a.localeCompare(b));
+  return rmToRecipes;
 }
 
 function csvPrimaryLabel(
@@ -130,6 +148,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
   const [submitting, setSubmitting] = useState(false);
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  /** Populated when supervisor view loads `recipes` (for catalog + ingredient cross-reference). */
+  const [supervisorRecipeCatalog, setSupervisorRecipeCatalog] = useState<RecipeMeta[]>([]);
 
   const blindSupervisor = !!lockedOutletId;
 
@@ -137,6 +157,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
     async (oid: string) => {
       if (!oid) {
         setRows([]);
+        setSupervisorRecipeCatalog([]);
         return;
       }
       setLoadingInv(true);
@@ -144,10 +165,21 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
       try {
         if (lockedOutletId) {
-          const invRes = await fetchOutletInventoryRowsForStockTake(oid, { rmOnly: true });
+          const [invRes, recipeRes, ringRes] = await Promise.all([
+            fetchOutletInventoryRowsForStockTake(oid, { rmOnly: true }),
+            supabase.from('recipes').select('id,name,default_product_batch').order('name'),
+            supabase.from('recipe_ingredients').select('raw_material_id, recipes(name)'),
+          ]);
+
           if (invRes.error) throw invRes.error;
+          if (recipeRes.error) throw recipeRes.error;
+          if (ringRes.error) throw ringRes.error;
 
           const inv = invRes.data;
+          const recipes = (recipeRes.data ?? []) as RecipeMeta[];
+          setSupervisorRecipeCatalog(recipes);
+
+          const rmToRecipes = buildRmToRecipes(ringRes.data ?? []);
 
           const mapped: DraftRow[] = (inv ?? [])
             .map((r: Record<string, unknown>) => {
@@ -161,6 +193,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
               const mat = nestedMaterialPayload(r);
               const pb = normBatch(r.product_batch as string | null | undefined);
               const item_label = mat?.name?.trim() || 'Ingredient';
+              const hint = (rmToRecipes.get(rmid) ?? []).join(', ');
+              const item_detail = hint ? `Used in: ${hint}` : '';
               return {
                 id: String(r.id),
                 raw_material_id: rmid,
@@ -170,7 +204,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                 reserved_quantity: res,
                 available_quantity: av,
                 item_label,
-                item_detail: '',
+                item_detail,
                 countedStr: '',
                 remark: '',
               };
@@ -180,6 +214,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
           setRows(mapped);
         } else {
+          setSupervisorRecipeCatalog([]);
           const invRes = await fetchOutletInventoryRowsForStockTake(oid);
           if (invRes.error) throw invRes.error;
 
@@ -223,6 +258,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       } catch (e) {
         setMessage({ tone: 'err', text: describeUnknownFetchError('Could not load outlet inventory', e) });
         setRows([]);
+        setSupervisorRecipeCatalog([]);
       } finally {
         setLoadingInv(false);
       }
@@ -296,6 +332,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
     });
 
   const handleSubmit = async () => {
+    if (!outletId || rows.length === 0) return;
     setSubmitting(true);
     setMessage(null);
     const idem = crypto.randomUUID();
@@ -411,7 +448,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
         <tr key={r.id} className={bad ? 'bg-red-50/40' : 'hover:bg-gray-50'}>
           <td className="px-3 py-2 text-gray-900">
             <div className="font-medium">{r.item_label}</div>
-            {!blind && r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
+            {r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
           </td>
           {!blind ? (
             <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">{r.lot_label || '—'}</td>
@@ -550,16 +587,30 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           ) : !outletId ? (
             <p className="text-sm text-gray-500">Choose an outlet to load rows.</p>
           ) : rows.length === 0 ? (
-            <p className="text-sm text-amber-800">
-              {lockedOutletId
-                ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
-                : 'No outlet inventory rows — receive stock before running a stock take.'}
-            </p>
+            <div className="space-y-1 text-sm text-amber-800">
+              <p>
+                {lockedOutletId
+                  ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
+                  : 'No outlet inventory rows — receive stock before running a stock take.'}
+              </p>
+              {lockedOutletId && supervisorRecipeCatalog.length > 0 ? (
+                <p className="text-xs text-gray-600">
+                  Recipe catalog loaded ({supervisorRecipeCatalog.length} recipes); rows appear when hub supply creates ingredient lines.
+                </p>
+              ) : null}
+            </div>
           ) : (
             <>
               {lockedOutletId ? (
                 <div className="space-y-3">
-                  <h3 className="text-sm font-semibold text-gray-800">Ingredients</h3>
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800">Ingredients</h3>
+                    {supervisorRecipeCatalog.length > 0 ? (
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        Recipe catalog loaded ({supervisorRecipeCatalog.length} recipes) — usage hints shown per line where known.
+                      </p>
+                    ) : null}
+                  </div>
                   {renderTableShell(rows, true)}
                 </div>
               ) : (
@@ -570,6 +621,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                   {outletName ? (
                     <>
                       Outlet: <span className="font-medium text-gray-700">{outletName}</span> · {rows.length} row{rows.length !== 1 ? 's' : ''}
+                      {blindSupervisor && supervisorRecipeCatalog.length > 0 ? (
+                        <> · {supervisorRecipeCatalog.length} recipes in catalog</>
+                      ) : null}
                     </>
                   ) : null}
                 </p>
