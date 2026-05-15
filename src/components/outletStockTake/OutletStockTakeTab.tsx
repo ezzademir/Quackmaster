@@ -366,23 +366,30 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       const sessionId = result.session_id;
       setMessage({
         tone: 'ok',
-        text: result.idempotent_replay ? 'Replayed existing stock take (same idempotency key).' : 'Stock take posted and inventory updated.',
+        text: result.idempotent_replay
+          ? 'Replayed existing stock take (same idempotency key).'
+          : blindSupervisor
+            ? 'Stock take posted and inventory updated.'
+            : 'Stock take posted and inventory updated.',
       });
 
-      const detail = await getOutletStockTakeSessionDetail(sessionId);
-      if (detail) {
-        const csvLines = detail.lines.map((l) => ({
-          outlet_inventory_id: l.outlet_inventory_id,
-          product_batch: csvPrimaryLabel(l.outlet_inventory),
-          lot_label: l.outlet_inventory?.lot?.product_batch_label ?? '',
-          system_qoh_before: Number(l.system_qoh_before),
-          counted_qty: Number(l.counted_qty),
-          variance: Number(l.variance),
-          line_remark: l.line_remark,
-        }));
-        const csv = buildOutletStockTakeCsv(detail, csvLines);
-        const safeDate = (detail.count_date ?? countDate).replace(/[^\d-]/g, '');
-        downloadCsv(`outlet-stock-take-${detail.id.slice(0, 8)}-${safeDate}.csv`, csv);
+      // Supervisors: no CSV (no auto-download and no export button in Recent sessions).
+      if (!blindSupervisor) {
+        const detail = await getOutletStockTakeSessionDetail(sessionId);
+        if (detail) {
+          const csvLines = detail.lines.map((l) => ({
+            outlet_inventory_id: l.outlet_inventory_id,
+            product_batch: csvPrimaryLabel(l.outlet_inventory),
+            lot_label: l.outlet_inventory?.lot?.product_batch_label ?? '',
+            system_qoh_before: Number(l.system_qoh_before),
+            counted_qty: Number(l.counted_qty),
+            variance: Number(l.variance),
+            line_remark: l.line_remark,
+          }));
+          const csv = buildOutletStockTakeCsv(detail, csvLines);
+          const safeDate = (detail.count_date ?? countDate).replace(/[^\d-]/g, '');
+          downloadCsv(`outlet-stock-take-${detail.id.slice(0, 8)}-${safeDate}.csv`, csv);
+        }
       }
 
       setSessionNotes('');
@@ -522,7 +529,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
         </span>
         <p className="mt-1 text-amber-900/90">
           {lockedOutletId
-            ? 'Blind ingredient count only: ingredient names are shown — system quantities, lots, reservations, and variance stay hidden until you export after posting. Finished goods stay on Inventory → Stock take. Enter every counted quantity; invalid or short counts may be rejected when you submit.'
+            ? 'Blind ingredient count only: ingredient names are shown — system quantities, lots, reservations, and variance are hidden on this screen. Admin and staff can export full session detail from Inventory → Outlet stock take. Finished goods stay on Inventory → Stock take. Enter every counted quantity; invalid or short counts may be rejected when you submit.'
             : 'Count physical stock per outlet inventory row. Submitting updates on-hand and available quantities via the server, writes a session + lines, and records a data ledger entry. Counted quantity cannot be below reserved.'}
         </p>
       </div>
@@ -647,7 +654,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           </div>
           <p className="text-xs text-gray-500">
             {outletId ? 'Filtered to the selected outlet. ' : 'All outlets (latest 100). '}
-            Export CSV includes session metadata, variance, and line remarks.
+            {blindSupervisor
+              ? 'Your posted sessions appear here for reference. Admin or staff can export CSV from Inventory → Outlet stock take.'
+              : 'Export CSV includes session metadata, variance, and line remarks.'}
           </p>
           <ul className="max-h-[28rem] space-y-2 overflow-y-auto text-sm">
             {sessions.length === 0 ? (
@@ -665,15 +674,17 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                       {s.notes ? ` · ${s.notes}` : ''}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void exportSession(s.id)}
-                    disabled={exportingId === s.id}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    <Download size={14} />
-                    {exportingId === s.id ? '…' : 'CSV'}
-                  </button>
+                  {!blindSupervisor ? (
+                    <button
+                      type="button"
+                      onClick={() => void exportSession(s.id)}
+                      disabled={exportingId === s.id}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <Download size={14} />
+                      {exportingId === s.id ? '…' : 'CSV'}
+                    </button>
+                  ) : null}
                 </li>
               ))
             )}

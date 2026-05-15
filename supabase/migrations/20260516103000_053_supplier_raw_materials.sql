@@ -20,6 +20,15 @@ CREATE INDEX IF NOT EXISTS idx_supplier_raw_materials_raw_material_id
 
 ALTER TABLE public.supplier_raw_materials ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view supplier_raw_materials"
+  ON public.supplier_raw_materials;
+DROP POLICY IF EXISTS "Admins can create supplier_raw_materials"
+  ON public.supplier_raw_materials;
+DROP POLICY IF EXISTS "Admins can update supplier_raw_materials"
+  ON public.supplier_raw_materials;
+DROP POLICY IF EXISTS "Admins can delete supplier_raw_materials"
+  ON public.supplier_raw_materials;
+
 CREATE POLICY "Users can view supplier_raw_materials"
   ON public.supplier_raw_materials FOR SELECT
   TO authenticated
