@@ -282,7 +282,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Content */}
         <main className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y">
-          <div className="mx-auto max-w-7xl px-4 md:px-6 py-6 md:py-8">{children}</div>
+          <div className="mx-auto max-w-7xl px-3 pb-6 pt-5 sm:px-4 md:px-6 md:py-8">{children}</div>
         </main>
       </div>
     </div>

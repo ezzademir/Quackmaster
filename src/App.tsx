@@ -1,26 +1,30 @@
+import { lazy, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
 import { Layout } from './components/Layout';
-import { Login } from './pages/Login';
-import { Register } from './pages/Register';
-import { PendingApproval } from './pages/PendingApproval';
-import { RequiredPasswordReset } from './pages/RequiredPasswordReset';
-import { ResetPassword } from './pages/ResetPassword';
-import { Overview } from './pages/Overview';
-import { Procurement } from './pages/Procurement';
-import { Production } from './pages/Production';
-import { Inventory } from './pages/Inventory';
-import { Distribution } from './pages/Distribution';
-import { Sales } from './pages/Sales';
-import { Waste } from './pages/Waste';
-import { Genealogy } from './pages/Genealogy';
-import { Ledger } from './pages/Ledger';
-import { Reconciliation } from './pages/Reconciliation';
-import { Settings } from './pages/Settings';
-import { StockTake } from './pages/StockTake';
-import { Users } from './pages/Users';
+
+const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
+const Register = lazy(() => import('./pages/Register').then((m) => ({ default: m.Register })));
+const PendingApproval = lazy(() => import('./pages/PendingApproval').then((m) => ({ default: m.PendingApproval })));
+const RequiredPasswordReset = lazy(() =>
+  import('./pages/RequiredPasswordReset').then((m) => ({ default: m.RequiredPasswordReset }))
+);
+const ResetPassword = lazy(() => import('./pages/ResetPassword').then((m) => ({ default: m.ResetPassword })));
+const Overview = lazy(() => import('./pages/Overview').then((m) => ({ default: m.Overview })));
+const Procurement = lazy(() => import('./pages/Procurement').then((m) => ({ default: m.Procurement })));
+const Production = lazy(() => import('./pages/Production').then((m) => ({ default: m.Production })));
+const Inventory = lazy(() => import('./pages/Inventory').then((m) => ({ default: m.Inventory })));
+const Distribution = lazy(() => import('./pages/Distribution').then((m) => ({ default: m.Distribution })));
+const Sales = lazy(() => import('./pages/Sales').then((m) => ({ default: m.Sales })));
+const Waste = lazy(() => import('./pages/Waste').then((m) => ({ default: m.Waste })));
+const Genealogy = lazy(() => import('./pages/Genealogy').then((m) => ({ default: m.Genealogy })));
+const Ledger = lazy(() => import('./pages/Ledger').then((m) => ({ default: m.Ledger })));
+const Reconciliation = lazy(() => import('./pages/Reconciliation').then((m) => ({ default: m.Reconciliation })));
+const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
+const StockTake = lazy(() => import('./pages/StockTake').then((m) => ({ default: m.StockTake })));
+const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
 
 function LoadingScreen({ subtitle }: { subtitle?: string }) {
   return (
@@ -125,30 +129,32 @@ function App() {
   return (
     <HashRouter>
       <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<LoginRoute />} />
-          <Route path="/register" element={<RegisterRoute />} />
-          <Route path="/reset-password" element={<ResetPasswordRoute />} />
-          <Route element={<ProtectedShell />}>
-            <Route path="/required-password-reset" element={<RequiredPasswordReset />} />
-            <Route element={<LayoutShell />}>
-              <Route index element={<Overview />} />
-              <Route path="/stock-take" element={<StockTake />} />
-              <Route path="/procurement/*" element={<Procurement />} />
-              <Route path="/production/*" element={<Production />} />
-              <Route path="/inventory/*" element={<Inventory />} />
-              <Route path="/distribution/*" element={<Distribution />} />
-              <Route path="/sales" element={<Sales />} />
-              <Route path="/waste" element={<Waste />} />
-              <Route path="/users" element={<UsersGate />} />
-              <Route path="/ledger" element={<LedgerGate />} />
-              <Route path="/reconciliation" element={<ReconciliationGate />} />
-              <Route path="/genealogy" element={<GenealogyGate />} />
-              <Route path="/settings" element={<SettingsGate />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
+        <Suspense fallback={<LoadingScreen />}>
+          <Routes>
+            <Route path="/login" element={<LoginRoute />} />
+            <Route path="/register" element={<RegisterRoute />} />
+            <Route path="/reset-password" element={<ResetPasswordRoute />} />
+            <Route element={<ProtectedShell />}>
+              <Route path="/required-password-reset" element={<RequiredPasswordReset />} />
+              <Route element={<LayoutShell />}>
+                <Route index element={<Overview />} />
+                <Route path="/stock-take" element={<StockTake />} />
+                <Route path="/procurement/*" element={<Procurement />} />
+                <Route path="/production/*" element={<Production />} />
+                <Route path="/inventory/*" element={<Inventory />} />
+                <Route path="/distribution/*" element={<Distribution />} />
+                <Route path="/sales" element={<Sales />} />
+                <Route path="/waste" element={<Waste />} />
+                <Route path="/users" element={<UsersGate />} />
+                <Route path="/ledger" element={<LedgerGate />} />
+                <Route path="/reconciliation" element={<ReconciliationGate />} />
+                <Route path="/genealogy" element={<GenealogyGate />} />
+                <Route path="/settings" element={<SettingsGate />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Route>
             </Route>
-          </Route>
-        </Routes>
+          </Routes>
+        </Suspense>
       </AuthProvider>
     </HashRouter>
   );

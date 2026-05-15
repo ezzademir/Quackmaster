@@ -443,6 +443,91 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
   const inventoryColTitle = blindSupervisor ? 'Ingredient' : 'Batch / ingredient';
 
+  const renderMobileInventoryCards = (subset: DraftRow[], blind: boolean) =>
+    subset.map((r) => {
+      const v = blind ? null : varianceOf(r);
+      const bad = (() => {
+        const c = parseCount(r.countedStr);
+        if (c === null) return true;
+        return c < (r.reserved_quantity ?? 0);
+      })();
+      return (
+        <div
+          key={r.id}
+          className={`rounded-xl border bg-white p-3 shadow-sm ${
+            bad ? 'border-red-200 bg-red-50/40' : 'border-gray-200'
+          }`}
+        >
+          <div className="min-w-0 border-b border-gray-100 pb-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{inventoryColTitle}</p>
+            <p className="mt-0.5 font-medium leading-snug text-gray-900">{r.item_label}</p>
+            {r.item_detail ? <p className="mt-1 text-xs leading-relaxed text-gray-500">{r.item_detail}</p> : null}
+          </div>
+          {!blind ? (
+            <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+              <div>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Lot</dt>
+                <dd className="tabular-nums text-gray-800">{r.lot_label || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">System QoH</dt>
+                <dd className="tabular-nums text-right text-gray-900">{r.quantity_on_hand}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Reserved</dt>
+                <dd className="tabular-nums text-right text-gray-600">{r.reserved_quantity}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Variance</dt>
+                <dd
+                  className={`tabular-nums text-right ${
+                    v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'
+                  }`}
+                >
+                  {v === null ? '—' : v}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+          <div className="mt-3">
+            <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor={`count-${r.id}`}>
+              Counted quantity
+            </label>
+            <input
+              id={`count-${r.id}`}
+              type="number"
+              min={0}
+              step="0.01"
+              inputMode="decimal"
+              autoComplete="off"
+              value={r.countedStr}
+              onChange={(e) => {
+                const val = e.target.value;
+                setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, countedStr: val } : x)));
+              }}
+              className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-right text-base tabular-nums focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:text-sm"
+            />
+          </div>
+          <div className="mt-3">
+            <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor={`remark-${r.id}`}>
+              Line remark <span className="font-normal text-gray-400">(optional)</span>
+            </label>
+            <input
+              id={`remark-${r.id}`}
+              value={r.remark}
+              onChange={(e) => {
+                const val = e.target.value;
+                setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, remark: val } : x)));
+              }}
+              placeholder="Optional"
+              autoComplete="off"
+              className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:text-xs"
+            />
+          </div>
+        </div>
+      );
+    });
+
   const renderInventoryRows = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
       const v = blind ? null : varianceOf(r);
@@ -469,12 +554,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
               type="number"
               min={0}
               step="0.01"
+              inputMode="decimal"
+              autoComplete="off"
               value={r.countedStr}
               onChange={(e) => {
                 const val = e.target.value;
                 setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, countedStr: val } : x)));
               }}
-              className="w-24 rounded border border-gray-300 px-2 py-1 text-right text-sm tabular-nums"
+              className="w-full max-w-[7rem] rounded-lg border border-gray-300 px-2 py-1.5 text-right text-sm tabular-nums md:w-24 md:rounded md:py-1"
             />
           </td>
           {!blind ? (
@@ -490,7 +577,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                 setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, remark: val } : x)));
               }}
               placeholder="Optional"
-              className="w-full min-w-[6rem] rounded border border-gray-300 px-2 py-1 text-xs"
+              autoComplete="off"
+              className="w-full min-w-[6rem] rounded-lg border border-gray-300 px-2 py-1.5 text-xs md:rounded md:py-1"
             />
           </td>
         </tr>
@@ -498,36 +586,39 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
     });
 
   const renderTableShell = (bodyRows: DraftRow[], blind: boolean) => (
-    <div className="overflow-x-auto rounded-lg border border-gray-200">
-      <table className={`w-full text-sm ${blind ? 'min-w-[420px]' : 'min-w-[640px]'}`}>
-        <thead className="border-b border-gray-200 bg-gray-50">
-          <tr>
-            <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
-            {!blind ? (
-              <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">Lot label</th>
-            ) : null}
-            {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th> : null}
-            {!blind ? (
-              <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-gray-700">Reserved</th>
-            ) : null}
-            <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
-            {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th> : null}
-            <th className="px-3 py-2 text-left font-semibold text-gray-700 min-w-[8rem]">Line remark</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows, blind)}</tbody>
-      </table>
-    </div>
+    <>
+      <div className="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
+        <table className={`w-full text-sm ${blind ? 'min-w-[420px]' : 'min-w-[640px]'}`}>
+          <thead className="border-b border-gray-200 bg-gray-50">
+            <tr>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
+              {!blind ? (
+                <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">Lot label</th>
+              ) : null}
+              {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th> : null}
+              {!blind ? (
+                <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-gray-700">Reserved</th>
+              ) : null}
+              <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
+              {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th> : null}
+              <th className="min-w-[8rem] px-3 py-2 text-left font-semibold text-gray-700">Line remark</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows, blind)}</tbody>
+        </table>
+      </div>
+      <div className="space-y-3 md:hidden">{renderMobileInventoryCards(bodyRows, blind)}</div>
+    </>
   );
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-lg border border-amber-100 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2.5 text-xs text-amber-950 sm:px-4 sm:py-3 sm:text-sm">
         <span className="inline-flex items-center gap-2 font-semibold text-amber-900">
-          <ClipboardList size={18} className="shrink-0" />
+          <ClipboardList size={18} className="size-[1.125rem] shrink-0 sm:size-[18px]" />
           Outlet stock take
         </span>
-        <p className="mt-1 text-amber-900/90">
+        <p className="mt-1.5 leading-relaxed text-amber-900/90">
           {lockedOutletId
             ? 'Blind ingredient count only: ingredient names are shown — system quantities, lots, reservations, and variance are hidden on this screen. Admin and staff can export full session detail from Inventory → Outlet stock take. Finished goods stay on Inventory → Stock take. Enter every counted quantity; invalid or short counts may be rejected when you submit.'
             : 'Count physical stock per outlet inventory row. Submitting updates on-hand and available quantities via the server, writes a session + lines, and records a data ledger entry. Counted quantity cannot be below reserved.'}
@@ -535,20 +626,20 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
           <h2 className="text-sm font-semibold text-gray-800">New count</h2>
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:items-end">
+            <div className="min-w-0">
               <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
               {lockedOutletId ? (
-                <p className="min-w-[12rem] rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800">
+                <p className="min-h-11 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-base leading-snug text-gray-800 sm:min-h-0 sm:py-2 sm:text-sm">
                   {(outletName || outlets.find((o) => o.id === lockedOutletId)?.name) ?? 'Your outlet'}
                 </p>
               ) : (
                 <select
                   value={outletId}
                   onChange={(e) => setOutletId(e.target.value)}
-                  className="min-w-[12rem] rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:py-2 sm:text-sm"
                 >
                   <option value="">Select outlet…</option>
                   {outlets.map((o) => (
@@ -559,13 +650,13 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                 </select>
               )}
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="mb-1 block text-xs font-medium text-gray-600">Count date</label>
               <input
                 type="date"
                 value={countDate}
                 onChange={(e) => setCountDate(e.target.value)}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
               />
             </div>
           </div>
@@ -575,7 +666,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
               value={sessionNotes}
               onChange={(e) => setSessionNotes(e.target.value)}
               placeholder="e.g. Year-end count, cycle count Aisle 2…"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              autoComplete="off"
+              className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:py-2 sm:text-sm"
             />
           </div>
 
@@ -623,11 +715,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
               ) : (
                 renderTableShell(rows, false)
               )}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-gray-500">
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <p className="order-2 text-xs text-gray-500 sm:order-1">
                   {outletName ? (
                     <>
-                      Outlet: <span className="font-medium text-gray-700">{outletName}</span> · {rows.length} row{rows.length !== 1 ? 's' : ''}
+                      Outlet: <span className="font-medium text-gray-700">{outletName}</span> · {rows.length} row
+                      {rows.length !== 1 ? 's' : ''}
                       {blindSupervisor && supervisorRecipeCatalog.length > 0 ? (
                         <> · {supervisorRecipeCatalog.length} recipes in catalog</>
                       ) : null}
@@ -638,7 +731,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                   type="button"
                   onClick={() => void handleSubmit()}
                   disabled={!canSubmit}
-                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="order-1 min-h-11 w-full shrink-0 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 sm:order-2 sm:min-h-0 sm:w-auto sm:py-2 active:bg-amber-800"
                 >
                   {submitting ? 'Posting…' : 'Post stock take'}
                 </button>
@@ -647,29 +740,29 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           )}
         </div>
 
-        <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
+        <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-gray-800">Recent sessions</h2>
             {loadingSessions && <span className="text-xs text-gray-400">Loading…</span>}
           </div>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs leading-relaxed text-gray-500">
             {outletId ? 'Filtered to the selected outlet. ' : 'All outlets (latest 100). '}
             {blindSupervisor
               ? 'Your posted sessions appear here for reference. Admin or staff can export CSV from Inventory → Outlet stock take.'
               : 'Export CSV includes session metadata, variance, and line remarks.'}
           </p>
-          <ul className="max-h-[28rem] space-y-2 overflow-y-auto text-sm">
+          <ul className="max-h-[min(28rem,55vh)] space-y-2 overflow-y-auto overscroll-y-contain text-sm sm:max-h-[28rem]">
             {sessions.length === 0 ? (
               <li className="text-gray-400">No sessions yet.</li>
             ) : (
               sessions.map((s) => (
                 <li
                   key={s.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2"
+                  className="flex flex-col gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:py-2"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-gray-900">{s.outlet?.name ?? 'Outlet'}</p>
-                    <p className="text-xs text-gray-500">
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words font-medium text-gray-900">{s.outlet?.name ?? 'Outlet'}</p>
+                    <p className="mt-0.5 break-words text-xs text-gray-500">
                       {s.count_date} · posted {new Date(s.posted_at).toLocaleString()}
                       {s.notes ? ` · ${s.notes}` : ''}
                     </p>
@@ -679,9 +772,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                       type="button"
                       onClick={() => void exportSession(s.id)}
                       disabled={exportingId === s.id}
-                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      className="inline-flex min-h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-center sm:py-1.5"
                     >
-                      <Download size={14} />
+                      <Download size={14} className="shrink-0" aria-hidden />
                       {exportingId === s.id ? '…' : 'CSV'}
                     </button>
                   ) : null}

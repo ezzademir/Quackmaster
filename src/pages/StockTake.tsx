@@ -56,14 +56,14 @@ export function StockTake() {
   }, [isSupervisor, profile?.assigned_outlet_id]);
 
   if (loading) {
-    return <div className="text-sm text-gray-500">Loading…</div>;
+    return <div className="text-sm text-gray-500 px-0.5">Loading…</div>;
   }
   if (err) {
-    return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">{err}</div>;
+    return <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 sm:p-4">{err}</div>;
   }
   if (outlets.length === 0) {
     return (
-      <div className="rounded-lg border border-amber-100 bg-amber-50/80 p-4 text-sm text-amber-950">
+      <div className="rounded-lg border border-amber-100 bg-amber-50/80 p-3 text-sm text-amber-950 sm:p-4">
         No outlets are available for stock take yet.
       </div>
     );
@@ -72,10 +72,10 @@ export function StockTake() {
   const lockedId = isSupervisor ? profile?.assigned_outlet_id ?? null : null;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Outlet stock take</h1>
-        <p className="mt-1 text-sm text-gray-500">
+    <div className="space-y-4 sm:space-y-5">
+      <div className="min-w-0">
+        <h1 className="text-xl font-bold leading-tight text-gray-900 sm:text-2xl">Outlet stock take</h1>
+        <p className="mt-1.5 text-xs leading-relaxed text-gray-500 sm:text-sm">
           {isSupervisor
             ? `${outlets[0]?.name ?? 'Your outlet'} · count and post for your outlet only.`
             : 'Choose an outlet to load rows, count physical stock, and post adjustments.'}

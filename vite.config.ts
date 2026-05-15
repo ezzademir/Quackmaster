@@ -41,7 +41,16 @@ function resolveBase(command: string): string {
 export default defineConfig(({ command }) => ({
   base: resolveBase(command),
   plugins: [react(), ...(command === 'serve' ? [devClientLogPlugin()] : [])],
-  optimizeDeps: {
-    exclude: ['lucide-react'],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('@supabase')) return 'supabase';
+          if (id.includes('react-router')) return 'router';
+          if (id.includes('lucide-react')) return 'lucide';
+        },
+      },
+    },
   },
 }));
