@@ -615,12 +615,12 @@ export function Users() {
   const drawerApproved = drawer.open && drawer.tab === 'approved' ? drawer.user : null;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-dvh bg-gray-50 auth-safe-padding p-4 md:p-8">
       <div className={`max-w-6xl mx-auto transition-[margin] ${drawer.open ? 'mr-[min(28rem,92vw)]' : ''}`}>
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
-            <p className="mt-2 text-gray-600">
+            <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">User Management</h1>
+            <p className="mt-2 text-sm text-gray-600 sm:text-base">
               Approve registrations, roles, and passwords. See{' '}
               <span className="font-medium text-gray-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
             </p>

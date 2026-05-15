@@ -28,7 +28,7 @@ const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users
 
 function LoadingScreen({ subtitle }: { subtitle?: string }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+    <div className="flex min-h-dvh items-center justify-center bg-gray-50 auth-safe-padding">
       <div className="text-center max-w-sm">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-xl font-bold text-white">
           Q

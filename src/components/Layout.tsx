@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -61,7 +61,7 @@ function NavItem({
     <Link
       to={path}
       title={collapsed ? label : undefined}
-      className={`flex items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm font-medium transition-all ${
+      className={`flex min-h-[2.75rem] items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm font-medium transition-all md:min-h-0 ${
         active
           ? 'bg-blue-600 text-white shadow-sm'
           : 'text-slate-400 hover:bg-slate-800 hover:text-white'
@@ -80,6 +80,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const { profile, user, isAdmin, isSupervisor, signOut } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
 
   async function handleSignOut() {
     await signOut();
@@ -91,7 +96,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     : (user?.email?.[0] ?? 'U').toUpperCase();
 
   return (
-    <div className="flex h-dvh min-h-0 max-h-dvh bg-gray-50">
+    <div className="flex h-dvh min-h-0 max-h-dvh bg-gray-50 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]">
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div
@@ -120,10 +125,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <button
+            type="button"
             onClick={() => setSidebarOpen(false)}
-            className="md:hidden text-slate-400 hover:text-white"
+            aria-label="Close menu"
+            className="inline-flex size-11 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white md:hidden"
           >
-            <span className="text-2xl">&times;</span>
+            <span className="text-2xl leading-none">&times;</span>
           </button>
         </div>
 
@@ -209,10 +216,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </nav>
 
         {/* Collapse toggle */}
-        <div className="border-t border-slate-800 p-3">
+        <div className="hidden border-t border-slate-800 p-3 md:block">
           <button
+            type="button"
             onClick={() => setCollapsed(!collapsed)}
-            className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-slate-400 hover:bg-slate-800 hover:text-white transition-all ${
+            className={`flex w-full min-h-[2.75rem] items-center gap-3 rounded-lg px-2.5 py-2.5 text-slate-400 hover:bg-slate-800 hover:text-white transition-all ${
               collapsed ? 'justify-center' : ''
             }`}
           >
@@ -225,18 +233,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
       {/* Main */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="flex h-16 flex-shrink-0 items-center justify-between md:justify-end gap-4 border-b border-gray-200 bg-white px-4 md:px-6">
+        <header className="flex h-16 flex-shrink-0 items-center justify-between gap-4 border-b border-gray-200 bg-white px-3 md:justify-end md:px-6">
           <button
+            type="button"
             onClick={() => setSidebarOpen(true)}
-            className="md:hidden flex items-center gap-2 text-gray-600 hover:text-gray-900"
+            aria-label="Open menu"
+            className="inline-flex size-11 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 md:hidden"
           >
-            <Menu size={20} />
+            <Menu size={22} className="shrink-0" aria-hidden />
           </button>
           {/* User menu */}
           <div className="relative">
             <button
+              type="button"
               onClick={() => setUserMenuOpen(!userMenuOpen)}
-              className="flex items-center gap-2.5 rounded-xl px-3 py-2 hover:bg-gray-100 transition-colors"
+              aria-expanded={userMenuOpen}
+              aria-haspopup="menu"
+              className="flex min-h-11 items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-gray-100 transition-colors sm:px-3 sm:py-2"
             >
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">
                 {initials}
@@ -253,7 +266,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             {userMenuOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setUserMenuOpen(false)} />
-                <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+                <div className="absolute right-0 top-full z-20 mt-1 w-[min(18rem,calc(100vw-1.5rem))] rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
                   <div className="border-b border-gray-100 px-4 py-3">
                     <p className="text-sm font-medium text-gray-900 truncate">
                       {profile?.full_name || 'User'}
@@ -281,8 +294,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Content */}
-        <main className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y">
-          <div className="mx-auto max-w-7xl px-3 pb-6 pt-5 sm:px-4 md:px-6 md:py-8">{children}</div>
+        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
+          <div className="mx-auto max-w-7xl px-3 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] pt-5 sm:px-4 md:px-6 md:py-8 md:pb-8">
+            {children}
+          </div>
         </main>
       </div>
     </div>

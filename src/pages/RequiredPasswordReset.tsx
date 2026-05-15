@@ -66,7 +66,7 @@ export function RequiredPasswordReset() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-10">
+    <div className="mobile-auth-shell py-10">
       <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
         <img
           src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`}

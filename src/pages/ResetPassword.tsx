@@ -92,7 +92,7 @@ export function ResetPassword() {
 
   if (phase === 'checking') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+      <div className="mobile-auth-shell">
         <div className="text-center text-sm text-gray-600">Verifying reset link…</div>
       </div>
     );
@@ -100,7 +100,7 @@ export function ResetPassword() {
 
   if (phase === 'invalid') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+      <div className="mobile-auth-shell">
         <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm text-center">
           <p className="text-sm text-gray-700 mb-4">
             This reset link is invalid or expired. Request a new one from your administrator or use forgot password if
@@ -115,7 +115,7 @@ export function ResetPassword() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-10">
+    <div className="mobile-auth-shell py-10">
       <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
         <img
           src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`}
