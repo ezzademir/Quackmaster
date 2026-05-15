@@ -11,27 +11,25 @@ permissions:
   id-token: write
 
 concurrency:
-  group: 'pages'
-  cancel-in-progress: true
+  group: 'pages-${{ github.workflow }}-${{ github.ref }}'
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    # Repository Actions secrets (Settings → Secrets and variables → Actions).
-    # If this job still sees empty values, add the same names under Environment secrets for "github-pages".
+    # Enables environment-scoped secrets (Settings → Environments → github-pages).
+    environment: github-pages
     env:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-      # Prefer publishable (`sb_publishable_…`); legacy anon JWT still supported.
       VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      # Repo-scoped URLs so `/REPO/assets/...` resolves even without a trailing slash on `/REPO`.
       VITE_PAGES_BASE_PATH: /${{ github.event.repository.name }}/
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -57,17 +55,23 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Add SPA fallback
-        run: cp dist/index.html dist/404.html
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: SPA fallbacks (.nojekyll + 404)
+        run: |
+          touch dist/.nojekyll
+          cp dist/index.html dist/404.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
