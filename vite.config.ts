@@ -30,10 +30,16 @@ function devClientLogPlugin(): Plugin {
   };
 }
 
-// https://vitejs.dev/config/
+const pagesBaseRaw = process.env.VITE_PAGES_BASE_PATH?.trim() ?? '';
+
+// https://vitejs.dev/guide/build#public-base-path — GitHub project Pages needs an absolute base
+function resolveBase(command: string): string {
+  if (command !== 'build' || !pagesBaseRaw) return './';
+  return pagesBaseRaw.endsWith('/') ? pagesBaseRaw : `${pagesBaseRaw}/`;
+}
+
 export default defineConfig(({ command }) => ({
-  // Relative base so JS/CSS resolve correctly on GitHub Pages, previews, and subdirectory deploys
-  base: './',
+  base: resolveBase(command),
   plugins: [react(), ...(command === 'serve' ? [devClientLogPlugin()] : [])],
   optimizeDeps: {
     exclude: ['lucide-react'],

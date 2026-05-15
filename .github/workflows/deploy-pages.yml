@@ -27,6 +27,8 @@ jobs:
       # Prefer publishable (`sb_publishable_…`); legacy anon JWT still supported.
       VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      # Repo-scoped URLs so `/REPO/assets/...` resolves even without a trailing slash on `/REPO`.
+      VITE_PAGES_BASE_PATH: /${{ github.event.repository.name }}/
     steps:
       - name: Checkout
         uses: actions/checkout@v4

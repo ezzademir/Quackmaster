@@ -19,6 +19,38 @@ export interface FinishedHubTotals {
   available: number;
 }
 
+/** Available quantity for outlet inventory rows (same semantics as hub FG). */
+export function outletRowAvailableQuantity(
+  quantityOnHand: number,
+  reservedQuantity: number,
+  availableQuantityFromDb: number | null | undefined
+): number {
+  return hubRowAvailableQuantity(quantityOnHand, reservedQuantity, availableQuantityFromDb);
+}
+
+/** Sum available quantities per `product_batch` for outlet or hub FG rows. */
+export function sumAvailableByProductBatch(
+  rows: Array<{
+    product_batch: string | null | undefined;
+    quantity_on_hand?: number | null;
+    reserved_quantity?: number | null;
+    available_quantity?: number | null | undefined;
+  }>
+): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const row of rows) {
+    const k = row.product_batch?.trim();
+    if (!k) continue;
+    const avail = outletRowAvailableQuantity(
+      Number(row.quantity_on_hand ?? 0),
+      Number(row.reserved_quantity ?? 0),
+      row.available_quantity
+    );
+    m.set(k, (m.get(k) ?? 0) + avail);
+  }
+  return m;
+}
+
 /** Aggregate finished-goods hub rows (`raw_material_id` must be null — caller filters). */
 export function aggregateFinishedGoodsHubTotals(
   rows: Array<{

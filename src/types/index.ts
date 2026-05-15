@@ -32,6 +32,8 @@ export interface Recipe {
   target_yield_percentage?: number;
   standard_batch_size: number;
   batch_unit: string;
+  /** Canonical FG batch code for hub/outlet KPIs & planning (matches product_batch on inventory). */
+  default_product_batch?: string | null;
   created_at: string;
   updated_at: string;
 }

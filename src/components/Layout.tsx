@@ -17,6 +17,7 @@ import {
   CircleDollarSign,
   Trash2,
   Scale,
+  ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 
@@ -31,6 +32,7 @@ const opsNav = [
   { path: '/distribution', label: 'Distribution', icon: Truck, exact: false },
   { path: '/sales', label: 'Outlet sales', icon: CircleDollarSign, exact: true },
   { path: '/waste', label: 'Waste', icon: Trash2, exact: true },
+  { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
 ];
 
 const adminNav = [
@@ -76,7 +78,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const { profile, user, isAdmin, signOut } = useAuth();
+  const { profile, user, isAdmin, isSupervisor, signOut } = useAuth();
   const navigate = useNavigate();
 
   async function handleSignOut() {
@@ -127,65 +129,82 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-4 space-y-5">
-          <div>
-            {!collapsed && (
-              <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Overview
-              </p>
-            )}
-            <ul className="space-y-0.5">
-              {mainNav.map((item) => (
-                <li key={item.path}>
-                  <NavItem {...item} collapsed={collapsed} />
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div>
-            {!collapsed && (
-              <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Operations
-              </p>
-            )}
-            <ul className="space-y-0.5">
-              {opsNav.map((item) => (
-                <li key={item.path}>
-                  <NavItem {...item} collapsed={collapsed} />
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {isAdmin && (
+          {isSupervisor ? (
             <div>
               {!collapsed && (
                 <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                  Admin
+                  Outlet
                 </p>
               )}
               <ul className="space-y-0.5">
-                {adminNav.map((item) => (
-                  <li key={item.path}>
-                    <NavItem {...item} collapsed={collapsed} />
-                  </li>
-                ))}
+                <li>
+                  <NavItem path="/stock-take" label="Stock take" icon={ClipboardList} exact collapsed={collapsed} />
+                </li>
               </ul>
             </div>
-          )}
-
-          {!collapsed && isAdmin && (
-            <div className="border-t border-slate-800 pt-4">
-              <div className="rounded-lg border border-dashed border-slate-700 p-3">
-                <div className="flex items-center gap-2 text-slate-500">
-                  <Plus size={14} />
-                  <span className="text-xs font-medium">More modules coming</span>
-                </div>
-                <p className="mt-1 text-[10px] text-slate-600 leading-relaxed">
-                  Finance · HR · CRM · Quality
-                </p>
+          ) : (
+            <>
+              <div>
+                {!collapsed && (
+                  <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                    Overview
+                  </p>
+                )}
+                <ul className="space-y-0.5">
+                  {mainNav.map((item) => (
+                    <li key={item.path}>
+                      <NavItem {...item} collapsed={collapsed} />
+                    </li>
+                  ))}
+                </ul>
               </div>
-            </div>
+
+              <div>
+                {!collapsed && (
+                  <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                    Operations
+                  </p>
+                )}
+                <ul className="space-y-0.5">
+                  {opsNav.map((item) => (
+                    <li key={item.path}>
+                      <NavItem {...item} collapsed={collapsed} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {isAdmin && (
+                <div>
+                  {!collapsed && (
+                    <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                      Admin
+                    </p>
+                  )}
+                  <ul className="space-y-0.5">
+                    {adminNav.map((item) => (
+                      <li key={item.path}>
+                        <NavItem {...item} collapsed={collapsed} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {!collapsed && isAdmin && (
+                <div className="border-t border-slate-800 pt-4">
+                  <div className="rounded-lg border border-dashed border-slate-700 p-3">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Plus size={14} />
+                      <span className="text-xs font-medium">More modules coming</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-600 leading-relaxed">
+                      Finance · HR · CRM · Quality
+                    </p>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </nav>
 

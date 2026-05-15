@@ -18,12 +18,14 @@ import {
 } from 'lucide-react';
 import { writeLedgerEntry } from '../utils/ledger';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
+import type { Outlet } from '../types';
 
 interface UserRecord {
   id: string;
   email: string;
   full_name: string;
   role: string;
+  assigned_outlet_id?: string | null;
   last_login: string | null;
   password_reset_required: boolean;
   created_at: string;
@@ -77,6 +79,10 @@ export function Users() {
   const [tempPassLoading, setTempPassLoading] = useState(false);
   const [tempPassMessage, setTempPassMessage] = useState('');
 
+  const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor'>('staff');
+  const [outletDraft, setOutletDraft] = useState('');
+
   const q = searchQuery.trim().toLowerCase();
   const filteredUsers = useMemo(
     () =>
@@ -109,13 +115,29 @@ export function Users() {
     [rejectedUsers, q]
   );
 
+  const outletNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const o of outlets) {
+      m.set(o.id, o.name);
+    }
+    return m;
+  }, [outlets]);
+
   useEffect(() => {
     if (!isAdmin) {
       setLoading(false);
       return;
     }
     loadUsers();
+    void loadOutlets();
   }, [isAdmin]);
+
+  async function loadOutlets() {
+    const { data, error } = await supabase.from('outlets').select('id, name').order('name');
+    if (!error && data) {
+      setOutlets(data as Outlet[]);
+    }
+  }
 
   async function loadUsers() {
     setLoading(true);
@@ -128,6 +150,7 @@ export function Users() {
           id: string;
           full_name: string;
           role: string;
+          assigned_outlet_id?: string | null;
           last_login: string | null;
           password_reset_required: boolean;
           created_at: string;
@@ -188,6 +211,7 @@ export function Users() {
         id: p.id,
         full_name: p.full_name,
         role: p.role,
+        assigned_outlet_id: p.assigned_outlet_id ?? null,
         last_login: p.last_login,
         password_reset_required: p.password_reset_required,
         created_at: p.created_at,
@@ -324,16 +348,23 @@ export function Users() {
     }
   }
 
-  async function handleSetRegisteredAdminRole(target: UserRecord, makeAdmin: boolean) {
+  async function handleSaveRoleAndOutlet(target: UserRecord) {
     if (!authUser?.id || target.id === authUser.id) return;
+
+    const r = roleDraft;
+    if (r === 'supervisor' && !outletDraft.trim()) {
+      setRoleNotice({ tone: 'err', text: 'Supervisors need an assigned outlet.' });
+      return;
+    }
 
     setBusyRoleUserId(target.id);
     setRoleNotice(null);
 
     try {
-      const { data, error } = await supabase.rpc('set_registered_user_admin_role', {
+      const { data, error } = await supabase.rpc('admin_set_profile_role_and_outlet', {
         p_target_user_id: target.id,
-        p_make_admin: makeAdmin,
+        p_role: r,
+        p_assigned_outlet_id: r === 'supervisor' ? outletDraft.trim() : null,
       });
 
       if (error) throw error;
@@ -343,12 +374,13 @@ export function Users() {
         error?: string;
         message?: string;
         role?: string;
+        assigned_outlet_id?: string | null;
       };
 
       if (!payload?.success) {
         setRoleNotice({
           tone: 'err',
-          text: payload?.message ?? 'Could not update role',
+          text: payload?.message ?? payload?.error ?? 'Could not update role',
         });
         return;
       }
@@ -361,18 +393,24 @@ export function Users() {
         operation: 'event',
         metadata: {
           role_change: true,
-          new_role: payload.role ?? (makeAdmin ? 'admin' : 'staff'),
+          new_role: payload.role,
+          assigned_outlet_id: payload.assigned_outlet_id,
         },
       });
 
-      setRoleNotice({
-        tone: 'ok',
-        text: makeAdmin ? 'User promoted to admin.' : 'Admin access removed (staff).',
-      });
+      setRoleNotice({ tone: 'ok', text: 'Role and outlet saved.' });
       await loadUsers();
       if (drawer.open && drawer.tab === 'approved' && drawer.user.id === target.id) {
-        const nextRole = payload.role ?? (makeAdmin ? 'admin' : 'staff');
-        setDrawer({ open: true, tab: 'approved', user: { ...drawer.user, role: nextRole } });
+        setDrawer({
+          open: true,
+          tab: 'approved',
+          user: {
+            ...drawer.user,
+            role: payload.role ?? r,
+            assigned_outlet_id: payload.assigned_outlet_id ?? (r === 'supervisor' ? outletDraft : null),
+          },
+        });
+        setOutletDraft(payload.assigned_outlet_id ?? (r === 'supervisor' ? outletDraft : ''));
       }
     } catch (error: unknown) {
       console.error('Error updating role:', error);
@@ -687,6 +725,9 @@ export function Users() {
                       <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
                         Role
                       </th>
+                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
+                        Outlet
+                      </th>
                       <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
                         Status
                       </th>
@@ -708,13 +749,20 @@ export function Users() {
                         <td className="px-4 md:px-6 py-4 text-xs sm:text-sm">
                           <span
                             className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              user.role === 'admin'
+                              String(user.role).toLowerCase().trim() === 'admin'
                                 ? 'bg-purple-100 text-purple-700'
-                                : 'bg-blue-100 text-blue-700'
+                                : String(user.role).toLowerCase().trim() === 'supervisor'
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : 'bg-blue-100 text-blue-700'
                             }`}
                           >
                             {user.role}
                           </span>
+                        </td>
+                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-700">
+                          {user.role?.toLowerCase()?.trim() === 'supervisor'
+                            ? outletNameById.get(user.assigned_outlet_id ?? '') ?? '—'
+                            : '—'}
                         </td>
                         <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs">{statusCell(user)}</td>
                         <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">
@@ -725,6 +773,11 @@ export function Users() {
                             type="button"
                             onClick={() => {
                               setNameDraft(user.full_name ?? '');
+                              const rl = String(user.role).toLowerCase().trim();
+                              setRoleDraft(
+                                rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
+                              );
+                              setOutletDraft(user.assigned_outlet_id ?? '');
                               setDrawer({ open: true, tab: 'approved', user });
                             }}
                             className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium"
@@ -966,28 +1019,49 @@ export function Users() {
                       Require new password on next sign-in
                     </button>
                   </div>
-                  <div className="border-t border-gray-100 pt-4 space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Role</p>
-                    {authUser?.id !== drawerApproved.id && drawerApproved.role === 'staff' && (
-                      <button
-                        type="button"
-                        disabled={busyRoleUserId === drawerApproved.id}
-                        onClick={() => handleSetRegisteredAdminRole(drawerApproved, true)}
-                        className="flex w-full items-center justify-center gap-2 rounded-lg bg-purple-50 py-2 text-sm font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50"
-                      >
-                        <Shield size={16} />
-                        Make admin
-                      </button>
-                    )}
-                    {authUser?.id !== drawerApproved.id && drawerApproved.role === 'admin' && (
-                      <button
-                        type="button"
-                        disabled={busyRoleUserId === drawerApproved.id}
-                        onClick={() => handleSetRegisteredAdminRole(drawerApproved, false)}
-                        className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                      >
-                        Remove admin access
-                      </button>
+                  <div className="border-t border-gray-100 pt-4 space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Role &amp; outlet
+                    </p>
+                    {authUser?.id !== drawerApproved.id ? (
+                      <>
+                        <select
+                          value={roleDraft}
+                          onChange={(e) =>
+                            setRoleDraft(e.target.value as 'admin' | 'staff' | 'supervisor')
+                          }
+                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+                        >
+                          <option value="staff">Staff</option>
+                          <option value="admin">Admin</option>
+                          <option value="supervisor">Outlet supervisor</option>
+                        </select>
+                        {roleDraft === 'supervisor' && (
+                          <select
+                            value={outletDraft}
+                            onChange={(e) => setOutletDraft(e.target.value)}
+                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+                          >
+                            <option value="">Select outlet…</option>
+                            {outlets.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busyRoleUserId === drawerApproved.id}
+                          onClick={() => void handleSaveRoleAndOutlet(drawerApproved)}
+                          className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                        >
+                          <Shield size={16} />
+                          Save role &amp; outlet
+                        </button>
+                      </>
+                    ) : (
+                      <p className="text-xs text-gray-500">You cannot change your own role here.</p>
                     )}
                   </div>
                 </div>

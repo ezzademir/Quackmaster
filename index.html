@@ -11,19 +11,50 @@
     <meta name="twitter:image" content="https://ezzademir.github.io/Quackmaster/Quackmaster_Logo.png" />
   </head>
   <body>
-    <!-- GitHub Pages: pathname URLs like /Quackmaster/login 404; send clients to hash routes -->
+    <!-- GitHub Pages: pathname URLs like /REPO/login 404; serve 404.html then redirect here to hash routes -->
     <script>
       (function () {
         if (location.hash.replace(/^#\/?/, '').length > 0) return;
-        var base = '/Quackmaster';
+
+        function inferSiteBasePrefix() {
+          var m = document.querySelector('script[type="module"][src*="assets"]');
+          var src = m && m.getAttribute('src');
+          if (!src) return '';
+          var i = src.indexOf('/assets/');
+          if (src.startsWith('/') && i > 0) return src.slice(0, i);
+
+          /* Relative bundles (local build without VITE_PAGES_BASE_PATH) */
+          var pathname = location.pathname.replace(/\/$/, '');
+          if (!pathname || pathname.slice(-5) === '.html') return '';
+          var leaf = pathname.split('/').pop() || '';
+          if (/\.[a-zA-Z0-9]+$/.test(leaf)) return pathname.slice(0, pathname.lastIndexOf('/')) || '';
+
+          /* Pathname /repo/spa-route → dirname /repo acts as implicit base when assets are ./assets */
+          var last = pathname.lastIndexOf('/');
+          if (last <= 0) return '';
+          return pathname.slice(0, last);
+        }
+
+        var base = inferSiteBasePrefix() || '';
+        /* Local ./assets builds: recover /Quackmaster prefix for GitHub-hosted pathnames */
+        var norm = location.pathname.replace(/\/$/, '');
+        if (
+          base === '' &&
+          !location.pathname.includes('/assets/') &&
+          (norm.startsWith('/Quackmaster/') || norm === '/Quackmaster')
+        ) {
+          base = '/Quackmaster';
+        }
+
         var path = location.pathname.replace(/\/$/, '');
         if (path === '' || path === base) return;
-        if (!path.startsWith(base + '/')) return;
-        var tail = path.slice(base.length);
+        if (base !== '' && !path.startsWith(base + '/') && path !== base) return;
+        var tail = base === '' ? path : path.slice(base.length);
         if (!tail || tail.startsWith('/assets/')) return;
-        var leaf = tail.split('/').pop() || '';
-        if (/\.[a-zA-Z0-9]+$/.test(leaf)) return;
-        location.replace(location.origin + base + '/' + location.search + '#' + tail + location.hash);
+        var tailLeaf = tail.split('/').pop() || '';
+        if (/\.[a-zA-Z0-9]+$/.test(tailLeaf)) return;
+
+        location.replace(location.origin + (base === '' ? '' : base) + '/' + location.search + '#' + tail + location.hash);
       })();
     </script>
     <div id="root"></div>

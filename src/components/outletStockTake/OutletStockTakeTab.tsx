@@ -66,9 +66,11 @@ interface DraftRow extends InvRow {
 interface Props {
   outlets: Outlet[];
   onApplied?: () => void;
+  /** When set, locks counting to this outlet (hides outlet picker). */
+  lockedOutletId?: string | null;
 }
 
-export function OutletStockTakeTab({ outlets, onApplied }: Props) {
+export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props) {
   const [outletId, setOutletId] = useState('');
   const [countDate, setCountDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [sessionNotes, setSessionNotes] = useState('');
@@ -142,6 +144,12 @@ export function OutletStockTakeTab({ outlets, onApplied }: Props) {
       if (!opts?.silent) setLoadingSessions(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (lockedOutletId) {
+      setOutletId(lockedOutletId);
+    }
+  }, [lockedOutletId]);
 
   useEffect(() => {
     void loadInventory(outletId);
@@ -295,7 +303,9 @@ export function OutletStockTakeTab({ outlets, onApplied }: Props) {
           Outlet stock take
         </span>
         <p className="mt-1 text-amber-900/90">
-          Count physical stock per outlet inventory row. Submitting updates on-hand and available quantities via the server, writes a session + lines, and records a data ledger entry. Counted quantity cannot be below reserved.
+          {lockedOutletId
+            ? 'Count physical stock for your outlet only. Submitting updates on-hand and available on the server and records a session + lines. Counted quantity cannot be below reserved.'
+            : 'Count physical stock per outlet inventory row. Submitting updates on-hand and available quantities via the server, writes a session + lines, and records a data ledger entry. Counted quantity cannot be below reserved.'}
         </p>
       </div>
 
@@ -305,18 +315,24 @@ export function OutletStockTakeTab({ outlets, onApplied }: Props) {
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
-              <select
-                value={outletId}
-                onChange={(e) => setOutletId(e.target.value)}
-                className="min-w-[12rem] rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-              >
-                <option value="">Select outlet…</option>
-                {outlets.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
+              {lockedOutletId ? (
+                <p className="min-w-[12rem] rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800">
+                  {(outletName || outlets.find((o) => o.id === lockedOutletId)?.name) ?? 'Your outlet'}
+                </p>
+              ) : (
+                <select
+                  value={outletId}
+                  onChange={(e) => setOutletId(e.target.value)}
+                  className="min-w-[12rem] rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                >
+                  <option value="">Select outlet…</option>
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">Count date</label>

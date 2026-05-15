@@ -91,6 +91,7 @@ function RecipeModal({
     standard_batch_size: recipe?.standard_batch_size?.toString() ?? '',
     batch_unit: recipe?.batch_unit ?? '',
     target_yield_percentage: recipe?.target_yield_percentage?.toString() ?? '100',
+    default_product_batch: recipe?.default_product_batch ?? '',
   });
   const [lines, setLines] = useState<IngredientLine[]>(
     ingredients.length > 0
@@ -113,12 +114,14 @@ function RecipeModal({
     const validLines = lines.filter((l) => l.raw_material_id && parseFloat(l.quantity_required) > 0);
     if (validLines.length === 0) { setError('Add at least one ingredient'); return; }
     setSaving(true);
+    const batchCode = form.default_product_batch.trim();
     const payload = {
       name: form.name,
       description: form.description || null,
       standard_batch_size: parseFloat(form.standard_batch_size),
       batch_unit: form.batch_unit,
       target_yield_percentage: parseFloat(form.target_yield_percentage) || 100,
+      default_product_batch: batchCode ? batchCode : null,
     };
     let recipeId = recipe?.id;
     if (recipe) {
@@ -165,6 +168,16 @@ function RecipeModal({
             <label className="mb-1 block text-sm font-medium text-gray-700">Target Yield %</label>
             <input type="number" min="0" max="100" step="0.1" value={form.target_yield_percentage} onChange={(e) => setForm({ ...form, target_yield_percentage: e.target.value })}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-sm font-medium text-gray-700">Default product batch</label>
+            <input
+              value={form.default_product_batch}
+              onChange={(e) => setForm({ ...form, default_product_batch: e.target.value })}
+              placeholder="Matches hub / outlet finished-goods product_batch (e.g. KT-BATCH-01)"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">Used for dashboard “By recipe” stock and supply chain alignment. Leave blank if not set up yet.</p>
           </div>
         </div>
 
@@ -255,7 +268,7 @@ function NewRunModal({
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
-  profile: { role: 'admin' | 'staff' | 'pending' } | null;
+  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
 }) {
   const [recipe_id, setRecipeId] = useState('');
   const [production_date, setDate] = useState(new Date().toISOString().split('T')[0]);

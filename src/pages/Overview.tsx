@@ -13,7 +13,10 @@ import {
   Trash2,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { aggregateFinishedGoodsHubTotals } from '../utils/hubInventoryMath';
+import {
+  aggregateFinishedGoodsHubTotals,
+  sumAvailableByProductBatch,
+} from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
 
 function localISODate(d: Date): string {
@@ -66,14 +69,31 @@ interface SupplierScoreRow {
   avg_fill_rate: number | string | null;
 }
 
+interface RecipeKpiRow {
+  id: string;
+  name: string;
+  batch_unit: string | null;
+  target_yield_percentage: number;
+  default_product_batch: string | null;
+  hubAvail: number | null;
+  outletAvail: number | null;
+  avgYieldRec: number | null;
+}
+
 export function Overview() {
   const { isAdmin } = useAuth();
   const [kpis, setKpis] = useState<KPIs | null>(null);
+  const [recipeKpiRows, setRecipeKpiRows] = useState<RecipeKpiRow[]>([]);
+  const [hubProductStockMixedUom, setHubProductStockMixedUom] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [supplierScores, setSupplierScores] = useState<SupplierScoreRow[]>([]);
   const [expiringLots, setExpiringLots] = useState<ExpiringLotRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const hubProductSub = hubProductStockMixedUom
+    ? 'ATP total — recipes use different batch units (see By recipe below)'
+    : 'Units ready to dispatch';
 
   useEffect(() => {
     async function load() {
@@ -91,6 +111,9 @@ export function Overview() {
         const [
           { data: hubRaw },
           { data: hubProducts },
+          { data: recipeList },
+          { data: outletInvAll },
+          { data: yieldRuns },
           { data: openPOs },
           { data: runs },
           { data: outlets },
@@ -110,8 +133,21 @@ export function Overview() {
             .not('raw_material_id', 'is', null),
           supabase
             .from('hub_inventory')
-            .select('available_quantity, quantity_on_hand, reserved_quantity')
+            .select('product_batch, available_quantity, quantity_on_hand, reserved_quantity')
             .is('raw_material_id', null),
+          supabase
+            .from('recipes')
+            .select('id, name, batch_unit, target_yield_percentage, default_product_batch')
+            .order('name'),
+          supabase
+            .from('outlet_inventory')
+            .select('product_batch, quantity_on_hand, reserved_quantity, available_quantity'),
+          supabase
+            .from('production_runs')
+            .select('recipe_id, yield_percentage')
+            .eq('status', 'completed')
+            .order('production_date', { ascending: false })
+            .limit(400),
           supabase
             .from('purchase_orders')
             .select('id')
@@ -252,6 +288,60 @@ export function Overview() {
           wasteUnits7d,
           wasteEvents7d,
         });
+
+        const hubByBatch = sumAvailableByProductBatch(hubProducts ?? []);
+        const outletByBatch = sumAvailableByProductBatch(outletInvAll ?? []);
+
+        const yieldMap = new Map<string, number[]>();
+        for (const yr of yieldRuns ?? []) {
+          const rid = (yr as { recipe_id?: string | null }).recipe_id;
+          if (!rid) continue;
+          const y = Number((yr as { yield_percentage?: unknown }).yield_percentage);
+          if (!Number.isFinite(y)) continue;
+          let bucket = yieldMap.get(rid);
+          if (!bucket) {
+            bucket = [];
+            yieldMap.set(rid, bucket);
+          }
+          if (bucket.length < 30) bucket.push(y);
+        }
+
+        const rlist = (recipeList ?? []) as Array<{
+          id: string;
+          name: string;
+          batch_unit: string | null;
+          target_yield_percentage?: unknown;
+          default_product_batch: string | null;
+        }>;
+
+        const distinctBatchUnits = new Set<string>();
+        for (const rec of rlist) {
+          const u = String(rec.batch_unit ?? '').trim();
+          if (u) distinctBatchUnits.add(u);
+        }
+        setHubProductStockMixedUom(distinctBatchUnits.size > 1);
+
+        setRecipeKpiRows(
+          rlist.map((rec) => {
+            const batchKey = rec.default_product_batch?.trim() ?? '';
+            const hubAvail = batchKey ? (hubByBatch.get(batchKey) ?? 0) : null;
+            const outletAvail = batchKey ? (outletByBatch.get(batchKey) ?? 0) : null;
+            const ys = yieldMap.get(rec.id) ?? [];
+            const avgYieldRec = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null;
+            const tgtRaw = rec.target_yield_percentage;
+            const tgtNum = tgtRaw != null && tgtRaw !== '' ? Number(tgtRaw) : 100;
+            return {
+              id: rec.id,
+              name: rec.name,
+              batch_unit: rec.batch_unit,
+              target_yield_percentage: Number.isFinite(tgtNum) ? tgtNum : 100,
+              default_product_batch: rec.default_product_batch,
+              hubAvail,
+              outletAvail,
+              avgYieldRec,
+            };
+          })
+        );
 
         // Build activity feed
         const items: ActivityItem[] = [];
@@ -431,7 +521,7 @@ export function Overview() {
             color: 'bg-emerald-50 text-emerald-600',
             label: 'Hub Product Stock',
             value: (kpis?.hubProductStock ?? 0).toLocaleString(),
-            sub: 'Units ready to dispatch',
+            sub: hubProductSub,
             to: '/inventory',
           },
           {
@@ -509,6 +599,62 @@ export function Overview() {
           </Link>
         ))}
       </div>
+
+      {recipeKpiRows.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-1 font-semibold text-gray-900">By recipe</h2>
+          <p className="mb-4 text-xs text-gray-500">
+            Hub and outlet columns use{' '}
+            <span className="font-medium text-gray-700">default product batch</span> when set on the recipe (
+            <Link to="/production" className="text-blue-600 hover:underline">
+              Production
+            </Link>
+            ). Yield is averaged over up to 30 latest completed runs per recipe. Cells use each recipe&apos;s batch
+            unit.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="border-b bg-gray-50 text-left">
+                <tr>
+                  <th className="px-3 py-2 font-medium text-gray-700">Recipe</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Default batch</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Hub ATP</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Outlet ATP</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Avg yield</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Target %</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Unit</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {recipeKpiRows.map((row) => {
+                  const batch = row.default_product_batch?.trim();
+                  return (
+                    <tr key={row.id} className="hover:bg-gray-50/80">
+                      <td className="px-3 py-2 font-medium text-gray-900">{row.name}</td>
+                      <td className="px-3 py-2 text-gray-700">{batch || '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                        {batch != null && batch !== '' ? (row.hubAvail ?? 0).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                        {batch != null && batch !== '' ? (row.outletAvail ?? 0).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                        {row.avgYieldRec != null && Number.isFinite(row.avgYieldRec)
+                          ? `${row.avgYieldRec.toFixed(1)}%`
+                          : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-600">
+                        {row.target_yield_percentage.toFixed(0)}%
+                      </td>
+                      <td className="px-3 py-2 text-gray-600">{row.batch_unit?.trim() || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {supplierScores.filter((s) => (s.completed_orders ?? 0) > 0).length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">

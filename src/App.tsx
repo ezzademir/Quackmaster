@@ -19,6 +19,7 @@ import { Genealogy } from './pages/Genealogy';
 import { Ledger } from './pages/Ledger';
 import { Reconciliation } from './pages/Reconciliation';
 import { Settings } from './pages/Settings';
+import { StockTake } from './pages/StockTake';
 import { Users } from './pages/Users';
 
 function LoadingScreen({ subtitle }: { subtitle?: string }) {
@@ -109,6 +110,14 @@ function ProtectedShell() {
     return <Navigate to="/required-password-reset" replace />;
   }
 
+  if (role === 'supervisor') {
+    const path = location.pathname;
+    const allowed = path === '/stock-take' || path === '/required-password-reset';
+    if (!allowed) {
+      return <Navigate to="/stock-take" replace />;
+    }
+  }
+
   return <Outlet />;
 }
 
@@ -124,6 +133,7 @@ function App() {
             <Route path="/required-password-reset" element={<RequiredPasswordReset />} />
             <Route element={<LayoutShell />}>
               <Route index element={<Overview />} />
+              <Route path="/stock-take" element={<StockTake />} />
               <Route path="/procurement/*" element={<Procurement />} />
               <Route path="/production/*" element={<Production />} />
               <Route path="/inventory/*" element={<Inventory />} />
