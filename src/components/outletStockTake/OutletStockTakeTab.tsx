@@ -5,15 +5,13 @@ import { supabase } from '../../utils/supabase';
 import { hubRowAvailableQuantity } from '../../utils/hubInventoryMath';
 import {
   buildOutletStockTakeCsv,
+  fetchOutletInventoryRowsForStockTake,
   getOutletStockTakeSessionDetail,
   listOutletStockTakeSessions,
-  outletInventoryRmSelectFailed,
   postOutletStockTake,
   type OutletStockTakeSessionRow,
   type OutletStockTakeLineRow,
 } from '../../utils/outletStockTakeService';
-
-type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
 
 type DraftRow = {
   id: string;
@@ -33,33 +31,6 @@ type DraftRow = {
 
 function normBatch(pb: string | null | undefined): string {
   return String(pb ?? '').trim();
-}
-
-function partitionSupervisorRows(rows: DraftRow[], recipes: RecipeMeta[]) {
-  const fg = rows.filter((r) => !r.raw_material_id);
-  const rmRows = rows.filter((r) => !!r.raw_material_id);
-  const placed = new Set<string>();
-  const sections: { key: string; title: string; defaultBatch: string; rows: DraftRow[] }[] = [];
-
-  const orderedRecipes = [...recipes]
-    .filter((r) => normBatch(r.default_product_batch) !== '')
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-  for (const rec of orderedRecipes) {
-    const pb = normBatch(rec.default_product_batch);
-    const bn = pb.toLowerCase();
-    const match = fg.filter((r) => normBatch(r.product_batch).toLowerCase() === bn);
-    for (const m of match) placed.add(m.id);
-    sections.push({
-      key: rec.id,
-      title: rec.name?.trim() || 'Recipe',
-      defaultBatch: pb,
-      rows: match,
-    });
-  }
-
-  const otherFg = fg.filter((r) => !placed.has(r.id));
-  return { sections, otherFg, rmRows };
 }
 
 function csvPrimaryLabel(
@@ -96,46 +67,16 @@ function describeUnknownFetchError(context: string, err: unknown): string {
   }
 }
 
-const OUTLET_INV_SELECT_WITH_RM = `
-  id,
-  raw_material_id,
-  product_batch,
-  quantity_on_hand,
-  reserved_quantity,
-  available_quantity,
-  lot:inventory_lots ( product_batch_label, expiry_date ),
-  raw_materials ( name, unit_of_measure )
-`;
-
-/** Finished-goods-only fields (pre–052 / failed embed). */
-const OUTLET_INV_SELECT_LEGACY = `
-  id,
-  product_batch,
-  quantity_on_hand,
-  reserved_quantity,
-  available_quantity,
-  lot:inventory_lots ( product_batch_label, expiry_date )
-`;
-
-async function fetchOutletInventoryRows(oid: string) {
-  let { data, error } = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_WITH_RM).eq('outlet_id', oid);
-
-  if (error && outletInventoryRmSelectFailed(error)) {
-    const fb = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', oid);
-    data = fb.data;
-    error = fb.error;
-  }
-
-  return { data, error };
-}
-
 function parseCount(raw: string): number | null {
   const n = parseFloat(raw);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
 }
 
-function describePostError(payload: { error?: string; [k: string]: unknown }): string {
+function describePostError(
+  payload: { error?: string; [k: string]: unknown },
+  opts?: { blindSupervisor?: boolean }
+): string {
   const code = payload.error;
   switch (code) {
     case 'not_authenticated_or_inactive':
@@ -145,11 +86,15 @@ function describePostError(payload: { error?: string; [k: string]: unknown }): s
     case 'lines_required':
       return 'Add at least one inventory row (this outlet has no stock lines to count).';
     case 'invalid_line':
-      return 'Each line needs a valid counted quantity (non‑negative number).';
+      return opts?.blindSupervisor
+        ? 'Enter a valid counted quantity on every line.'
+        : 'Each line needs a valid counted quantity (non‑negative number).';
     case 'outlet_inventory_not_found':
       return 'An inventory row no longer matches this outlet — refresh and try again.';
     case 'counted_below_reserved':
-      return 'Counted quantity cannot be below reserved quantity for a line.';
+      return opts?.blindSupervisor
+        ? 'One or more counts are below reserved stock. Adjust counts or contact a supervisor.'
+        : 'Counted quantity cannot be below reserved quantity for a line.';
     case 'duplicate_outlet_inventory_id':
       return 'Duplicate inventory row in submission — refresh and try again.';
     default:
@@ -185,13 +130,13 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
   const [submitting, setSubmitting] = useState(false);
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
-  const [recipeList, setRecipeList] = useState<RecipeMeta[]>([]);
+
+  const blindSupervisor = !!lockedOutletId;
 
   const loadOutletStockTakeData = useCallback(
     async (oid: string) => {
       if (!oid) {
         setRows([]);
-        setRecipeList([]);
         return;
       }
       setLoadingInv(true);
@@ -199,84 +144,43 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
       try {
         if (lockedOutletId) {
-          const [invRes, recipeRes, ringRes] = await Promise.all([
-            fetchOutletInventoryRows(oid),
-            supabase.from('recipes').select('id,name,default_product_batch').order('name'),
-            supabase.from('recipe_ingredients').select('raw_material_id, recipes(name)'),
-          ]);
-
+          const invRes = await fetchOutletInventoryRowsForStockTake(oid, { rmOnly: true });
           if (invRes.error) throw invRes.error;
-          if (recipeRes.error) throw recipeRes.error;
-          if (ringRes.error) throw ringRes.error;
 
           const inv = invRes.data;
 
-          const recipes = (recipeRes.data ?? []) as RecipeMeta[];
-          setRecipeList(recipes);
-
-          const rmToRecipes = new Map<string, string[]>();
-          for (const line of ringRes.data ?? []) {
-            const rid = line.raw_material_id as string | undefined;
-            const nested = line.recipes as { name?: string } | null | undefined;
-            const nm = nested?.name?.trim();
-            if (!rid || !nm) continue;
-            const arr = rmToRecipes.get(rid) ?? [];
-            if (!arr.includes(nm)) arr.push(nm);
-            rmToRecipes.set(rid, arr);
-          }
-          for (const arr of rmToRecipes.values()) arr.sort((a, b) => a.localeCompare(b));
-
-          const recipeNameByBatchNorm = new Map<string, string>();
-          for (const rec of recipes) {
-            const b = normBatch(rec.default_product_batch);
-            if (!b) continue;
-            const key = b.toLowerCase();
-            if (!recipeNameByBatchNorm.has(key)) recipeNameByBatchNorm.set(key, rec.name?.trim() || b);
-          }
-
-          const mapped: DraftRow[] = (inv ?? []).map((r: Record<string, unknown>) => {
-            const qoh = Number(r.quantity_on_hand ?? 0);
-            const res = Number(r.reserved_quantity ?? 0);
-            const lot = r.lot as { product_batch_label?: string | null } | null | undefined;
-            const lotLabel = lot?.product_batch_label?.trim() || '';
-            const av = hubRowAvailableQuantity(qoh, res, r.available_quantity != null ? Number(r.available_quantity) : null);
-            const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
-            const mat = nestedMaterialPayload(r);
-            const pb = normBatch(r.product_batch as string | null | undefined);
-
-            let item_label: string;
-            let item_detail: string;
-            if (rmid) {
-              const nm = [mat?.name?.trim() || 'Ingredient', mat?.unit_of_measure?.trim()].filter(Boolean).join(' · ');
-              item_label = nm;
-              const hint = (rmToRecipes.get(rmid) ?? []).join(', ');
-              item_detail = hint ? `Used in: ${hint}` : '';
-            } else {
-              const recipeName = pb ? recipeNameByBatchNorm.get(pb.toLowerCase()) : undefined;
-              item_label = recipeName ?? (pb || '—');
-              item_detail = recipeName && pb ? `Batch: ${pb}` : '';
-            }
-
-            return {
-              id: String(r.id),
-              raw_material_id: rmid,
-              product_batch: pb || null,
-              lot_label: lotLabel,
-              quantity_on_hand: qoh,
-              reserved_quantity: res,
-              available_quantity: av,
-              item_label,
-              item_detail,
-              countedStr: String(qoh),
-              remark: '',
-            };
-          });
+          const mapped: DraftRow[] = (inv ?? [])
+            .map((r: Record<string, unknown>) => {
+              const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
+              if (!rmid) return null;
+              const qoh = Number(r.quantity_on_hand ?? 0);
+              const res = Number(r.reserved_quantity ?? 0);
+              const lot = r.lot as { product_batch_label?: string | null } | null | undefined;
+              const lotLabel = lot?.product_batch_label?.trim() || '';
+              const av = hubRowAvailableQuantity(qoh, res, r.available_quantity != null ? Number(r.available_quantity) : null);
+              const mat = nestedMaterialPayload(r);
+              const pb = normBatch(r.product_batch as string | null | undefined);
+              const item_label = mat?.name?.trim() || 'Ingredient';
+              return {
+                id: String(r.id),
+                raw_material_id: rmid,
+                product_batch: pb || null,
+                lot_label: lotLabel,
+                quantity_on_hand: qoh,
+                reserved_quantity: res,
+                available_quantity: av,
+                item_label,
+                item_detail: '',
+                countedStr: '',
+                remark: '',
+              };
+            })
+            .filter((x): x is DraftRow => x !== null);
 
           mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
           setRows(mapped);
         } else {
-          setRecipeList([]);
-          const invRes = await fetchOutletInventoryRows(oid);
+          const invRes = await fetchOutletInventoryRowsForStockTake(oid);
           if (invRes.error) throw invRes.error;
 
           const inv = invRes.data;
@@ -319,7 +223,6 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       } catch (e) {
         setMessage({ tone: 'err', text: describeUnknownFetchError('Could not load outlet inventory', e) });
         setRows([]);
-        setRecipeList([]);
       } finally {
         setLoadingInv(false);
       }
@@ -392,13 +295,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       return c !== null && c >= (r.reserved_quantity ?? 0);
     });
 
-  const supervisorPartition = useMemo(() => {
-    if (!lockedOutletId) return null;
-    return partitionSupervisorRows(rows, recipeList);
-  }, [lockedOutletId, rows, recipeList]);
-
   const handleSubmit = async () => {
-    if (!outletId || rows.length === 0) return;
     setSubmitting(true);
     setMessage(null);
     const idem = crypto.randomUUID();
@@ -422,7 +319,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       });
 
       if (!result.success) {
-        setMessage({ tone: 'err', text: describePostError(result as { error?: string }) });
+        setMessage({
+          tone: 'err',
+          text: describePostError(result as { error?: string }, { blindSupervisor }),
+        });
         return;
       }
 
@@ -454,7 +354,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       onApplied?.();
     } catch (e) {
       if ((e as Error).message === 'invalid_counts') {
-        setMessage({ tone: 'err', text: 'Fix invalid counted quantities before submitting.' });
+        setMessage({
+          tone: 'err',
+          text: blindSupervisor ? 'Enter a valid counted quantity on every line before submitting.' : 'Fix invalid counted quantities before submitting.',
+        });
       } else {
         setMessage({ tone: 'err', text: e instanceof Error ? e.message : 'Submit failed.' });
       }
@@ -494,11 +397,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
   const outletName = useMemo(() => outlets.find((o) => o.id === outletId)?.name ?? '', [outlets, outletId]);
 
-  const inventoryColTitle = lockedOutletId ? 'Recipe / ingredient' : 'Batch / ingredient';
+  const inventoryColTitle = blindSupervisor ? 'Ingredient' : 'Batch / ingredient';
 
-  const renderInventoryRows = (subset: DraftRow[]) =>
+  const renderInventoryRows = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
-      const v = varianceOf(r);
+      const v = blind ? null : varianceOf(r);
       const bad = (() => {
         const c = parseCount(r.countedStr);
         if (c === null) return true;
@@ -508,11 +411,15 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
         <tr key={r.id} className={bad ? 'bg-red-50/40' : 'hover:bg-gray-50'}>
           <td className="px-3 py-2 text-gray-900">
             <div className="font-medium">{r.item_label}</div>
-            {r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
+            {!blind && r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
           </td>
-          <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">{r.lot_label || '—'}</td>
-          <td className="px-3 py-2 text-right tabular-nums">{r.quantity_on_hand}</td>
-          <td className="hidden md:table-cell px-3 py-2 text-right tabular-nums text-gray-600">{r.reserved_quantity}</td>
+          {!blind ? (
+            <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">{r.lot_label || '—'}</td>
+          ) : null}
+          {!blind ? <td className="px-3 py-2 text-right tabular-nums">{r.quantity_on_hand}</td> : null}
+          {!blind ? (
+            <td className="hidden md:table-cell px-3 py-2 text-right tabular-nums text-gray-600">{r.reserved_quantity}</td>
+          ) : null}
           <td className="px-3 py-2 text-right">
             <input
               type="number"
@@ -526,9 +433,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
               className="w-24 rounded border border-gray-300 px-2 py-1 text-right text-sm tabular-nums"
             />
           </td>
-          <td className={`px-3 py-2 text-right tabular-nums ${v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'}`}>
-            {v === null ? '—' : v}
-          </td>
+          {!blind ? (
+            <td className={`px-3 py-2 text-right tabular-nums ${v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'}`}>
+              {v === null ? '—' : v}
+            </td>
+          ) : null}
           <td className="px-3 py-2">
             <input
               value={r.remark}
@@ -544,21 +453,25 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       );
     });
 
-  const renderTableShell = (bodyRows: DraftRow[]) => (
+  const renderTableShell = (bodyRows: DraftRow[], blind: boolean) => (
     <div className="overflow-x-auto rounded-lg border border-gray-200">
-      <table className="w-full min-w-[640px] text-sm">
+      <table className={`w-full text-sm ${blind ? 'min-w-[420px]' : 'min-w-[640px]'}`}>
         <thead className="border-b border-gray-200 bg-gray-50">
           <tr>
             <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
-            <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">Lot label</th>
-            <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th>
-            <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-gray-700">Reserved</th>
+            {!blind ? (
+              <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">Lot label</th>
+            ) : null}
+            {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th> : null}
+            {!blind ? (
+              <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-gray-700">Reserved</th>
+            ) : null}
             <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
-            <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th>
+            {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th> : null}
             <th className="px-3 py-2 text-left font-semibold text-gray-700 min-w-[8rem]">Line remark</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows)}</tbody>
+        <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows, blind)}</tbody>
       </table>
     </div>
   );
@@ -572,7 +485,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
         </span>
         <p className="mt-1 text-amber-900/90">
           {lockedOutletId
-            ? 'Count physical stock for your outlet only. Submitting updates on-hand and available on the server and records a session + lines. Counted quantity cannot be below reserved.'
+            ? 'Blind ingredient count only: ingredient names are shown — system quantities, lots, reservations, and variance stay hidden until you export after posting. Finished goods stay on Inventory → Stock take. Enter every counted quantity; invalid or short counts may be rejected when you submit.'
             : 'Count physical stock per outlet inventory row. Submitting updates on-hand and available quantities via the server, writes a session + lines, and records a data ledger entry. Counted quantity cannot be below reserved.'}
         </p>
       </div>
@@ -637,39 +550,20 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           ) : !outletId ? (
             <p className="text-sm text-gray-500">Choose an outlet to load rows.</p>
           ) : rows.length === 0 ? (
-            <p className="text-sm text-amber-800">No outlet inventory rows — receive stock before running a stock take.</p>
+            <p className="text-sm text-amber-800">
+              {lockedOutletId
+                ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
+                : 'No outlet inventory rows — receive stock before running a stock take.'}
+            </p>
           ) : (
             <>
-              {lockedOutletId && supervisorPartition ? (
-                <div className="space-y-8">
-                  {supervisorPartition.sections.map((sec) => (
-                    <div key={sec.key}>
-                      <h3 className="mb-2 text-sm font-semibold text-gray-800">{sec.title}</h3>
-                      {sec.rows.length === 0 ? (
-                        <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                          No finished-goods stock row at this outlet for batch{' '}
-                          <span className="font-mono text-[11px]">{sec.defaultBatch}</span>.
-                        </p>
-                      ) : (
-                        renderTableShell(sec.rows)
-                      )}
-                    </div>
-                  ))}
-                  {supervisorPartition.otherFg.length > 0 ? (
-                    <div>
-                      <h3 className="mb-2 text-sm font-semibold text-gray-800">Other finished goods</h3>
-                      {renderTableShell(supervisorPartition.otherFg)}
-                    </div>
-                  ) : null}
-                  {supervisorPartition.rmRows.length > 0 ? (
-                    <div>
-                      <h3 className="mb-2 text-sm font-semibold text-gray-800">Ingredients at outlet</h3>
-                      {renderTableShell(supervisorPartition.rmRows)}
-                    </div>
-                  ) : null}
+              {lockedOutletId ? (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-800">Ingredients</h3>
+                  {renderTableShell(rows, true)}
                 </div>
               ) : (
-                renderTableShell(rows)
+                renderTableShell(rows, false)
               )}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-xs text-gray-500">

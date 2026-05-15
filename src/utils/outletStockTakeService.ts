@@ -104,6 +104,56 @@ export interface OutletStockTakeSessionDetail extends OutletStockTakeSessionRow 
 /**
  * PostgREST returns these codes when `outlet_inventory` RM column/embed is missing (pre-migration 052).
  */
+const OUTLET_INV_SELECT_WITH_RM = `
+  id,
+  raw_material_id,
+  product_batch,
+  quantity_on_hand,
+  reserved_quantity,
+  available_quantity,
+  lot:inventory_lots ( product_batch_label, expiry_date ),
+  raw_materials ( name, unit_of_measure )
+`;
+
+/** Finished-goods-only fields (pre–052 / failed RM embed). */
+const OUTLET_INV_SELECT_LEGACY = `
+  id,
+  product_batch,
+  quantity_on_hand,
+  reserved_quantity,
+  available_quantity,
+  lot:inventory_lots ( product_batch_label, expiry_date )
+`;
+
+export async function fetchOutletInventoryRowsForStockTake(
+  outletId: string,
+  options?: { rmOnly?: boolean }
+): Promise<{ data: unknown[] | null; error: unknown }> {
+  let q = supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_WITH_RM).eq('outlet_id', outletId);
+  if (options?.rmOnly) {
+    q = q.not('raw_material_id', 'is', null);
+  }
+
+  let { data, error } = await q;
+
+  if (error && outletInventoryRmSelectFailed(error)) {
+    const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+    if (options?.rmOnly) {
+      data = [];
+      error = fr.error ?? null;
+    } else {
+      data = fr.data as unknown[] | null;
+      error = fr.error;
+    }
+  }
+
+  return {
+    data: (data ?? null) as unknown[] | null,
+    error: error ?? null,
+  };
+}
+
+/** PostgREST / schema errors when `outlet_inventory` RM column or embed is unavailable. */
 export function outletInventoryRmSelectFailed(err: unknown): boolean {
   if (err === null || err === undefined) return false;
   const e = err as { message?: string; code?: string; details?: string };
