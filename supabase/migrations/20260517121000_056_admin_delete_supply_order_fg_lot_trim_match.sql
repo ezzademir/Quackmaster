@@ -1,0 +1,203 @@
+/*
+  # admin_delete_supply_order: align FG reversal lookup with receipt
+
+  receive_supply_order credits finished-goods outlet inventory by normalized
+  product_batch and the hub row's lot_id. The delete reversal must use the same
+  key, otherwise it can miss whitespace-skewed batches or subtract from a
+  different lot that happens to share the same batch label.
+
+  Also fail instead of clamping when the received stock has already been sold,
+  wasted, transferred, or reserved; restoring the full hub quantity in that
+  state would create inventory that no longer exists at the outlet.
+*/
+
+CREATE OR REPLACE FUNCTION public.admin_delete_supply_order(p_supply_order_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $fn$
+DECLARE
+  st text;
+  v_outlet_id uuid;
+  rec RECORD;
+  v_rc int;
+  v_oi_id uuid;
+  v_oi_qoh numeric;
+  v_oi_reserved numeric;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  IF NOT public.is_profiles_admin() THEN
+    RAISE EXCEPTION 'Admin privileges required';
+  END IF;
+
+  SELECT status, outlet_id INTO st, v_outlet_id
+  FROM public.supply_orders
+  WHERE id = p_supply_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Supply order not found';
+  END IF;
+
+  IF st = 'pending' THEN
+    FOR rec IN
+      SELECT hub_inventory_id, quantity
+      FROM public.supply_order_lines
+      WHERE supply_order_id = p_supply_order_id
+    LOOP
+      PERFORM public.release_inventory_reservation(rec.hub_inventory_id, rec.quantity, p_supply_order_id);
+    END LOOP;
+
+  ELSIF st = 'dispatched' THEN
+    FOR rec IN
+      SELECT hub_inventory_id, quantity
+      FROM public.supply_order_lines
+      WHERE supply_order_id = p_supply_order_id
+    LOOP
+      UPDATE public.hub_inventory hi
+      SET
+        quantity_on_hand = hi.quantity_on_hand + rec.quantity,
+        available_quantity = hi.quantity_on_hand + rec.quantity - COALESCE(hi.reserved_quantity, 0),
+        last_updated = now(),
+        updated_at = now()
+      WHERE hi.id = rec.hub_inventory_id;
+      GET DIAGNOSTICS v_rc = ROW_COUNT;
+      IF v_rc <> 1 THEN
+        RAISE EXCEPTION 'Hub inventory row missing for reversal (hub_inventory_id=%)', rec.hub_inventory_id;
+      END IF;
+    END LOOP;
+
+  ELSIF st = 'received' THEN
+    FOR rec IN
+      SELECT
+        sol.hub_inventory_id,
+        sol.quantity,
+        NULLIF(trim(both from sol.product_batch), '') AS line_product_batch_norm,
+        hi.raw_material_id AS hub_raw_material_id,
+        NULLIF(trim(both from hi.product_batch), '') AS hub_product_batch_norm,
+        hi.lot_id AS hub_lot_id
+      FROM public.supply_order_lines sol
+      INNER JOIN public.hub_inventory hi ON hi.id = sol.hub_inventory_id
+      WHERE sol.supply_order_id = p_supply_order_id
+    LOOP
+      v_oi_id := NULL;
+      v_oi_qoh := NULL;
+      v_oi_reserved := NULL;
+
+      IF rec.hub_raw_material_id IS NOT NULL THEN
+        SELECT oi.id, oi.quantity_on_hand, COALESCE(oi.reserved_quantity, 0)
+        INTO v_oi_id, v_oi_qoh, v_oi_reserved
+        FROM public.outlet_inventory oi
+        WHERE oi.outlet_id = v_outlet_id
+          AND oi.raw_material_id = rec.hub_raw_material_id
+        ORDER BY oi.updated_at DESC NULLS LAST, oi.id
+        LIMIT 1
+        FOR UPDATE;
+
+        IF v_oi_id IS NULL THEN
+          RAISE EXCEPTION 'Outlet inventory missing for raw material % (outlet %)', rec.hub_raw_material_id, v_outlet_id;
+        END IF;
+      ELSE
+        SELECT oi.id, oi.quantity_on_hand, COALESCE(oi.reserved_quantity, 0)
+        INTO v_oi_id, v_oi_qoh, v_oi_reserved
+        FROM public.outlet_inventory oi
+        WHERE oi.outlet_id = v_outlet_id
+          AND oi.raw_material_id IS NULL
+          AND (
+            (
+              rec.line_product_batch_norm IS NOT NULL
+              AND trim(both from oi.product_batch) = rec.line_product_batch_norm
+            )
+            OR (
+              rec.hub_product_batch_norm IS NOT NULL
+              AND trim(both from oi.product_batch) = rec.hub_product_batch_norm
+            )
+          )
+          AND (oi.lot_id IS NOT DISTINCT FROM rec.hub_lot_id)
+        ORDER BY oi.updated_at DESC NULLS LAST, oi.id
+        LIMIT 1
+        FOR UPDATE;
+
+        IF v_oi_id IS NULL THEN
+          RAISE EXCEPTION 'Outlet inventory missing for batch % lot % (outlet %)',
+            COALESCE(rec.line_product_batch_norm, rec.hub_product_batch_norm),
+            rec.hub_lot_id,
+            v_outlet_id;
+        END IF;
+      END IF;
+
+      IF v_oi_qoh < rec.quantity THEN
+        IF rec.hub_raw_material_id IS NOT NULL THEN
+          RAISE EXCEPTION 'Cannot delete received supply order: outlet raw material % has % on hand, needs % to reverse',
+            rec.hub_raw_material_id,
+            v_oi_qoh,
+            rec.quantity;
+        ELSE
+          RAISE EXCEPTION 'Cannot delete received supply order: outlet batch % lot % has % on hand, needs % to reverse',
+            COALESCE(rec.line_product_batch_norm, rec.hub_product_batch_norm),
+            rec.hub_lot_id,
+            v_oi_qoh,
+            rec.quantity;
+        END IF;
+      END IF;
+
+      IF (v_oi_qoh - rec.quantity) < v_oi_reserved THEN
+        IF rec.hub_raw_material_id IS NOT NULL THEN
+          RAISE EXCEPTION 'Cannot delete received supply order: outlet raw material % would fall below reserved quantity %',
+            rec.hub_raw_material_id,
+            v_oi_reserved;
+        ELSE
+          RAISE EXCEPTION 'Cannot delete received supply order: outlet batch % lot % would fall below reserved quantity %',
+            COALESCE(rec.line_product_batch_norm, rec.hub_product_batch_norm),
+            rec.hub_lot_id,
+            v_oi_reserved;
+        END IF;
+      END IF;
+
+      UPDATE public.outlet_inventory oi
+      SET
+        quantity_on_hand = oi.quantity_on_hand - rec.quantity,
+        available_quantity = (oi.quantity_on_hand - rec.quantity) - COALESCE(oi.reserved_quantity, 0),
+        last_updated = now(),
+        updated_at = now()
+      WHERE oi.id = v_oi_id;
+      GET DIAGNOSTICS v_rc = ROW_COUNT;
+      IF v_rc <> 1 THEN
+        IF rec.hub_raw_material_id IS NOT NULL THEN
+          RAISE EXCEPTION 'Outlet inventory update failed for raw material %', rec.hub_raw_material_id;
+        ELSE
+          RAISE EXCEPTION 'Outlet inventory update failed for batch % lot %',
+            COALESCE(rec.line_product_batch_norm, rec.hub_product_batch_norm),
+            rec.hub_lot_id;
+        END IF;
+      END IF;
+
+      UPDATE public.hub_inventory hi
+      SET
+        quantity_on_hand = hi.quantity_on_hand + rec.quantity,
+        available_quantity = hi.quantity_on_hand + rec.quantity - COALESCE(hi.reserved_quantity, 0),
+        last_updated = now(),
+        updated_at = now()
+      WHERE hi.id = rec.hub_inventory_id;
+      GET DIAGNOSTICS v_rc = ROW_COUNT;
+      IF v_rc <> 1 THEN
+        RAISE EXCEPTION 'Hub inventory row missing for reversal (hub_inventory_id=%)', rec.hub_inventory_id;
+      END IF;
+    END LOOP;
+
+  ELSIF st = 'cancelled' THEN
+    NULL;
+
+  ELSE
+    RAISE EXCEPTION 'Unsupported supply order status for delete: %', st;
+  END IF;
+
+  DELETE FROM public.supply_orders WHERE id = p_supply_order_id;
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.admin_delete_supply_order(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.admin_delete_supply_order(uuid) TO authenticated;
