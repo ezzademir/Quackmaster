@@ -182,7 +182,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           const rmToRecipes = buildRmToRecipes(ringRes.data ?? []);
 
           const mapped: DraftRow[] = (inv ?? [])
-            .map((r: Record<string, unknown>) => {
+            .map((value): DraftRow | null => {
+              const r = value as Record<string, unknown>;
               const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
               if (!rmid) return null;
               const qoh = Number(r.quantity_on_hand ?? 0);
@@ -220,7 +221,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
           const inv = invRes.data;
 
-          const mapped: DraftRow[] = (inv ?? []).map((r: Record<string, unknown>) => {
+          const mapped: DraftRow[] = (inv ?? []).map((value): DraftRow => {
+            const r = value as Record<string, unknown>;
             const qoh = Number(r.quantity_on_hand ?? 0);
             const res = Number(r.reserved_quantity ?? 0);
             const lot = r.lot as { product_batch_label?: string | null } | null | undefined;
