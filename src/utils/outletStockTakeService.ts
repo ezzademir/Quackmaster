@@ -134,7 +134,9 @@ export async function fetchOutletInventoryRowsForStockTake(
     q = q.not('raw_material_id', 'is', null);
   }
 
-  let { data, error } = await q;
+  const initial = await q;
+  let data = initial.data as unknown[] | null;
+  let error: unknown = initial.error;
 
   if (error && outletInventoryRmSelectFailed(error)) {
     const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
