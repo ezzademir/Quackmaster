@@ -175,14 +175,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           if (recipeRes.error) throw recipeRes.error;
           if (ringRes.error) throw ringRes.error;
 
-          const inv = invRes.data;
+          const inv = (invRes.data ?? []) as Record<string, unknown>[];
           const recipes = (recipeRes.data ?? []) as RecipeMeta[];
           setSupervisorRecipeCatalog(recipes);
 
           const rmToRecipes = buildRmToRecipes(ringRes.data ?? []);
 
-          const mapped: DraftRow[] = (inv ?? [])
-            .map((r: Record<string, unknown>) => {
+          const mapped: DraftRow[] = inv
+            .map((r): DraftRow | null => {
               const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
               if (!rmid) return null;
               const qoh = Number(r.quantity_on_hand ?? 0);
@@ -218,9 +218,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
           const invRes = await fetchOutletInventoryRowsForStockTake(oid);
           if (invRes.error) throw invRes.error;
 
-          const inv = invRes.data;
+          const inv = (invRes.data ?? []) as Record<string, unknown>[];
 
-          const mapped: DraftRow[] = (inv ?? []).map((r: Record<string, unknown>) => {
+          const mapped: DraftRow[] = inv.map((r) => {
             const qoh = Number(r.quantity_on_hand ?? 0);
             const res = Number(r.reserved_quantity ?? 0);
             const lot = r.lot as { product_batch_label?: string | null } | null | undefined;
