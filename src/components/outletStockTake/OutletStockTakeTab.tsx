@@ -181,22 +181,23 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
           const rmToRecipes = buildRmToRecipes(ringRes.data ?? []);
 
-          const mapped: DraftRow[] = (inv ?? [])
-            .map((r: Record<string, unknown>) => {
-              const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
-              if (!rmid) return null;
-              const qoh = Number(r.quantity_on_hand ?? 0);
-              const res = Number(r.reserved_quantity ?? 0);
-              const lot = r.lot as { product_batch_label?: string | null } | null | undefined;
-              const lotLabel = lot?.product_batch_label?.trim() || '';
-              const av = hubRowAvailableQuantity(qoh, res, r.available_quantity != null ? Number(r.available_quantity) : null);
-              const mat = nestedMaterialPayload(r);
-              const pb = normBatch(r.product_batch as string | null | undefined);
-              const item_label = mat?.name?.trim() || 'Ingredient';
-              const hint = (rmToRecipes.get(rmid) ?? []).join(', ');
-              const item_detail = hint ? `Used in: ${hint}` : '';
-              return {
-                id: String(r.id),
+          const mapped: DraftRow[] = (inv ?? []).flatMap((r: unknown) => {
+            const row = r as Record<string, unknown>;
+            const rmid = row.raw_material_id ? String(row.raw_material_id) : null;
+            if (!rmid) return [];
+            const qoh = Number(row.quantity_on_hand ?? 0);
+            const res = Number(row.reserved_quantity ?? 0);
+            const lot = row.lot as { product_batch_label?: string | null } | null | undefined;
+            const lotLabel = lot?.product_batch_label?.trim() || '';
+            const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
+            const mat = nestedMaterialPayload(row);
+            const pb = normBatch(row.product_batch as string | null | undefined);
+            const item_label = mat?.name?.trim() || 'Ingredient';
+            const hint = (rmToRecipes.get(rmid) ?? []).join(', ');
+            const item_detail = hint ? `Used in: ${hint}` : '';
+            return [
+              {
+                id: String(row.id),
                 raw_material_id: rmid,
                 product_batch: pb || null,
                 lot_label: lotLabel,
@@ -207,9 +208,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
                 item_detail,
                 countedStr: '',
                 remark: '',
-              };
-            })
-            .filter((x): x is DraftRow => x !== null);
+              } satisfies DraftRow,
+            ];
+          });
 
           mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
           setRows(mapped);
@@ -220,15 +221,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
 
           const inv = invRes.data;
 
-          const mapped: DraftRow[] = (inv ?? []).map((r: Record<string, unknown>) => {
-            const qoh = Number(r.quantity_on_hand ?? 0);
-            const res = Number(r.reserved_quantity ?? 0);
-            const lot = r.lot as { product_batch_label?: string | null } | null | undefined;
+          const mapped: DraftRow[] = (inv ?? []).map((r: unknown) => {
+            const row = r as Record<string, unknown>;
+            const qoh = Number(row.quantity_on_hand ?? 0);
+            const res = Number(row.reserved_quantity ?? 0);
+            const lot = row.lot as { product_batch_label?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
-            const av = hubRowAvailableQuantity(qoh, res, r.available_quantity != null ? Number(r.available_quantity) : null);
-            const rmid = r.raw_material_id ? String(r.raw_material_id) : null;
-            const mat = nestedMaterialPayload(r);
-            const pb = normBatch(r.product_batch as string | null | undefined);
+            const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
+            const rmid = row.raw_material_id ? String(row.raw_material_id) : null;
+            const mat = nestedMaterialPayload(row);
+            const pb = normBatch(row.product_batch as string | null | undefined);
             let item_label: string;
             let item_detail: string;
             if (rmid) {
@@ -239,7 +241,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
               item_detail = '';
             }
             return {
-              id: String(r.id),
+              id: String(row.id),
               raw_material_id: rmid,
               product_batch: pb || null,
               lot_label: lotLabel,

@@ -134,7 +134,9 @@ export async function fetchOutletInventoryRowsForStockTake(
     q = q.not('raw_material_id', 'is', null);
   }
 
-  let { data, error } = await q;
+  const first = await q;
+  let data: unknown[] | null = (first.data as unknown[] | undefined) ?? null;
+  let error: unknown = first.error ?? null;
 
   if (error && outletInventoryRmSelectFailed(error)) {
     const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
@@ -142,13 +144,13 @@ export async function fetchOutletInventoryRowsForStockTake(
       data = [];
       error = fr.error ?? null;
     } else {
-      data = fr.data as unknown[] | null;
+      data = (fr.data as unknown[] | undefined) ?? null;
       error = fr.error;
     }
   }
 
   return {
-    data: (data ?? null) as unknown[] | null,
+    data,
     error: error ?? null,
   };
 }

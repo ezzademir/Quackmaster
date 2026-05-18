@@ -74,7 +74,7 @@ function SupplierModal({
 
   useEffect(() => {
     setSelectedMaterialIds(new Set(initialLinkedMaterialIds));
-  }, [supplier?.id, initialLinkedMaterialIds.join('|')]);
+  }, [supplier?.id, initialLinkedMaterialIds]);
 
   function toggleMaterialLink(id: string) {
     setSelectedMaterialIds((prev) => {
@@ -1089,6 +1089,13 @@ export function Procurement() {
     return (supplierId: string) => map.get(supplierId) ?? [];
   }, [supplierMaterialLinks, materials]);
 
+  const supplierModalInitialLinkedMaterialIds = useMemo(() => {
+    if (!editSupplier || typeof editSupplier !== 'object') return [];
+    return supplierMaterialLinks
+      .filter((l) => l.supplier_id === editSupplier.id)
+      .map((l) => l.raw_material_id);
+  }, [editSupplier, supplierMaterialLinks]);
+
   async function loadAll() {
     setLoading(true);
     const [{ data: sups }, { data: mats }, { data: pos }, { data: links }] = await Promise.all([
@@ -1507,11 +1514,7 @@ export function Procurement() {
         <SupplierModal
           supplier={editSupplier && typeof editSupplier === 'object' ? editSupplier : null}
           allMaterials={materials}
-          initialLinkedMaterialIds={
-            editSupplier && typeof editSupplier === 'object'
-              ? supplierMaterialLinks.filter((l) => l.supplier_id === editSupplier.id).map((l) => l.raw_material_id)
-              : []
-          }
+          initialLinkedMaterialIds={supplierModalInitialLinkedMaterialIds}
           onClose={() => setShowSupplierModal(false)}
           onSave={() => { setShowSupplierModal(false); loadAll(); }}
           onDelete={
