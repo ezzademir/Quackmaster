@@ -133,28 +133,23 @@ function SupplierModal({
         metadata: { entity_label: form.name },
       });
 
-      const { error: delLinkErr } = await retryWithBackoff(
-        async () => await supabase.from('supplier_raw_materials').delete().eq('supplier_id', createdSupplierId)
+      const { data: linkSync, error: linkSyncErr } = await retryWithBackoff(
+        async () => await supabase.rpc('sync_supplier_raw_materials', {
+          p_supplier_id: createdSupplierId,
+          p_raw_material_ids: Array.from(selectedMaterialIds),
+        })
       );
-      if (delLinkErr) {
-        setError(delLinkErr.message);
+      if (linkSyncErr) {
+        setError(linkSyncErr.message);
         setSaving(false);
         return;
       }
 
-      const linkRows = Array.from(selectedMaterialIds).map((raw_material_id) => ({
-        supplier_id: createdSupplierId,
-        raw_material_id,
-      }));
-      if (linkRows.length > 0) {
-        const { error: insLinkErr } = await retryWithBackoff(
-          async () => await supabase.from('supplier_raw_materials').insert(linkRows)
-        );
-        if (insLinkErr) {
-          setError(insLinkErr.message);
-          setSaving(false);
-          return;
-        }
+      const linkSyncPayload = linkSync as { success?: boolean; error?: string; message?: string } | null;
+      if (!linkSyncPayload?.success) {
+        setError(linkSyncPayload?.message ?? linkSyncPayload?.error ?? 'Failed to save supplier material links');
+        setSaving(false);
+        return;
       }
 
       setSaving(false);
