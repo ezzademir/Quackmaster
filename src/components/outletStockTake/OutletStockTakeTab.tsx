@@ -115,6 +115,8 @@ function describePostError(
         : 'Counted quantity cannot be below reserved quantity for a line.';
     case 'duplicate_outlet_inventory_id':
       return 'Duplicate inventory row in submission — refresh and try again.';
+    case 'supervisor_finished_goods_not_allowed':
+      return 'Supervisors can only post ingredient stock takes. Refresh this screen and try again.';
     default:
       return typeof code === 'string' ? code : 'Stock take could not be posted.';
   }

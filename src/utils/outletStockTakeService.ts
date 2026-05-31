@@ -115,6 +115,17 @@ const OUTLET_INV_SELECT_WITH_RM = `
   raw_materials ( name, unit_of_measure )
 `;
 
+/** Same RM-aware fields without the relationship embed, used when PostgREST's schema cache has a stale FK graph. */
+const OUTLET_INV_SELECT_WITH_RM_COLUMN = `
+  id,
+  raw_material_id,
+  product_batch,
+  quantity_on_hand,
+  reserved_quantity,
+  available_quantity,
+  lot:inventory_lots ( product_batch_label, expiry_date )
+`;
+
 /** Finished-goods-only fields (pre–052 / failed RM embed). */
 const OUTLET_INV_SELECT_LEGACY = `
   id,
@@ -139,13 +150,27 @@ export async function fetchOutletInventoryRowsForStockTake(
   let error: unknown = first.error ?? null;
 
   if (error && outletInventoryRmSelectFailed(error)) {
-    const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+    let columnFallback = supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_WITH_RM_COLUMN).eq('outlet_id', outletId);
     if (options?.rmOnly) {
-      data = [];
-      error = fr.error ?? null;
+      columnFallback = columnFallback.not('raw_material_id', 'is', null);
+    }
+    const cfr = await columnFallback;
+
+    if (!cfr.error) {
+      data = (cfr.data as unknown[] | undefined) ?? null;
+      error = null;
+    } else if (outletInventoryRmSelectFailed(cfr.error)) {
+      if (options?.rmOnly) {
+        data = [];
+        error = null;
+      } else {
+        const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+        data = (fr.data as unknown[] | undefined) ?? null;
+        error = fr.error;
+      }
     } else {
-      data = (fr.data as unknown[] | undefined) ?? null;
-      error = fr.error;
+      data = (cfr.data as unknown[] | undefined) ?? null;
+      error = cfr.error;
     }
   }
 

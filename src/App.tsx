@@ -105,8 +105,11 @@ function ProtectedShell() {
       <LoadingScreen subtitle="Loading your profile from the server. If this hangs, check your connection or Supabase status." />
     );
   }
+  if (!profile) {
+    return <LoadingScreen subtitle="We could not load your profile. Refresh or sign in again before continuing." />;
+  }
 
-  const role = profile?.role?.toLowerCase?.()?.trim();
+  const role = profile.role?.toLowerCase?.()?.trim();
   if (role === 'pending') return <PendingApproval />;
 
   const needsPasswordReset = Boolean(profile?.password_reset_required);
