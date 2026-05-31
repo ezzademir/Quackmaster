@@ -169,7 +169,7 @@ export async function fetchOutletInventoryRowsForStockTake(
         error = fr.error;
       }
     } else {
-      data = (cfr.data as unknown[] | undefined) ?? null;
+      data = null;
       error = cfr.error;
     }
   }
