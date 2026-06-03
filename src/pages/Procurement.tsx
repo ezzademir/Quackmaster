@@ -123,6 +123,42 @@ function SupplierModal({
         return;
       }
 
+      const selectedIds = Array.from(selectedMaterialIds);
+      const linkRows = selectedIds.map((raw_material_id) => ({
+        supplier_id: createdSupplierId,
+        raw_material_id,
+      }));
+      if (linkRows.length > 0) {
+        const { error: upsertLinkErr } = await retryWithBackoff(
+          async () =>
+            await supabase
+              .from('supplier_raw_materials')
+              .upsert(linkRows, { onConflict: 'supplier_id,raw_material_id', ignoreDuplicates: true })
+        );
+        if (upsertLinkErr) {
+          setError(upsertLinkErr.message);
+          setSaving(false);
+          return;
+        }
+      }
+
+      const removedMaterialIds = initialLinkedMaterialIds.filter((id) => !selectedMaterialIds.has(id));
+      if (removedMaterialIds.length > 0) {
+        const { error: delLinkErr } = await retryWithBackoff(
+          async () =>
+            await supabase
+              .from('supplier_raw_materials')
+              .delete()
+              .eq('supplier_id', createdSupplierId)
+              .in('raw_material_id', removedMaterialIds)
+        );
+        if (delLinkErr) {
+          setError(delLinkErr.message);
+          setSaving(false);
+          return;
+        }
+      }
+
       await writeLedgerEntry({
         action: supplier ? 'updated' : 'created',
         entityType: 'supplier',
@@ -132,30 +168,6 @@ function SupplierModal({
         afterData: form,
         metadata: { entity_label: form.name },
       });
-
-      const { error: delLinkErr } = await retryWithBackoff(
-        async () => await supabase.from('supplier_raw_materials').delete().eq('supplier_id', createdSupplierId)
-      );
-      if (delLinkErr) {
-        setError(delLinkErr.message);
-        setSaving(false);
-        return;
-      }
-
-      const linkRows = Array.from(selectedMaterialIds).map((raw_material_id) => ({
-        supplier_id: createdSupplierId,
-        raw_material_id,
-      }));
-      if (linkRows.length > 0) {
-        const { error: insLinkErr } = await retryWithBackoff(
-          async () => await supabase.from('supplier_raw_materials').insert(linkRows)
-        );
-        if (insLinkErr) {
-          setError(insLinkErr.message);
-          setSaving(false);
-          return;
-        }
-      }
 
       setSaving(false);
       onSave();

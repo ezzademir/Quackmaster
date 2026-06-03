@@ -237,8 +237,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function refetchProfile() {
     if (session?.user) {
-      await defer(0);
-      await fetchProfile(session.user.id);
+      setProfileLoading(true);
+      try {
+        await defer(0);
+        await fetchProfile(session.user.id);
+      } finally {
+        setProfileLoading(false);
+      }
     }
   }
 

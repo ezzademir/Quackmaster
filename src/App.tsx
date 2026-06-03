@@ -40,6 +40,45 @@ function LoadingScreen({ subtitle }: { subtitle?: string }) {
   );
 }
 
+function ProfileUnavailableScreen({
+  onRetry,
+  onSignOut,
+}: {
+  onRetry: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="flex min-h-dvh items-center justify-center bg-gray-50 auth-safe-padding">
+      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-600 text-xl font-bold text-white">
+          !
+        </div>
+        <h1 className="text-lg font-semibold text-gray-900">Unable to load your profile</h1>
+        <p className="mt-3 text-sm leading-6 text-gray-600">
+          We could not confirm your account role or password status. Retry when your connection is stable, or sign
+          out and sign in again.
+        </p>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginRoute() {
   const { session, loading } = useAuth();
   if (loading) return <LoadingScreen />;
@@ -95,7 +134,7 @@ function LayoutShell() {
 }
 
 function ProtectedShell() {
-  const { session, loading, profileLoading, profile } = useAuth();
+  const { session, loading, profileLoading, profile, refetchProfile, signOut } = useAuth();
   const location = useLocation();
 
   if (loading) return <LoadingScreen />;
@@ -104,6 +143,9 @@ function ProtectedShell() {
     return (
       <LoadingScreen subtitle="Loading your profile from the server. If this hangs, check your connection or Supabase status." />
     );
+  }
+  if (!profile) {
+    return <ProfileUnavailableScreen onRetry={() => void refetchProfile()} onSignOut={() => void signOut()} />;
   }
 
   const role = profile?.role?.toLowerCase?.()?.trim();
