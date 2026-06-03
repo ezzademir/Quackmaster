@@ -232,9 +232,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function signOut() {
-    await supabase.auth.signOut();
-    // Force navigation to login by replacing current location
-    window.location.replace(window.location.origin + window.location.pathname + '#/login');
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Sign out failed:', error);
+      }
+    } catch (e) {
+      console.error('Sign out failed:', e);
+    } finally {
+      setSession(null);
+      setProfile(null);
+      setProfileLoading(false);
+      setLoading(false);
+    }
   }
 
   async function refetchProfile() {

@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { HashRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
@@ -136,19 +136,6 @@ function LayoutShell() {
 function ProtectedShell() {
   const { session, loading, profileLoading, profile, refetchProfile, signOut } = useAuth();
   const location = useLocation();
-  const navigate = useNavigate();
-
-  async function handleSignOut() {
-    console.log('[DEBUG] handleSignOut called');
-    try {
-      await signOut();
-      console.log('[DEBUG] signOut completed, redirecting to /login');
-      window.location.href = `${window.location.origin}${window.location.pathname}#/login`;
-    } catch (error) {
-      console.error('[DEBUG] signOut error:', error);
-      window.location.href = `${window.location.origin}${window.location.pathname}#/login`;
-    }
-  }
 
   if (loading) return <LoadingScreen />;
   if (!session) return <Navigate to="/login" replace />;
@@ -158,7 +145,7 @@ function ProtectedShell() {
     );
   }
   if (!profile) {
-    return <ProfileUnavailableScreen onRetry={() => void refetchProfile()} onSignOut={handleSignOut} />;
+    return <ProfileUnavailableScreen onRetry={() => void refetchProfile()} onSignOut={() => void signOut()} />;
   }
 
   const role = profile?.role?.toLowerCase?.()?.trim();
