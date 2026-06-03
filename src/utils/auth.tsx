@@ -233,6 +233,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signOut() {
     await supabase.auth.signOut();
+    // Force navigation to login by replacing current location
+    window.location.replace(window.location.origin + window.location.pathname + '#/login');
   }
 
   async function refetchProfile() {
