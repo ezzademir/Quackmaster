@@ -436,6 +436,8 @@ function rpcCancelPoErrorMessage(code: string | undefined): string {
   switch (code) {
     case 'not_authenticated':
       return 'You must be signed in to cancel a purchase order.';
+    case 'admin_required':
+      return 'Only administrators can cancel and delete received purchase orders.';
     case 'insufficient_hub_quantity':
       return 'Cannot cancel: hub no longer holds enough quantity to undo receipts (inventory may have been used). Reduce usage or reverse manually before deleting.';
     case 'hub_below_reserved':
