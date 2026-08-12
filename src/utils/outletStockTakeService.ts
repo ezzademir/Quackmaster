@@ -116,7 +116,22 @@ const OUTLET_INV_SELECT_WITH_RM = `
   raw_materials ( name, unit_of_measure )
 `;
 
-/** Finished-goods-only fields (pre–052 / failed RM embed). */
+/**
+ * Column present (post-052) but without `raw_materials` embed — used when the
+ * embed/relationship fails while `raw_material_id` still exists.
+ */
+const OUTLET_INV_SELECT_WITH_RM_ID = `
+  id,
+  raw_material_id,
+  product_batch,
+  quantity_on_hand,
+  reserved_quantity,
+  available_quantity,
+  created_at,
+  lot:inventory_lots ( product_batch_label, expiry_date )
+`;
+
+/** Finished-goods-only fields (pre–052 / no raw_material_id column). */
 const OUTLET_INV_SELECT_LEGACY = `
   id,
   product_batch,
@@ -143,19 +158,33 @@ export async function fetchOutletInventoryRowsForStockTake(
   let error: unknown = first.error ?? null;
 
   if (error && outletInventoryRmSelectFailed(error)) {
-    const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+    // Prefer filtering by raw_material_id without the embed so fgOnly cannot
+    // accidentally include ingredient rows when only the relationship is broken.
+    let mid = supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_WITH_RM_ID).eq('outlet_id', outletId);
     if (options?.rmOnly) {
-      data = [];
-      error = fr.error ?? null;
+      mid = mid.not('raw_material_id', 'is', null);
     } else if (options?.fgOnly) {
-      data = ((fr.data as unknown[] | undefined) ?? []).filter((r) => {
-        const row = r as { raw_material_id?: string | null };
-        return row.raw_material_id == null;
-      });
-      error = fr.error;
+      mid = mid.is('raw_material_id', null);
+    }
+    const midRes = await mid;
+
+    if (!midRes.error) {
+      data = (midRes.data as unknown[] | undefined) ?? null;
+      error = null;
+    } else if (outletInventoryRmSelectFailed(midRes.error)) {
+      // Pre-052: no raw_material_id column — all rows are finished goods.
+      const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+      if (options?.rmOnly) {
+        data = [];
+        error = fr.error ?? null;
+      } else {
+        // fgOnly and unfiltered: legacy rows are FG-only on pre-052 schemas.
+        data = (fr.data as unknown[] | undefined) ?? null;
+        error = fr.error ?? null;
+      }
     } else {
-      data = (fr.data as unknown[] | undefined) ?? null;
-      error = fr.error;
+      data = null;
+      error = midRes.error;
     }
   }
 
@@ -340,8 +369,13 @@ export function groupRowsForSkuCount(rows: SkuCountLotRow[]): SkuCountGroup[] {
 
 /**
  * Allocate a SKU counted total onto lot rows FIFO by expiry then created_at.
- * Shortfall zeros earlier lots then applies remainder (may go below reserved — caller validates).
- * Surplus lands on the last lot.
+ *
+ * Each lot is floored at its reserved_quantity so SKU posts cannot push a lot
+ * below reserved (RPC rejects counted_below_reserved). Extra units fill older
+ * lots up to current QoH first; any surplus beyond sum(QoH) lands on the last lot.
+ *
+ * Caller must ensure countedTotal >= sum(reserved); otherwise the last lot may
+ * still land below reserved and the RPC will reject the post.
  */
 export function allocateSkuCountToLots(
   lots: SkuCountLotRow[],
@@ -356,19 +390,26 @@ export function allocateSkuCountToLots(
     return ac - bc;
   });
 
-  let remaining = Math.max(0, countedTotal);
+  if (sorted.length === 0) return [];
+
+  const floors = sorted.map((lot) => Math.max(0, Number(lot.reserved_quantity ?? 0)));
+  const floorSum = floors.reduce((sum, n) => sum + n, 0);
+  let remaining = Math.max(0, countedTotal) - floorSum;
+
   const out: Array<{ outlet_inventory_id: string; counted_qty: number }> = [];
 
   for (let i = 0; i < sorted.length; i++) {
     const lot = sorted[i];
+    const floor = floors[i];
     const isLast = i === sorted.length - 1;
     if (isLast) {
-      out.push({ outlet_inventory_id: lot.id, counted_qty: remaining });
+      out.push({ outlet_inventory_id: lot.id, counted_qty: floor + remaining });
       remaining = 0;
     } else {
-      const take = Math.min(remaining, Math.max(0, Number(lot.quantity_on_hand ?? 0)));
-      out.push({ outlet_inventory_id: lot.id, counted_qty: take });
-      remaining -= take;
+      const capacityAboveFloor = Math.max(0, Number(lot.quantity_on_hand ?? 0) - floor);
+      const extra = Math.max(0, Math.min(remaining, capacityAboveFloor));
+      out.push({ outlet_inventory_id: lot.id, counted_qty: floor + extra });
+      remaining -= extra;
     }
   }
 
