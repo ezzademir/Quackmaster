@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { Outlet } from '../types';
 import { OutletStockTakeTab } from '../components/outletStockTake/OutletStockTakeTab';
+import { CloseDayChecklist } from '../components/CloseDayChecklist';
 import { useAuth } from '../utils/auth';
 import { supabase } from '../utils/supabase';
 
@@ -80,10 +81,15 @@ export function StockTake() {
         <h1 className="text-xl font-bold leading-tight text-gray-900 sm:text-2xl">Outlet stock take</h1>
         <p className="mt-1.5 text-xs leading-relaxed text-gray-500 sm:text-sm">
           {isSupervisor
-            ? `${outlets[0]?.name ?? 'Your outlet'} · count and post for your outlet only.`
+            ? `${outlets[0]?.name ?? 'Your outlet'} · count ingredients and finished goods (blind) for your outlet.`
             : 'Choose an outlet to load rows, count physical stock, and post adjustments.'}
         </p>
       </div>
+      {isSupervisor && lockedId ? (
+        <CloseDayChecklist outletId={lockedId} singleOutlet compact />
+      ) : (
+        <CloseDayChecklist compact />
+      )}
       <OutletStockTakeTab outlets={outlets} lockedOutletId={lockedId} initialOutletId={initialOutletId} />
     </div>
   );

@@ -111,6 +111,7 @@ const OUTLET_INV_SELECT_WITH_RM = `
   quantity_on_hand,
   reserved_quantity,
   available_quantity,
+  created_at,
   lot:inventory_lots ( product_batch_label, expiry_date ),
   raw_materials ( name, unit_of_measure )
 `;
@@ -122,16 +123,19 @@ const OUTLET_INV_SELECT_LEGACY = `
   quantity_on_hand,
   reserved_quantity,
   available_quantity,
+  created_at,
   lot:inventory_lots ( product_batch_label, expiry_date )
 `;
 
 export async function fetchOutletInventoryRowsForStockTake(
   outletId: string,
-  options?: { rmOnly?: boolean }
+  options?: { rmOnly?: boolean; fgOnly?: boolean }
 ): Promise<{ data: unknown[] | null; error: unknown }> {
   let q = supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_WITH_RM).eq('outlet_id', outletId);
   if (options?.rmOnly) {
     q = q.not('raw_material_id', 'is', null);
+  } else if (options?.fgOnly) {
+    q = q.is('raw_material_id', null);
   }
 
   const first = await q;
@@ -143,6 +147,12 @@ export async function fetchOutletInventoryRowsForStockTake(
     if (options?.rmOnly) {
       data = [];
       error = fr.error ?? null;
+    } else if (options?.fgOnly) {
+      data = ((fr.data as unknown[] | undefined) ?? []).filter((r) => {
+        const row = r as { raw_material_id?: string | null };
+        return row.raw_material_id == null;
+      });
+      error = fr.error;
     } else {
       data = (fr.data as unknown[] | undefined) ?? null;
       error = fr.error;
@@ -280,4 +290,87 @@ export function buildOutletStockTakeCsv(
   );
 
   return [header.join(','), ...rows.map((r) => r.join(','))].join('\n');
+}
+
+export interface SkuCountLotRow {
+  id: string;
+  raw_material_id: string | null;
+  product_batch: string | null;
+  quantity_on_hand: number;
+  reserved_quantity: number;
+  expiry_date?: string | null;
+  created_at?: string | null;
+  item_label?: string;
+}
+
+export interface SkuCountGroup {
+  key: string;
+  label: string;
+  kind: 'fg' | 'rm';
+  system_qoh: number;
+  reserved: number;
+  lots: SkuCountLotRow[];
+}
+
+/** Group lot rows by finished-goods product_batch or raw_material_id. */
+export function groupRowsForSkuCount(rows: SkuCountLotRow[]): SkuCountGroup[] {
+  const map = new Map<string, SkuCountGroup>();
+  for (const row of rows) {
+    const isRm = !!row.raw_material_id;
+    const key = isRm ? `rm:${row.raw_material_id}` : `fg:${(row.product_batch ?? '').trim()}`;
+    if (!key || key === 'fg:' || key === 'rm:') continue;
+    const existing = map.get(key);
+    if (existing) {
+      existing.system_qoh += Number(row.quantity_on_hand ?? 0);
+      existing.reserved += Number(row.reserved_quantity ?? 0);
+      existing.lots.push(row);
+    } else {
+      map.set(key, {
+        key,
+        label: isRm ? row.item_label || row.raw_material_id || key : (row.product_batch ?? '').trim() || key,
+        kind: isRm ? 'rm' : 'fg',
+        system_qoh: Number(row.quantity_on_hand ?? 0),
+        reserved: Number(row.reserved_quantity ?? 0),
+        lots: [row],
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/**
+ * Allocate a SKU counted total onto lot rows FIFO by expiry then created_at.
+ * Shortfall zeros earlier lots then applies remainder (may go below reserved — caller validates).
+ * Surplus lands on the last lot.
+ */
+export function allocateSkuCountToLots(
+  lots: SkuCountLotRow[],
+  countedTotal: number
+): Array<{ outlet_inventory_id: string; counted_qty: number }> {
+  const sorted = [...lots].sort((a, b) => {
+    const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+    const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+    if (ae !== be) return ae - be;
+    const ac = a.created_at ? Date.parse(a.created_at) : 0;
+    const bc = b.created_at ? Date.parse(b.created_at) : 0;
+    return ac - bc;
+  });
+
+  let remaining = Math.max(0, countedTotal);
+  const out: Array<{ outlet_inventory_id: string; counted_qty: number }> = [];
+
+  for (let i = 0; i < sorted.length; i++) {
+    const lot = sorted[i];
+    const isLast = i === sorted.length - 1;
+    if (isLast) {
+      out.push({ outlet_inventory_id: lot.id, counted_qty: remaining });
+      remaining = 0;
+    } else {
+      const take = Math.min(remaining, Math.max(0, Number(lot.quantity_on_hand ?? 0)));
+      out.push({ outlet_inventory_id: lot.id, counted_qty: take });
+      remaining -= take;
+    }
+  }
+
+  return out;
 }

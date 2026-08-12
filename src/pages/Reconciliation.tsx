@@ -7,12 +7,14 @@ import type { Outlet } from '../types';
 import type { DateRange } from '../utils/dateRange';
 import {
   reconcileOutletStock,
+  reconcileOutletStockBySku,
   getOutletBalanceAsOf,
   fetchOutletMovements,
   movementsToCsv,
   defaultReconcileRange,
   type ReconcileOutletStockResult,
   type BalanceAsOfResult,
+  type SkuReconcileRow,
 } from '../utils/reconciliationService';
 import { formatDateForInput } from '../utils/dateRange';
 
@@ -64,6 +66,8 @@ export function Reconciliation() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ReconcileOutletStockResult | null>(null);
   const [asOfResult, setAsOfResult] = useState<BalanceAsOfResult | null>(null);
+  const [skuRows, setSkuRows] = useState<SkuReconcileRow[]>([]);
+  const [selectedSku, setSelectedSku] = useState<SkuReconcileRow | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -79,7 +83,7 @@ export function Reconciliation() {
     setError(null);
     setLoading(true);
     try {
-      const [recon, asOf] = await Promise.all([
+      const [recon, asOf, bySku] = await Promise.all([
         reconcileOutletStock({
           outletId,
           from: dateRange.start,
@@ -91,10 +95,18 @@ export function Reconciliation() {
           asOf: new Date(asOfDate + 'T12:00:00'),
           includeRawMaterials: includeRm,
         }),
+        reconcileOutletStockBySku({
+          outletId,
+          from: dateRange.start,
+          to: dateRange.end,
+          includeRawMaterials: includeRm,
+        }),
       ]);
       if (!recon.success) throw new Error(recon.error ?? 'Reconciliation failed');
       setResult(recon);
       setAsOfResult(asOf.success ? asOf : null);
+      setSkuRows(bySku.success ? bySku.rows ?? [] : []);
+      setSelectedSku(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load reconciliation');
       setResult(null);
@@ -279,6 +291,77 @@ export function Reconciliation() {
               )}
             </div>
           </div>
+
+          {skuRows.length > 0 && (
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-900">By SKU / material</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Per-product equation — click a row to focus. Unexplained variance uses that SKU only (same units).
+              </p>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead className="border-b bg-gray-50 text-left">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-gray-700">Item</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-700">Opening</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-700">Net moves</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-700">Computed</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-700">Live</th>
+                      <th className="px-3 py-2 text-right font-medium text-gray-700">Unexplained</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {skuRows.map((row) => {
+                      const net =
+                        Number(row.supply_in) +
+                        Number(row.transfers_in) +
+                        Number(row.transfers_out) +
+                        Number(row.sales) +
+                        Number(row.waste) +
+                        Number(row.stock_take_adjustments) +
+                        Number(row.reversals);
+                      const bad = Math.abs(Number(row.unexplained_variance)) > 0.001;
+                      return (
+                        <tr
+                          key={row.sku_key}
+                          className={`cursor-pointer hover:bg-teal-50/50 ${selectedSku?.sku_key === row.sku_key ? 'bg-teal-50' : ''}`}
+                          onClick={() => setSelectedSku(row)}
+                        >
+                          <td className="px-3 py-2 font-medium text-gray-900">
+                            {row.label}
+                            <span className="ml-2 text-[10px] uppercase text-gray-400">{row.kind}</span>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmt(row.opening_qoh)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmt(net)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmt(row.computed_closing)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmt(row.live_on_hand)}</td>
+                          <td
+                            className={`px-3 py-2 text-right tabular-nums font-semibold ${
+                              bad ? 'text-amber-800' : 'text-gray-600'
+                            }`}
+                          >
+                            {fmt(row.unexplained_variance)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {selectedSku && (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <MovementRow label="Supply in" value={Number(selectedSku.supply_in)} />
+                  <MovementRow label="Transfers in" value={Number(selectedSku.transfers_in)} />
+                  <MovementRow label="Transfers out" value={Number(selectedSku.transfers_out)} />
+                  <MovementRow label="Sales" value={Number(selectedSku.sales)} />
+                  <MovementRow label="Waste" value={Number(selectedSku.waste)} />
+                  <MovementRow label="Stock take" value={Number(selectedSku.stock_take_adjustments)} />
+                  <MovementRow label="Reversals" value={Number(selectedSku.reversals)} />
+                  <MovementRow label="Unexplained" value={Number(selectedSku.unexplained_variance)} emphasize />
+                </div>
+              )}
+            </div>
+          )}
         </>
       ) : null}
     </div>

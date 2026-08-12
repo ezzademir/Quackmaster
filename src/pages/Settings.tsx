@@ -6,6 +6,16 @@ import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { fetchQCAuditCriteria, saveQCAuditCriteria } from '../utils/qcSettings';
 import { downloadCsv } from '../utils/exportCsv';
+import {
+  fetchStockTakeVarianceThreshold,
+  saveStockTakeVarianceThreshold,
+} from '../utils/stockTakeSettings';
+import {
+  deleteOutletPar,
+  listOutletPar,
+  upsertOutletPar,
+  type OutletParRow,
+} from '../utils/parService';
 
 export function Settings() {
   const { refetchProfile, isAdmin } = useAuth();
@@ -18,6 +28,16 @@ export function Settings() {
   const [qcSaving, setQcSaving] = useState(false);
   const [qcNotice, setQcNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [exportBusy, setExportBusy] = useState<string | null>(null);
+  const [stThreshold, setStThreshold] = useState('5');
+  const [stSaving, setStSaving] = useState(false);
+  const [stNotice, setStNotice] = useState<string | null>(null);
+  const [parOutlets, setParOutlets] = useState<{ id: string; name: string }[]>([]);
+  const [parOutletId, setParOutletId] = useState('');
+  const [parRows, setParRows] = useState<OutletParRow[]>([]);
+  const [parKey, setParKey] = useState('');
+  const [parTarget, setParTarget] = useState('0');
+  const [parSafety, setParSafety] = useState('0');
+  const [parMsg, setParMsg] = useState<string | null>(null);
 
   async function exportTableCsv(table: string, filename: string) {
     setExportBusy(table);
@@ -68,10 +88,33 @@ export function Settings() {
       .finally(() => {
         if (!cancelled) setQcLoading(false);
       });
+
+    void fetchStockTakeVarianceThreshold().then((t) => {
+      if (!cancelled) setStThreshold(String(t));
+    });
+
+    void supabase
+      .from('outlets')
+      .select('id, name')
+      .order('name')
+      .then(({ data }) => {
+        if (cancelled) return;
+        const list = (data ?? []) as { id: string; name: string }[];
+        setParOutlets(list);
+        setParOutletId((prev) => prev || list[0]?.id || '');
+      });
+
     return () => {
       cancelled = true;
     };
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin || !parOutletId) return;
+    void listOutletPar(parOutletId)
+      .then(setParRows)
+      .catch(() => setParRows([]));
+  }, [isAdmin, parOutletId]);
 
   useEffect(() => {
     const q = new URLSearchParams(location.search);
@@ -235,6 +278,143 @@ export function Settings() {
         </div>
       )}
 
+      {isAdmin && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="font-semibold text-gray-900">Stock take variance threshold</h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Absolute |counted − system| above this value requires a matching recount before staff/admin can post.
+          </p>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Threshold (units)</label>
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={stThreshold}
+                onChange={(e) => setStThreshold(e.target.value)}
+                className="w-40 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={stSaving}
+              onClick={() => {
+                void (async () => {
+                  setStSaving(true);
+                  setStNotice(null);
+                  const res = await saveStockTakeVarianceThreshold(parseFloat(stThreshold));
+                  setStNotice(res.ok ? 'Saved.' : res.error ?? 'Save failed');
+                  setStSaving(false);
+                })();
+              }}
+              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+            >
+              {stSaving ? 'Saving…' : 'Save threshold'}
+            </button>
+          </div>
+          {stNotice && <p className="mt-2 text-sm text-gray-600">{stNotice}</p>}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="font-semibold text-gray-900">Outlet PAR levels</h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Finished goods: use product batch code as par_key. Raw materials: use <code className="text-[11px]">rm:&lt;uuid&gt;</code>.
+            Suggested reorder = target + safety − available on hand.
+          </p>
+          <div className="mt-3">
+            <select
+              value={parOutletId}
+              onChange={(e) => setParOutletId(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              {parOutlets.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <ul className="mt-3 space-y-2 text-sm">
+            {parRows.length === 0 ? (
+              <li className="text-gray-400">No PAR rows for this outlet.</li>
+            ) : (
+              parRows.map((r) => (
+                <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-100 px-3 py-2">
+                  <span className="font-mono text-xs text-gray-800">{r.par_key}</span>
+                  <span className="text-gray-600">
+                    target {r.target_qty} · safety {r.safety_stock}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-xs text-red-700 hover:underline"
+                    onClick={() => {
+                      void deleteOutletPar(r.id).then(() => listOutletPar(parOutletId).then(setParRows));
+                    }}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input
+              value={parKey}
+              onChange={(e) => setParKey(e.target.value)}
+              placeholder="par_key"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={parTarget}
+              onChange={(e) => setParTarget(e.target.value)}
+              placeholder="Target"
+              className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={parSafety}
+              onChange={(e) => setParSafety(e.target.value)}
+              placeholder="Safety"
+              className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                void (async () => {
+                  if (!parOutletId || !parKey.trim()) {
+                    setParMsg('Outlet and par_key required.');
+                    return;
+                  }
+                  const res = await upsertOutletPar({
+                    outlet_id: parOutletId,
+                    par_key: parKey.trim(),
+                    target_qty: parseFloat(parTarget) || 0,
+                    safety_stock: parseFloat(parSafety) || 0,
+                  });
+                  setParMsg(res.ok ? 'Saved.' : res.error ?? 'Failed');
+                  if (res.ok) {
+                    setParKey('');
+                    setParRows(await listOutletPar(parOutletId));
+                  }
+                })();
+              }}
+              className="rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white"
+            >
+              Add / update PAR
+            </button>
+          </div>
+          {parMsg && <p className="mt-2 text-sm text-gray-600">{parMsg}</p>}
+        </div>
+      )}
+
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -271,7 +451,7 @@ export function Settings() {
             <div className="space-y-2 text-xs text-gray-500">
               <div className="flex justify-between"><span>Version</span><span className="font-medium text-gray-700">1.0.0</span></div>
               <div className="flex justify-between"><span>Database</span><span className="font-medium text-gray-700">Supabase</span></div>
-              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">056–059</span></div>
+              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">056–060</span></div>
             </div>
           </div>
         </div>

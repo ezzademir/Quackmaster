@@ -6,6 +6,7 @@ import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
+import { fetchOutletMovements, type OutletMovementRow } from '../utils/reconciliationService';
 import type { RawMaterial, Outlet } from '../types';
 
 type Tab = 'hub' | 'outlets';
@@ -26,6 +27,7 @@ interface HubRow {
 
 interface OutletRow {
   id: string;
+  outlet_id: string;
   outlet_name: string;
   product_batch?: string | null;
   raw_material_id?: string | null;
@@ -142,6 +144,9 @@ export function Inventory() {
   const [adjustRow, setAdjustRow] = useState<HubRow | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [timelineRow, setTimelineRow] = useState<OutletRow | null>(null);
+  const [timelineMoves, setTimelineMoves] = useState<OutletMovementRow[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -190,6 +195,7 @@ export function Inventory() {
         : inv.product_batch?.trim() || '—';
       return {
         id: inv.id,
+        outlet_id: inv.outlet_id,
         outlet_name: (inv.outlet as Outlet | null)?.name ?? '—',
         product_batch: inv.product_batch,
         raw_material_id: inv.raw_material_id ?? undefined,
@@ -480,11 +486,12 @@ export function Inventory() {
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
                       <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Updated</th>
+                      <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">History</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {filteredOutletRows.length === 0 ? (
-                      <tr><td colSpan={6} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">No outlet stock yet</td></tr>
+                      <tr><td colSpan={7} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">No outlet stock yet</td></tr>
                     ) : (
                       filteredOutletRows.map((row) => (
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
@@ -494,6 +501,30 @@ export function Inventory() {
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
                           <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
                           <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-400 text-xs">{new Date(row.last_updated).toLocaleDateString()}</td>
+                          <td className="px-4 md:px-6 py-4 text-right">
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-teal-700 hover:underline"
+                              onClick={() => {
+                                setTimelineRow(row);
+                                setTimelineLoading(true);
+                                const end = new Date();
+                                const start = new Date();
+                                start.setDate(start.getDate() - 90);
+                                void fetchOutletMovements({
+                                  outletId: row.outlet_id,
+                                  from: start,
+                                  to: end,
+                                  outletInventoryId: row.id,
+                                })
+                                  .then(setTimelineMoves)
+                                  .catch(() => setTimelineMoves([]))
+                                  .finally(() => setTimelineLoading(false));
+                              }}
+                            >
+                              Timeline
+                            </button>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -511,6 +542,51 @@ export function Inventory() {
           onClose={() => setAdjustRow(null)}
           onSave={() => { setAdjustRow(null); void loadAll(); }}
         />
+      )}
+
+      {timelineRow && (
+        <Modal isOpen onClose={() => setTimelineRow(null)} title={`Movements · ${timelineRow.display_name}`} size="lg">
+          <p className="mb-3 text-xs text-gray-500">
+            {timelineRow.outlet_name} · last 90 days · on hand {timelineRow.quantity_on_hand}
+          </p>
+          {timelineLoading ? (
+            <p className="text-sm text-gray-400">Loading…</p>
+          ) : timelineMoves.length === 0 ? (
+            <p className="text-sm text-gray-400">No movements recorded for this line in the period.</p>
+          ) : (
+            <div className="max-h-[24rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 border-b bg-gray-50 text-left">
+                  <tr>
+                    <th className="px-2 py-1.5 font-medium text-gray-700">Date</th>
+                    <th className="px-2 py-1.5 font-medium text-gray-700">Type</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-gray-700">Qty</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-gray-700">QoH after</th>
+                    <th className="px-2 py-1.5 font-medium text-gray-700">Ref</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {timelineMoves.map((m) => (
+                    <tr key={m.id}>
+                      <td className="px-2 py-1.5 tabular-nums text-gray-700">{m.business_date}</td>
+                      <td className="px-2 py-1.5 text-gray-800">{m.movement_type}</td>
+                      <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${m.signed_qty < 0 ? 'text-red-700' : 'text-gray-900'}`}>
+                        {m.signed_qty >= 0 ? '+' : ''}
+                        {m.signed_qty}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-gray-600">
+                        {m.qoh_after != null ? m.qoh_after : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-[10px] text-gray-400">
+                        {m.reference_type}:{m.reference_id.slice(0, 8)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

@@ -9,7 +9,6 @@ import {
   Settings,
   Menu,
   ChevronRight,
-  Plus,
   BookOpenText,
   LogOut,
   ChevronDown,
@@ -19,6 +18,7 @@ import {
   Scale,
   ClipboardList,
   ClipboardCheck,
+  GitBranch,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 
@@ -39,6 +39,7 @@ const opsNav = [
 const stockIntegrityNav = [
   { path: '/audit', label: 'Stock audit', icon: ClipboardCheck, exact: true },
   { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
+  { path: '/genealogy', label: 'Genealogy', icon: GitBranch, exact: true },
 ];
 
 const adminNav = [
@@ -178,13 +179,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   </p>
                 )}
                 <ul className="space-y-0.5">
-                  {opsNav
-                    .filter((item) => !(isAdmin && item.path === '/stock-take'))
-                    .map((item) => (
-                      <li key={item.path}>
-                        <NavItem {...item} collapsed={collapsed} />
-                      </li>
-                    ))}
+                  {opsNav.map((item) => (
+                    <li key={item.path}>
+                      <NavItem {...item} collapsed={collapsed} />
+                    </li>
+                  ))}
                 </ul>
               </div>
 
@@ -219,20 +218,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </ul>
                   </div>
                 </>
-              )}
-
-              {!collapsed && isAdmin && (
-                <div className="border-t border-slate-800 pt-4">
-                  <div className="rounded-lg border border-dashed border-slate-700 p-3">
-                    <div className="flex items-center gap-2 text-slate-500">
-                      <Plus size={14} />
-                      <span className="text-xs font-medium">More modules coming</span>
-                    </div>
-                    <p className="mt-1 text-[10px] text-slate-600 leading-relaxed">
-                      Finance · HR · CRM · Quality
-                    </p>
-                  </div>
-                </div>
               )}
             </>
           )}

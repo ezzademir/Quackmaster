@@ -18,6 +18,10 @@ import {
   sumAvailableByProductBatch,
 } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
+import { CloseDayChecklist } from '../components/CloseDayChecklist';
+import { AlertsPanel, type AlertItem } from '../components/AlertsPanel';
+import { STOCK_TAKE_OVERDUE_DAYS } from '../utils/closeDayChecks';
+import { reconcileOutletStock, defaultReconcileRange } from '../utils/reconciliationService';
 
 function localISODate(d: Date): string {
   const y = d.getFullYear();
@@ -80,6 +84,7 @@ export function Overview() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [expiringLots, setExpiringLots] = useState<ExpiringLotRow[]>([]);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const hubProductSub = hubProductStockMixedUom
@@ -255,6 +260,83 @@ export function Overview() {
 
         setLowStock(lowItems);
 
+        const nextAlerts: AlertItem[] = [];
+        if (lowItems.length > 0) {
+          nextAlerts.push({
+            id: 'low-stock',
+            tone: 'amber',
+            title: `${lowItems.length} low stock alert${lowItems.length === 1 ? '' : 's'}`,
+            detail: 'Hub raw materials at or below reorder level.',
+            to: '/inventory',
+          });
+        }
+        if ((expiringLotsRows ?? []).length > 0) {
+          nextAlerts.push({
+            id: 'expiring-lots',
+            tone: 'amber',
+            title: `${(expiringLotsRows ?? []).length} lot(s) expiring within 14 days`,
+            detail: 'Review Lots / Genealogy and outlet FIFO.',
+            to: isAdmin ? '/genealogy' : '/inventory',
+          });
+        }
+
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - STOCK_TAKE_OVERDUE_DAYS);
+        const cutoffIso = cutoff.toISOString().slice(0, 10);
+        const { data: stSessions } = await supabase
+          .from('outlet_stock_take_sessions')
+          .select('outlet_id, count_date, posted_at')
+          .order('posted_at', { ascending: false })
+          .limit(400);
+        const lastSt = new Map<string, string>();
+        for (const s of stSessions ?? []) {
+          if (!lastSt.has(s.outlet_id)) lastSt.set(s.outlet_id, s.count_date);
+        }
+        let overdue = 0;
+        for (const o of outlets ?? []) {
+          const last = lastSt.get(o.id);
+          if (!last || last < cutoffIso) overdue += 1;
+        }
+        if (overdue > 0) {
+          nextAlerts.push({
+            id: 'stock-take-overdue',
+            tone: 'red',
+            title: `${overdue} outlet(s) overdue for stock take`,
+            detail: `No count in the last ${STOCK_TAKE_OVERDUE_DAYS} days.`,
+            to: '/stock-take',
+          });
+        }
+
+        if (isAdmin) {
+          const range = defaultReconcileRange();
+          const outletList = (outlets ?? []).slice(0, 12);
+          let badVar = 0;
+          await Promise.all(
+            outletList.map(async (o) => {
+              const recon = await reconcileOutletStock({
+                outletId: o.id,
+                from: range.start,
+                to: range.end,
+                includeRawMaterials: true,
+              });
+              if (recon.success && Math.abs(Number(recon.unexplained_variance ?? 0)) > 0.001) {
+                badVar += 1;
+              }
+            })
+          );
+          if (badVar > 0) {
+            nextAlerts.push({
+              id: 'recon-variance',
+              tone: 'red',
+              title: `${badVar} outlet(s) with unexplained variance`,
+              detail: 'Live on-hand differs from movement equation (last 30 days).',
+              to: '/reconciliation',
+            });
+          }
+        }
+
+        setAlerts(nextAlerts);
+
         // Average yield (Postgres numeric may arrive as string — coerce for math)
         const yieldVals = (runs || [])
           .map((r) => Number(r.yield_percentage))
@@ -403,7 +485,7 @@ export function Overview() {
     }
 
     load();
-  }, []);
+  }, [isAdmin]);
 
   const activityIcon = {
     purchase: <ShoppingCart size={16} />,
@@ -450,6 +532,9 @@ export function Overview() {
           Quackmaster Hub — live overview of operations
         </p>
       </div>
+
+      <CloseDayChecklist />
+      <AlertsPanel alerts={alerts} />
 
       {/* Quick Actions */}
       <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
