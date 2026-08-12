@@ -1290,14 +1290,12 @@ export function Procurement() {
             <button type="button" className={tabClass('suppliers')} onClick={() => setTab('suppliers')}>Suppliers</button>
             <button type="button" className={tabClass('materials')} onClick={() => setTab('materials')}>Raw Materials</button>
           </div>
-          <div className="flex flex-col items-end gap-1">
-            <DateFilter onFilterChange={(range) => setDateRange(range)} />
-            {dateRange && (
-              <p className="max-w-xs text-right text-xs text-gray-500">
-                Filter applies to each order&apos;s <strong className="font-medium text-gray-600">order date</strong>.
-              </p>
-            )}
-          </div>
+          {tab === 'orders' && (
+            <DateFilter
+              onFilterChange={(range) => setDateRange(range)}
+              hint="Filters purchase orders by order date."
+            />
+          )}
         </nav>
       </div>
 

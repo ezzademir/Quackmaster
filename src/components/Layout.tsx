@@ -18,6 +18,7 @@ import {
   Trash2,
   Scale,
   ClipboardList,
+  ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 
@@ -39,6 +40,7 @@ const adminNav = [
   { path: '/users', label: 'Users', icon: Users, exact: false },
   { path: '/ledger', label: 'Data Ledger', icon: BookOpenText, exact: false },
   { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
+  { path: '/audit', label: 'Audit', icon: ClipboardCheck, exact: true },
   { path: '/settings', label: 'Settings', icon: Settings, exact: false },
 ];
 

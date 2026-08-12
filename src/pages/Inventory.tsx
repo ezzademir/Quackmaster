@@ -261,18 +261,13 @@ export function Inventory() {
     [hubRows]
   );
 
-  const filteredFinishedTotals = useMemo(
-    () => aggregateFinishedGoodsHubTotals(filteredHubRows.filter((r) => r.type === 'product')),
-    [filteredHubRows]
-  );
-
   const tabClass = (t: Tab) =>
     `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
       tab === t ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700'
     }`;
 
-  const lowStockCount = filteredHubRows.filter((r) => r.type === 'material' && r.quantity_on_hand <= (r.reorder_level ?? 10)).length;
-  const totalOutletStock = filteredOutletRows.reduce((a, r) => a + r.quantity_on_hand, 0);
+  const lowStockCount = hubRows.filter((r) => r.type === 'material' && r.quantity_on_hand <= (r.reorder_level ?? 10)).length;
+  const totalOutletStock = outletRows.reduce((a, r) => a + r.quantity_on_hand, 0);
 
   return (
     <div className="space-y-6">
@@ -294,14 +289,12 @@ export function Inventory() {
             <div className="rounded-lg bg-amber-50 p-2 text-amber-600"><PackageCheck size={20} /></div>
             <div>
               <p className="text-xs text-gray-500">Hub finished goods · available (ATP)</p>
-              <p className="text-xl font-bold text-gray-900">{filteredFinishedTotals.available.toLocaleString()} units</p>
+              <p className="text-xl font-bold text-gray-900">{hubFinishedAtpAll.available.toLocaleString()} units</p>
               <p className="mt-0.5 text-xs text-gray-500">
-                On hand {filteredFinishedTotals.onHand.toLocaleString()}
-                {filteredFinishedTotals.reserved > 0 && <> · Reserved {filteredFinishedTotals.reserved.toLocaleString()}</>}
+                On hand {hubFinishedAtpAll.onHand.toLocaleString()}
+                {hubFinishedAtpAll.reserved > 0 && <> · Reserved {hubFinishedAtpAll.reserved.toLocaleString()}</>}
               </p>
-              {dateRange && (
-                <p className="mt-1 text-xs text-amber-700">Table rows filtered by last updated — totals reflect visible rows only.</p>
-              )}
+              <p className="mt-1 text-xs text-gray-400">Live snapshot — not affected by table filter.</p>
             </div>
           </div>
         </div>
@@ -320,9 +313,7 @@ export function Inventory() {
             <div>
               <p className="text-xs text-gray-500">Total Outlet Stock</p>
               <p className="text-xl font-bold text-gray-900">{totalOutletStock.toLocaleString()} units</p>
-              {dateRange && (
-                <p className="mt-1 text-xs text-amber-700">Filtered by row last updated (not supply or receipt dates).</p>
-              )}
+              <p className="mt-1 text-xs text-gray-400">Live snapshot — not affected by table filter.</p>
             </div>
           </div>
         </div>
@@ -348,12 +339,12 @@ export function Inventory() {
             <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
             <button className={tabClass('stock_take')} onClick={() => setTab('stock_take')}>Outlet stock take</button>
           </div>
-          <div className="flex flex-col items-end gap-1">
-            <DateFilter onFilterChange={handleDateFilterChange} />
-            <p className="max-w-xs text-right text-xs text-gray-500">
-              Filter applies to each row&apos;s <strong className="font-medium text-gray-600">last updated</strong> timestamp — not supply dates or production periods.
-            </p>
-          </div>
+          {(tab === 'hub' || tab === 'outlets') && (
+            <DateFilter
+              onFilterChange={handleDateFilterChange}
+              hint="Table only: rows whose last updated timestamp falls in range. KPI totals stay live."
+            />
+          )}
         </nav>
       </div>
 
