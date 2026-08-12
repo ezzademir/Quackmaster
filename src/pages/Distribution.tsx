@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle, ArrowLeftRight } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { HubAtpCompact } from '../components/HubAtpCompact';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
 import { isDateInRange, isCalendarDateInRange, type DateRange } from '../utils/dateRange';
@@ -1700,18 +1701,7 @@ export function Distribution() {
         </p>
       )}
 
-      <div className="rounded-lg border border-teal-100 bg-teal-50/90 px-4 py-3 text-sm text-teal-900">
-        <span className="font-semibold text-teal-800">Hub finished goods (ATP)</span>
-        <span className="mx-2 text-teal-600">|</span>
-        On hand <strong className="tabular-nums">{hubFinishedAtp.onHand.toLocaleString()}</strong>
-        <span className="mx-2 text-teal-600">·</span>
-        Reserved <strong className="tabular-nums">{hubFinishedAtp.reserved.toLocaleString()}</strong>
-        <span className="mx-2 text-teal-600">·</span>
-        Available <strong className="tabular-nums">{hubFinishedAtp.available.toLocaleString()}</strong>
-        <span className="mt-1 block text-xs font-normal text-teal-700">
-          Matches Overview hub finished-goods KPI and Inventory hub strip (available after reservations).
-        </span>
-      </div>
+      <HubAtpCompact totals={hubFinishedAtp} className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600" />
 
       {/* Stock Summary Cards */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">

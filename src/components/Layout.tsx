@@ -36,11 +36,14 @@ const opsNav = [
   { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
 ];
 
+const stockIntegrityNav = [
+  { path: '/audit', label: 'Stock audit', icon: ClipboardCheck, exact: true },
+  { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
+];
+
 const adminNav = [
   { path: '/users', label: 'Users', icon: Users, exact: false },
-  { path: '/ledger', label: 'Data Ledger', icon: BookOpenText, exact: false },
-  { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
-  { path: '/audit', label: 'Audit', icon: ClipboardCheck, exact: true },
+  { path: '/ledger', label: 'Change log', icon: BookOpenText, exact: false },
   { path: '/settings', label: 'Settings', icon: Settings, exact: false },
 ];
 
@@ -175,29 +178,47 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   </p>
                 )}
                 <ul className="space-y-0.5">
-                  {opsNav.map((item) => (
-                    <li key={item.path}>
-                      <NavItem {...item} collapsed={collapsed} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {isAdmin && (
-                <div>
-                  {!collapsed && (
-                    <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                      Admin
-                    </p>
-                  )}
-                  <ul className="space-y-0.5">
-                    {adminNav.map((item) => (
+                  {opsNav
+                    .filter((item) => !(isAdmin && item.path === '/stock-take'))
+                    .map((item) => (
                       <li key={item.path}>
                         <NavItem {...item} collapsed={collapsed} />
                       </li>
                     ))}
-                  </ul>
-                </div>
+                </ul>
+              </div>
+
+              {isAdmin && (
+                <>
+                  <div>
+                    {!collapsed && (
+                      <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                        Stock integrity
+                      </p>
+                    )}
+                    <ul className="space-y-0.5">
+                      {stockIntegrityNav.map((item) => (
+                        <li key={item.path}>
+                          <NavItem {...item} collapsed={collapsed} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    {!collapsed && (
+                      <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                        Admin
+                      </p>
+                    )}
+                    <ul className="space-y-0.5">
+                      {adminNav.map((item) => (
+                        <li key={item.path}>
+                          <NavItem {...item} collapsed={collapsed} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
               )}
 
               {!collapsed && isAdmin && (

@@ -235,61 +235,7 @@ export function Settings() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Left column */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Company Info */}
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <h2 className="mb-5 font-semibold text-gray-900">Company Information</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {[
-                { label: 'Company Name', value: 'Quackmaster Sdn Bhd', disabled: true },
-                { label: 'Hub Location', value: 'Quackmaster HQ', disabled: false },
-                { label: 'Currency', value: 'MYR', disabled: false },
-                { label: 'Timezone', value: 'Asia/Kuala_Lumpur', disabled: false },
-              ].map((f) => (
-                <div key={f.label}>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">{f.label}</label>
-                  <input defaultValue={f.value} disabled={f.disabled}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                </div>
-              ))}
-            </div>
-            <div className="mt-5 flex justify-end">
-              <button className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-                Save Changes
-              </button>
-            </div>
-          </div>
-
-          {/* System Preferences */}
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <h2 className="mb-5 font-semibold text-gray-900">System Preferences</h2>
-            <div className="space-y-4">
-              {[
-                { label: 'Enable low stock alerts', sub: 'Get notified when materials fall below reorder level', checked: true },
-                { label: 'Track yield metrics', sub: 'Record and analyse production yield per run', checked: true },
-                { label: 'Require PO approval', sub: 'Purchase orders must be reviewed before ordering', checked: false },
-                { label: 'Auto-update hub inventory on PO receipt', sub: 'Automatically add received quantities to stock', checked: true },
-                { label: 'Auto-deduct stock on production completion', sub: 'Reduce raw material stock when a run is completed', checked: true },
-              ].map((pref) => (
-                <div key={pref.label} className="flex items-start justify-between gap-4 border-b border-gray-50 pb-4 last:border-0 last:pb-0">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{pref.label}</p>
-                    <p className="text-xs text-gray-500">{pref.sub}</p>
-                  </div>
-                  <label className="relative inline-flex flex-shrink-0 cursor-pointer items-center mt-0.5">
-                    <input type="checkbox" className="sr-only peer" defaultChecked={pref.checked} />
-                    <div className="h-5 w-9 rounded-full bg-gray-200 peer-checked:bg-blue-600 transition-colors peer-focus:ring-2 peer-focus:ring-blue-300" />
-                    <div className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
-                  </label>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Right column: exports & system info */}
+      <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="mb-2 font-semibold text-gray-900">Accounting / tax exports</h2>
@@ -325,7 +271,7 @@ export function Settings() {
             <div className="space-y-2 text-xs text-gray-500">
               <div className="flex justify-between"><span>Version</span><span className="font-medium text-gray-700">1.0.0</span></div>
               <div className="flex justify-between"><span>Database</span><span className="font-medium text-gray-700">Supabase</span></div>
-              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">037–041</span></div>
+              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">056–059</span></div>
             </div>
           </div>
         </div>

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2, ClipboardList } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import type { RawMaterial, Outlet } from '../types';
-import { OutletStockTakeTab } from '../components/outletStockTake/OutletStockTakeTab';
 
-type Tab = 'hub' | 'outlets' | 'stock_take';
+type Tab = 'hub' | 'outlets';
 
 interface HubRow {
   id: string;
@@ -141,6 +141,7 @@ export function Inventory() {
   const [loading, setLoading] = useState(true);
   const [adjustRow, setAdjustRow] = useState<HubRow | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
 
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -319,17 +320,24 @@ export function Inventory() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-teal-100 bg-teal-50/90 px-4 py-3 text-sm text-teal-900">
-        <span className="font-semibold text-teal-800">Hub finished goods (all batches)</span>
-        <span className="mx-2 text-teal-600">|</span>
-        On hand <strong className="tabular-nums">{hubFinishedAtpAll.onHand.toLocaleString()}</strong>
-        <span className="mx-2 text-teal-600">·</span>
-        Reserved <strong className="tabular-nums">{hubFinishedAtpAll.reserved.toLocaleString()}</strong>
-        <span className="mx-2 text-teal-600">·</span>
-        Available <strong className="tabular-nums">{hubFinishedAtpAll.available.toLocaleString()}</strong>
-        <span className="mt-1 block text-xs font-normal text-teal-700">
-          Same ATP logic as Overview and Distribution (stored available, else on hand minus reserved).
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm">
+        <p className="text-gray-600">
+          Physical counts and stock take sessions live under{' '}
+          <Link to="/stock-take" className="font-medium text-teal-600 hover:underline">
+            Stock take
+          </Link>
+          . Use{' '}
+          <Link to="/reconciliation" className="font-medium text-teal-600 hover:underline">
+            Reconciliation
+          </Link>{' '}
+          to investigate variances.
+        </p>
+        <Link
+          to="/stock-take"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-800 hover:bg-teal-100"
+        >
+          <ClipboardList size={14} /> Open stock take
+        </Link>
       </div>
 
       <div className="border-b border-gray-200">
@@ -337,13 +345,27 @@ export function Inventory() {
           <div className="flex gap-6">
             <button className={tabClass('hub')} onClick={() => setTab('hub')}>Hub Inventory</button>
             <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
-            <button className={tabClass('stock_take')} onClick={() => setTab('stock_take')}>Outlet stock take</button>
           </div>
           {(tab === 'hub' || tab === 'outlets') && (
-            <DateFilter
-              onFilterChange={handleDateFilterChange}
-              hint="Table only: rows whose last updated timestamp falls in range. KPI totals stay live."
-            />
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={showAdvancedFilter}
+                  onChange={(e) => {
+                    setShowAdvancedFilter(e.target.checked);
+                    if (!e.target.checked) setDateRange(null);
+                  }}
+                />
+                Filter rows by last updated
+              </label>
+              {showAdvancedFilter && (
+                <DateFilter
+                  onFilterChange={handleDateFilterChange}
+                  hint="Advanced: show only rows updated in this range. KPI totals stay live."
+                />
+              )}
+            </div>
           )}
         </nav>
       </div>
@@ -436,15 +458,6 @@ export function Inventory() {
                 </div>
               </div>
             </div>
-          )}
-
-          {tab === 'stock_take' && (
-            <OutletStockTakeTab
-              outlets={outlets}
-              onApplied={() => {
-                void loadOutletInventory(selectedOutlet || undefined);
-              }}
-            />
           )}
 
           {tab === 'outlets' && (

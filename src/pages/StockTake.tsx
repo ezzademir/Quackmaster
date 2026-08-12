@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { Outlet } from '../types';
 import { OutletStockTakeTab } from '../components/outletStockTake/OutletStockTakeTab';
 import { useAuth } from '../utils/auth';
@@ -6,6 +7,8 @@ import { supabase } from '../utils/supabase';
 
 export function StockTake() {
   const { isSupervisor, profile } = useAuth();
+  const [searchParams] = useSearchParams();
+  const initialOutletId = searchParams.get('outlet') ?? undefined;
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -81,7 +84,7 @@ export function StockTake() {
             : 'Choose an outlet to load rows, count physical stock, and post adjustments.'}
         </p>
       </div>
-      <OutletStockTakeTab outlets={outlets} lockedOutletId={lockedId} />
+      <OutletStockTakeTab outlets={outlets} lockedOutletId={lockedId} initialOutletId={initialOutletId} />
     </div>
   );
 }

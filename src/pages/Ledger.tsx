@@ -38,7 +38,7 @@ const OP_COLORS: Record<string, string> = {
   event: 'bg-amber-100 text-amber-700',
 };
 
-const MODULE_OPTIONS = ['procurement', 'production', 'distribution', 'inventory', 'auth', 'users', 'settings'];
+const MODULE_OPTIONS = ['procurement', 'production', 'distribution', 'inventory', 'auth', 'users', 'settings', 'waste', 'stock_take'];
 
 function prettyTime(iso: string) {
   const d = new Date(iso);
@@ -136,7 +136,7 @@ export function Ledger() {
         </div>
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Access Restricted</h2>
-          <p className="mt-1 text-sm text-gray-500">Only administrators can view the data ledger.</p>
+          <p className="mt-1 text-sm text-gray-500">Only administrators can view the change log.</p>
         </div>
         <Link to="/" className="text-sm font-medium text-blue-600 hover:text-blue-800">
           Back to Dashboard
@@ -149,9 +149,9 @@ export function Ledger() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Data Ledger</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Change log</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Canonical audit trail: actor, module, labels (metadata), and values before/delta/after
+            Who changed what in the system — user actions, settings, and module edits (not stock movement math).
           </p>
         </div>
         <button
