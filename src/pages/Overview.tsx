@@ -61,14 +61,6 @@ interface LowStockItem {
   unit: string;
 }
 
-interface SupplierScoreRow {
-  supplier_id: string;
-  supplier_name: string;
-  completed_orders: number | null;
-  otif_rate: number | string | null;
-  avg_fill_rate: number | string | null;
-}
-
 interface RecipeKpiRow {
   id: string;
   name: string;
@@ -87,7 +79,6 @@ export function Overview() {
   const [hubProductStockMixedUom, setHubProductStockMixedUom] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
-  const [supplierScores, setSupplierScores] = useState<SupplierScoreRow[]>([]);
   const [expiringLots, setExpiringLots] = useState<ExpiringLotRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,7 +111,6 @@ export function Overview() {
           { data: pos },
           { data: prodRuns },
           { data: supplies },
-          { data: scoreRows },
           { data: salesJournalsKpi },
           { data: wasteEventsKpi },
           { data: salesActivityRows },
@@ -176,7 +166,6 @@ export function Overview() {
             .select('id, supply_order_number, status, created_at, outlet:outlet_id(name)')
             .order('created_at', { ascending: false })
             .limit(4),
-          supabase.from('supplier_scorecard_metrics').select('*').order('supplier_name').limit(20),
           supabase
             .from('sales_journals')
             .select('id')
@@ -265,8 +254,6 @@ export function Overview() {
           });
 
         setLowStock(lowItems);
-
-        setSupplierScores((scoreRows ?? []) as SupplierScoreRow[]);
 
         // Average yield (Postgres numeric may arrive as string — coerce for math)
         const yieldVals = (runs || [])
@@ -651,51 +638,6 @@ export function Overview() {
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {supplierScores.filter((s) => (s.completed_orders ?? 0) > 0).length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-3 font-semibold text-gray-900">Supplier performance (snapshot)</h2>
-          <p className="mb-4 text-xs text-gray-500">
-            OTIF and fill-rate from purchase history (requires completed/partial PO lines).{' '}
-            <Link to="/procurement" className="text-blue-600 hover:underline">
-              Procurement
-            </Link>
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50 text-left">
-                <tr>
-                  <th className="px-3 py-2 font-medium text-gray-700">Supplier</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Completed POs</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">OTIF rate</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Avg fill rate</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {supplierScores
-                  .filter((s) => (s.completed_orders ?? 0) > 0)
-                  .slice(0, 10)
-                  .map((s) => {
-                    const otif = s.otif_rate != null ? Number(s.otif_rate) : null;
-                    const fill = s.avg_fill_rate != null ? Number(s.avg_fill_rate) : null;
-                    return (
-                      <tr key={s.supplier_id}>
-                        <td className="px-3 py-2 font-medium text-gray-900">{s.supplier_name}</td>
-                        <td className="px-3 py-2 tabular-nums text-gray-700">{s.completed_orders ?? 0}</td>
-                        <td className="px-3 py-2 tabular-nums text-gray-700">
-                          {otif != null && Number.isFinite(otif) ? `${(otif * 100).toFixed(0)}%` : '—'}
-                        </td>
-                        <td className="px-3 py-2 tabular-nums text-gray-700">
-                          {fill != null && Number.isFinite(fill) ? `${(fill * 100).toFixed(0)}%` : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
               </tbody>
             </table>
           </div>

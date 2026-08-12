@@ -156,7 +156,7 @@ export function AuditDashboard() {
             Outlet Audit Dashboard
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-gray-500">
-            Cross-outlet view: live on-hand, last stock take, in-transit units, and unexplained variance (last 30 days).
+            Cross-outlet stock integrity: live on-hand, last stock take, in-transit units, and unexplained variance (last 30 days).
           </p>
         </div>
         <button
@@ -214,13 +214,21 @@ export function AuditDashboard() {
                   </td>
                   <td className="px-4 py-3"><StatusBadge status={row.countStatus} /></td>
                   <td className="px-4 py-3">
-                    <Link
-                      to={`/reconciliation?outlet=${row.outlet.id}`}
-                      className="text-teal-600 hover:underline"
-                    >
-                      Reconcile
-                    </Link>
-                    {row.error && <span className="ml-2 text-xs text-red-600">{row.error}</span>}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      <Link
+                        to={`/reconciliation?outlet=${row.outlet.id}`}
+                        className="text-teal-600 hover:underline"
+                      >
+                        Reconcile
+                      </Link>
+                      <Link
+                        to={`/stock-take?outlet=${row.outlet.id}`}
+                        className="text-teal-600 hover:underline"
+                      >
+                        Stock take
+                      </Link>
+                    </div>
+                    {row.error && <span className="mt-1 block text-xs text-red-600">{row.error}</span>}
                   </td>
                 </tr>
               ))

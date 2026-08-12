@@ -1,8 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
+import type { DateRange } from '../utils/dateRange';
+
+const HISTORY_PAGE_SIZE = 25;
+
+interface WasteHistoryRow {
+  id: string;
+  location_kind: 'hub' | 'outlet';
+  waste_date: string;
+  notes: string | null;
+  created_at: string;
+  outlet?: { name: string } | { name: string }[] | null;
+  line_count: number;
+  total_qty: number;
+}
 
 type Kind = 'hub' | 'outlet';
 
@@ -45,6 +60,11 @@ export function Waste() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  const [historyRange, setHistoryRange] = useState<DateRange | null>(null);
+  const [history, setHistory] = useState<WasteHistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
 
   const load = useCallback(async () => {
     const [{ data: outs }, { data: hub }] = await Promise.all([
@@ -79,6 +99,73 @@ export function Waste() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadHistory = useCallback(
+    async (page: number, append: boolean) => {
+      setHistoryLoading(true);
+      try {
+        let query = supabase
+          .from('waste_events')
+          .select('id, location_kind, waste_date, notes, created_at, outlet:outlet_id(name)')
+          .eq('status', 'posted')
+          .order('waste_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .range(page * HISTORY_PAGE_SIZE, (page + 1) * HISTORY_PAGE_SIZE - 1);
+
+        if (historyRange) {
+          const from = historyRange.start.toISOString().slice(0, 10);
+          const to = historyRange.end.toISOString().slice(0, 10);
+          query = query.gte('waste_date', from).lte('waste_date', to);
+        }
+
+        const { data: events, error } = await query;
+        if (error) throw error;
+
+        const ids = (events ?? []).map((e) => e.id as string);
+        const { data: lines } =
+          ids.length > 0
+            ? await supabase.from('waste_lines').select('waste_event_id, quantity').in('waste_event_id', ids)
+            : { data: [] as { waste_event_id: string; quantity: number }[] };
+
+        const qtyByEvent = new Map<string, { count: number; total: number }>();
+        for (const line of lines ?? []) {
+          const eid = line.waste_event_id as string;
+          const prev = qtyByEvent.get(eid) ?? { count: 0, total: 0 };
+          prev.count += 1;
+          prev.total += Number(line.quantity ?? 0);
+          qtyByEvent.set(eid, prev);
+        }
+
+        const mapped: WasteHistoryRow[] = (events ?? []).map((e) => {
+          const agg = qtyByEvent.get(e.id as string) ?? { count: 0, total: 0 };
+          return {
+            id: e.id as string,
+            location_kind: e.location_kind as 'hub' | 'outlet',
+            waste_date: String(e.waste_date),
+            notes: e.notes as string | null,
+            created_at: String(e.created_at),
+            outlet: e.outlet as WasteHistoryRow['outlet'],
+            line_count: agg.count,
+            total_qty: agg.total,
+          };
+        });
+
+        setHistory((prev) => (append ? [...prev, ...mapped] : mapped));
+        setHistoryHasMore(mapped.length === HISTORY_PAGE_SIZE);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [historyRange]
+  );
+
+  useEffect(() => {
+    setHistoryPage(0);
+  }, [historyRange]);
+
+  useEffect(() => {
+    void loadHistory(historyPage, historyPage > 0);
+  }, [historyPage, loadHistory]);
 
   function syncHubBatch(idx: number, hubInvId: string) {
     const row = hubRows.find((h) => h.id === hubInvId);
@@ -153,6 +240,7 @@ export function Waste() {
         setMessage({ tone: 'ok', text: 'Outlet waste recorded.' });
       }
       void load();
+      setHistoryPage(0);
     } finally {
       setSubmitting(false);
     }
@@ -163,7 +251,7 @@ export function Waste() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 p-6">
+    <div className="mx-auto max-w-4xl space-y-8 p-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Waste & spoilage</h1>
         <p className="mt-1 text-sm text-gray-500">
@@ -383,6 +471,65 @@ export function Waste() {
           {submitting ? 'Posting…' : 'Post waste event'}
         </button>
       </form>
+
+      <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">Posted waste events</h2>
+            <p className="mt-1 text-xs text-gray-500">History of posted hub and outlet waste (newest first).</p>
+          </div>
+          <DateFilter onFilterChange={(range) => setHistoryRange(range)} />
+        </div>
+
+        {historyLoading && history.length === 0 ? (
+          <p className="text-sm text-gray-400">Loading history…</p>
+        ) : history.length === 0 ? (
+          <p className="text-sm text-gray-400">No posted waste events in this period.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-gray-100">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-gray-50 text-left">
+                <tr>
+                  <th className="px-3 py-2 font-medium text-gray-700">Date</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Location</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-700">Lines</th>
+                  <th className="px-3 py-2 text-right font-medium text-gray-700">Total qty</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Notes</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {history.map((row) => {
+                  const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
+                  const loc =
+                    row.location_kind === 'hub'
+                      ? 'Hub'
+                      : outlet?.name ?? 'Outlet';
+                  return (
+                    <tr key={row.id} className="hover:bg-gray-50/80">
+                      <td className="px-3 py-2 text-gray-900">{row.waste_date}</td>
+                      <td className="px-3 py-2 capitalize text-gray-700">{loc}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{row.line_count}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
+                      <td className="max-w-[200px] truncate px-3 py-2 text-gray-500">{row.notes?.trim() || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {historyHasMore && (
+          <button
+            type="button"
+            disabled={historyLoading}
+            onClick={() => setHistoryPage((p) => p + 1)}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {historyLoading ? 'Loading…' : 'Load more'}
+          </button>
+        )}
+      </section>
     </div>
   );
 }

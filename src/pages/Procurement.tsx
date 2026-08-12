@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, PackagePlus, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
@@ -11,6 +12,14 @@ import { useAuth } from '../utils/auth';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
 type Tab = 'orders' | 'suppliers' | 'materials';
+
+interface SupplierScoreRow {
+  supplier_id: string;
+  supplier_name: string;
+  completed_orders: number | null;
+  otif_rate: number | string | null;
+  avg_fill_rate: number | string | null;
+}
 
 // ---- Helpers ----
 function StatusBadge({ status }: { status: string }) {
@@ -1056,8 +1065,13 @@ function PODetailModal({
 // ---- Main Procurement Page ----
 export function Procurement() {
   const { isAdmin } = useAuth();
-  const [tab, setTab] = useState<Tab>('orders');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const initialTab: Tab =
+    tabParam === 'suppliers' || tabParam === 'materials' || tabParam === 'orders' ? tabParam : 'orders';
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierScores, setSupplierScores] = useState<SupplierScoreRow[]>([]);
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [supplierMaterialLinks, setSupplierMaterialLinks] = useState<Array<{ supplier_id: string; raw_material_id: string }>>(
     []
@@ -1096,9 +1110,21 @@ export function Procurement() {
       .map((l) => l.raw_material_id);
   }, [editSupplier, supplierMaterialLinks]);
 
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t === 'suppliers' || t === 'materials' || t === 'orders') {
+      setTab(t);
+    }
+  }, [searchParams]);
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    setSearchParams(next === 'orders' ? {} : { tab: next }, { replace: true });
+  }
+
   async function loadAll() {
     setLoading(true);
-    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }] = await Promise.all([
+    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }, { data: scores }] = await Promise.all([
       supabase.from('suppliers').select('*').order('name'),
       supabase.from('raw_materials').select('*').order('name'),
       supabase
@@ -1106,8 +1132,10 @@ export function Procurement() {
         .select(`*, supplier:supplier_id(*), items:purchase_order_items(*, material:raw_material_id(*))`)
         .order('created_at', { ascending: false }),
       supabase.from('supplier_raw_materials').select('supplier_id, raw_material_id'),
+      supabase.from('supplier_scorecard_metrics').select('*').order('supplier_name'),
     ]);
     setSuppliers(sups ?? []);
+    setSupplierScores((scores ?? []) as SupplierScoreRow[]);
     setMaterials(mats ?? []);
     setSupplierMaterialLinks(links ?? []);
     setOrders(pos as POWithDetails[] ?? []);
@@ -1286,9 +1314,9 @@ export function Procurement() {
       <div className="border-b border-gray-200">
         <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div className="flex gap-6">
-            <button type="button" className={tabClass('orders')} onClick={() => setTab('orders')}>Purchase Orders</button>
-            <button type="button" className={tabClass('suppliers')} onClick={() => setTab('suppliers')}>Suppliers</button>
-            <button type="button" className={tabClass('materials')} onClick={() => setTab('materials')}>Raw Materials</button>
+            <button type="button" className={tabClass('orders')} onClick={() => selectTab('orders')}>Purchase Orders</button>
+            <button type="button" className={tabClass('suppliers')} onClick={() => selectTab('suppliers')}>Suppliers</button>
+            <button type="button" className={tabClass('materials')} onClick={() => selectTab('materials')}>Raw Materials</button>
           </div>
           {tab === 'orders' && (
             <DateFilter
@@ -1373,6 +1401,47 @@ export function Procurement() {
 
           {/* Suppliers Tab */}
           {tab === 'suppliers' && (
+            <div className="space-y-6">
+              {supplierScores.filter((s) => (s.completed_orders ?? 0) > 0).length > 0 && (
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-5 shadow-sm">
+                  <h2 className="mb-1 text-sm font-semibold text-gray-900">Supplier performance</h2>
+                  <p className="mb-4 text-xs text-gray-600">
+                    OTIF and fill-rate from completed or partial purchase order history.
+                  </p>
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                    <table className="w-full text-sm">
+                      <thead className="border-b border-gray-200 bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Supplier</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-700">Completed POs</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-700">OTIF rate</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-700">Avg fill rate</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {supplierScores
+                          .filter((s) => (s.completed_orders ?? 0) > 0)
+                          .map((s) => {
+                            const otif = s.otif_rate != null ? Number(s.otif_rate) : null;
+                            const fill = s.avg_fill_rate != null ? Number(s.avg_fill_rate) : null;
+                            return (
+                              <tr key={s.supplier_id} className="hover:bg-gray-50/80">
+                                <td className="px-4 py-3 font-medium text-gray-900">{s.supplier_name}</td>
+                                <td className="px-4 py-3 text-right tabular-nums">{s.completed_orders ?? 0}</td>
+                                <td className="px-4 py-3 text-right tabular-nums">
+                                  {otif != null && Number.isFinite(otif) ? `${(otif * 100).toFixed(0)}%` : '—'}
+                                </td>
+                                <td className="px-4 py-3 text-right tabular-nums">
+                                  {fill != null && Number.isFinite(fill) ? `${(fill * 100).toFixed(0)}%` : '—'}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
               <table className="w-full text-sm">
                 <thead className="border-b border-gray-200 bg-gray-50">
@@ -1413,6 +1482,7 @@ export function Procurement() {
                   )}
                 </tbody>
               </table>
+            </div>
             </div>
           )}
 

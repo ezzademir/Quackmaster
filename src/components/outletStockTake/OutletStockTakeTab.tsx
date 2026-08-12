@@ -135,9 +135,11 @@ interface Props {
   onApplied?: () => void;
   /** When set, locks counting to this outlet (hides outlet picker). */
   lockedOutletId?: string | null;
+  /** Pre-select outlet from deep link (e.g. reconciliation / audit). */
+  initialOutletId?: string;
 }
 
-export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props) {
+export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initialOutletId }: Props) {
   const [outletId, setOutletId] = useState('');
   const [countDate, setCountDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [sessionNotes, setSessionNotes] = useState('');
@@ -285,6 +287,13 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId }: Props
       setOutletId(lockedOutletId);
     }
   }, [lockedOutletId]);
+
+  useEffect(() => {
+    if (lockedOutletId || !initialOutletId) return;
+    if (outlets.some((o) => o.id === initialOutletId)) {
+      setOutletId(initialOutletId);
+    }
+  }, [initialOutletId, lockedOutletId, outlets]);
 
   useEffect(() => {
     void loadOutletStockTakeData(outletId);

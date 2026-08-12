@@ -20,16 +20,37 @@ function fmt(n: number | undefined): string {
   return Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-function MovementRow({ label, value, emphasize }: { label: string; value: number; emphasize?: boolean }) {
+function MovementRow({
+  label,
+  value,
+  emphasize,
+  to,
+}: {
+  label: string;
+  value: number;
+  emphasize?: boolean;
+  to?: string;
+}) {
   const negative = value < 0;
-  return (
-    <div className={`flex items-center justify-between rounded-lg border px-4 py-3 ${emphasize ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'}`}>
+  const content = (
+    <>
       <span className="text-sm text-gray-700">{label}</span>
       <span className={`text-sm font-semibold tabular-nums ${negative ? 'text-red-700' : 'text-gray-900'}`}>
         {value >= 0 ? '+' : ''}{fmt(value)}
       </span>
-    </div>
+    </>
   );
+  const className = `flex items-center justify-between rounded-lg border px-4 py-3 ${
+    emphasize ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'
+  }`;
+  if (to && Math.abs(value) > 0.001) {
+    return (
+      <Link to={to} className={`${className} hover:border-teal-300 hover:bg-teal-50/50 transition-colors`}>
+        {content}
+      </Link>
+    );
+  }
+  return <div className={className}>{content}</div>;
 }
 
 export function Reconciliation() {
@@ -102,6 +123,7 @@ export function Reconciliation() {
 
   const variance = Number(result?.unexplained_variance ?? 0);
   const varianceBad = Math.abs(variance) > 0.001;
+  const stockTakeHref = outletId ? `/stock-take?outlet=${outletId}` : '/stock-take';
 
   return (
     <div className="space-y-6">
@@ -117,7 +139,7 @@ export function Reconciliation() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Link to="/audit" className="text-sm font-medium text-teal-600 hover:text-teal-700">
-            Cross-outlet audit dashboard →
+            Stock audit dashboard →
           </Link>
           <button
             type="button"
@@ -196,12 +218,12 @@ export function Reconciliation() {
                 Period: {result.period_from} → {result.period_to}
               </p>
               <MovementRow label="Opening (before period)" value={Number(result.opening_qoh ?? 0)} />
-              <MovementRow label="Supply received" value={Number(result.supply_in ?? 0)} />
-              <MovementRow label="Transfers in" value={Number(result.transfers_in ?? 0)} />
-              <MovementRow label="Transfers out" value={Number(result.transfers_out ?? 0)} />
-              <MovementRow label="Sales" value={Number(result.sales ?? 0)} />
-              <MovementRow label="Waste" value={Number(result.waste ?? 0)} />
-              <MovementRow label="Stock take adjustments" value={Number(result.stock_take_adjustments ?? 0)} />
+              <MovementRow label="Supply received" value={Number(result.supply_in ?? 0)} to="/distribution" />
+              <MovementRow label="Transfers in" value={Number(result.transfers_in ?? 0)} to="/distribution" />
+              <MovementRow label="Transfers out" value={Number(result.transfers_out ?? 0)} to="/distribution" />
+              <MovementRow label="Sales" value={Number(result.sales ?? 0)} to="/sales" />
+              <MovementRow label="Waste" value={Number(result.waste ?? 0)} to="/waste" />
+              <MovementRow label="Stock take adjustments" value={Number(result.stock_take_adjustments ?? 0)} to={stockTakeHref} />
               <MovementRow label="Reversals" value={Number(result.reversals ?? 0)} />
               <MovementRow label="Computed closing" value={Number(result.computed_closing ?? 0)} emphasize />
               <MovementRow label="Live on-hand now" value={Number(result.live_on_hand ?? 0)} emphasize />
@@ -235,7 +257,9 @@ export function Reconciliation() {
                       <dd className="font-semibold tabular-nums">{fmt(Number(result.last_stock_take.total_variance ?? 0))}</dd>
                     </div>
                     <p className="text-xs text-gray-500">
-                      <Link to="/inventory" className="text-teal-600 hover:underline">Inventory → Outlet stock take</Link> for session history.
+                      <Link to={stockTakeHref} className="text-teal-600 hover:underline">Run stock take</Link>
+                      {' · '}
+                      <Link to="/inventory" className="text-teal-600 hover:underline">View outlet inventory</Link>
                     </p>
                   </dl>
                 ) : (
