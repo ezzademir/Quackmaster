@@ -22,6 +22,7 @@ const Waste = lazy(() => import('./pages/Waste').then((m) => ({ default: m.Waste
 const Genealogy = lazy(() => import('./pages/Genealogy').then((m) => ({ default: m.Genealogy })));
 const Ledger = lazy(() => import('./pages/Ledger').then((m) => ({ default: m.Ledger })));
 const Reconciliation = lazy(() => import('./pages/Reconciliation').then((m) => ({ default: m.Reconciliation })));
+const AuditDashboard = lazy(() => import('./pages/AuditDashboard').then((m) => ({ default: m.AuditDashboard })));
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const StockTake = lazy(() => import('./pages/StockTake').then((m) => ({ default: m.StockTake })));
 const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
@@ -79,6 +80,11 @@ function SettingsGate() {
 function ReconciliationGate() {
   const { isAdmin } = useAuth();
   return isAdmin ? <Reconciliation /> : <Navigate to="/" replace />;
+}
+
+function AuditGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <AuditDashboard /> : <Navigate to="/" replace />;
 }
 
 function GenealogyGate() {
@@ -148,6 +154,7 @@ function App() {
                 <Route path="/users" element={<UsersGate />} />
                 <Route path="/ledger" element={<LedgerGate />} />
                 <Route path="/reconciliation" element={<ReconciliationGate />} />
+                <Route path="/audit" element={<AuditGate />} />
                 <Route path="/genealogy" element={<GenealogyGate />} />
                 <Route path="/settings" element={<SettingsGate />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

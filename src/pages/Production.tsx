@@ -823,7 +823,12 @@ export function Production() {
             <button className={tabClass('runs')} onClick={() => setTab('runs')}>Production Runs</button>
             <button className={tabClass('recipes')} onClick={() => setTab('recipes')}>Recipes</button>
           </div>
-          {tab === 'runs' && <DateFilter onFilterChange={handleDateFilterChange} />}
+          {tab === 'runs' && (
+            <DateFilter
+              onFilterChange={handleDateFilterChange}
+              hint="Filters production runs by production date."
+            />
+          )}
         </nav>
       </div>
 

@@ -7,9 +7,11 @@ export type DateFilterType = 'all' | 'today' | 'yesterday' | 'thisWeek' | 'lastW
 interface DateFilterProps {
   onFilterChange: (range: DateRange | null, filterType: DateFilterType) => void;
   className?: string;
+  /** Optional help text shown below the control */
+  hint?: string;
 }
 
-export function DateFilter({ onFilterChange, className = '' }: DateFilterProps) {
+export function DateFilter({ onFilterChange, className = '', hint }: DateFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [filterType, setFilterType] = useState<DateFilterType>('all');
   const [customStartDate, setCustomStartDate] = useState(formatDateForInput(new Date()));
@@ -82,6 +84,7 @@ export function DateFilter({ onFilterChange, className = '' }: DateFilterProps) 
 
   return (
     <div className={`relative ${className}`}>
+      <div className="flex flex-col items-end gap-1">
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -90,8 +93,13 @@ export function DateFilter({ onFilterChange, className = '' }: DateFilterProps) 
         <ChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
+      {hint && (
+        <p className="max-w-xs text-right text-xs text-gray-500">{hint}</p>
+      )}
+      </div>
+
       {isOpen && (
-        <div className="absolute right-0 z-10 mt-2 w-56 rounded-lg border border-gray-200 bg-white shadow-lg">
+        <div className="absolute right-0 top-full z-10 mt-2 w-56 rounded-lg border border-gray-200 bg-white shadow-lg">
           <div className="space-y-1 p-2">
             <button
               onClick={() => handleFilterSelect('all')}

@@ -1684,13 +1684,19 @@ export function Distribution() {
             <button type="button" className={tabClass('transfers')} onClick={() => setTab('transfers')}>Outlet transfers</button>
             <button type="button" className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlets</button>
           </div>
-          <DateFilter onFilterChange={handleDateFilterChange} />
+          {tab !== 'outlets' && (
+            <DateFilter
+              onFilterChange={handleDateFilterChange}
+              hint="Supply orders: supply date. Transfers: dispatch date. Summary cards use production, supply, and receipt dates."
+            />
+          )}
         </nav>
       </div>
 
       {dateRange && (
         <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
-          Summary cards and outlet breakdown follow the date filter. Hub available and outlet “on hand now” are live snapshots.
+          Order list uses <strong className="font-medium">supply date</strong>. &quot;Received (range)&quot; uses{' '}
+          <strong className="font-medium">receipt date</strong>. Hub available and outlet &quot;on hand now&quot; are live snapshots.
         </p>
       )}
 
@@ -1710,7 +1716,9 @@ export function Distribution() {
       {/* Stock Summary Cards */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-          <p className="text-xs font-medium uppercase text-blue-600">Total Generated</p>
+          <p className="text-xs font-medium uppercase text-blue-600">
+            {distributionDisplay.isFiltered ? 'Generated (in range)' : 'Total Generated'}
+          </p>
           <p className="mt-2 text-2xl font-bold text-blue-900">{distributionDisplay.totalGenerated.toLocaleString()}</p>
           <p className="mt-1 text-xs text-blue-600">
             {distributionDisplay.isFiltered
@@ -1719,7 +1727,9 @@ export function Distribution() {
           </p>
         </div>
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <p className="text-xs font-medium uppercase text-amber-600">Total Dispatched</p>
+          <p className="text-xs font-medium uppercase text-amber-600">
+            {distributionDisplay.isFiltered ? 'Dispatched (supply date in range)' : 'Total Dispatched'}
+          </p>
           <p className="mt-2 text-2xl font-bold text-amber-900">{distributionDisplay.totalDispatched.toLocaleString()}</p>
           <p className="mt-1 text-xs text-amber-600">
             {distributionDisplay.isFiltered
@@ -1759,7 +1769,9 @@ export function Distribution() {
           )}
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-          <p className="text-xs font-medium uppercase text-emerald-600">At Outlets</p>
+          <p className="text-xs font-medium uppercase text-emerald-600">
+            {distributionDisplay.isFiltered ? 'At Outlets — received vs live' : 'At Outlets'}
+          </p>
           {distributionDisplay.isFiltered ? (
             <>
               <div className="mt-2 grid grid-cols-2 gap-3">
