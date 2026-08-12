@@ -1191,16 +1191,10 @@ function normalizeSOStatus(status: string | undefined): string {
   return String(status ?? '').toLowerCase().trim();
 }
 
-/** Pending/cancelled: filter by supply_date (picker). Dispatched/received: actual dispatch_date. */
+/** Filter by supply_date — matches the Supply column in the orders table. */
 function supplyOrderDateForRangeFilter(so: SOWithOutlet): string {
-  const st = normalizeSOStatus(so.status);
-  const picker = (so.supply_date ?? so.dispatch_date)?.trim();
-  if (st === 'pending' || st === 'cancelled') {
-    if (picker) return picker.includes('T') ? picker : `${picker}T12:00:00`;
-    return so.created_at ?? '';
-  }
-  const dispatched = so.dispatch_date?.trim();
-  if (dispatched) return dispatched.includes('T') ? dispatched : `${dispatched}T12:00:00`;
+  const supplyDate = (so.supply_date ?? so.dispatch_date)?.trim();
+  if (supplyDate) return supplyDate.includes('T') ? supplyDate : `${supplyDate}T12:00:00`;
   return so.created_at ?? '';
 }
 
