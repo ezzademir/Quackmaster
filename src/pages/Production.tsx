@@ -3,6 +3,7 @@ import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCir
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
 import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
@@ -10,7 +11,7 @@ import { completeProductionRun, deleteProductionRun } from '../utils/productionS
 import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
-type Tab = 'runs' | 'recipes';
+type Tab = 'runs' | 'recipes' | 'planning';
 
 /** Persisted QC yield, or derived from planned/actual when older rows never saved yield_percentage */
 function effectiveRunYieldPct(run: {
@@ -264,20 +265,33 @@ function NewRunModal({
   onClose,
   onSave,
   profile,
+  initialRecipeId,
+  initialPlannedOutput,
+  plannedBatchId,
 }: {
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
   profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
+  initialRecipeId?: string;
+  initialPlannedOutput?: number;
+  plannedBatchId?: string | null;
 }) {
-  const [recipe_id, setRecipeId] = useState('');
+  const [recipe_id, setRecipeId] = useState(initialRecipeId ?? '');
   const [production_date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [planned_output, setPlanned] = useState('');
+  const [planned_output, setPlanned] = useState(
+    initialPlannedOutput != null ? String(initialPlannedOutput) : ''
+  );
   const [actual_output, setActual] = useState('');
   const [notes, setNotes] = useState('');
   const [runMaterials, setRunMaterials] = useState<RunMaterial[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (initialRecipeId) void selectRecipe(initialRecipeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot prefill from planning
+  }, []);
 
   async function selectRecipe(id: string) {
     setRecipeId(id);
@@ -409,6 +423,7 @@ function NewRunModal({
             actual_output: actualOutputQty,
             status: 'in_progress',
             notes: notes || null,
+            ...(plannedBatchId ? { planned_batch_id: plannedBatchId } : {}),
           })
           .select()
           .single();
@@ -712,6 +727,11 @@ export function Production() {
   const [editIngredients, setEditIngredients] = useState<RecipeIngredient[]>([]);
   const [showRecipeModal, setShowRecipeModal] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const [planPrefill, setPlanPrefill] = useState<{
+    recipeId: string;
+    quantity: number;
+    plannedBatchId: string;
+  } | null>(null);
 
   const handleDateFilterChange = (range: DateRange | null) => {
     setDateRange(range);
@@ -822,6 +842,7 @@ export function Production() {
           <div className="flex gap-6">
             <button className={tabClass('runs')} onClick={() => setTab('runs')}>Production Runs</button>
             <button className={tabClass('recipes')} onClick={() => setTab('recipes')}>Recipes</button>
+            <button className={tabClass('planning')} onClick={() => setTab('planning')}>Planning</button>
           </div>
           {tab === 'runs' && (
             <DateFilter
@@ -836,6 +857,14 @@ export function Production() {
         <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>
       ) : (
         <>
+          {tab === 'planning' && (
+            <ProductionPlanningPanel
+              onStartRun={(opts) => {
+                setPlanPrefill(opts);
+                setShowNewRun(true);
+              }}
+            />
+          )}
           {tab === 'runs' && (
             <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
               <table className="w-full text-sm">
@@ -958,9 +987,19 @@ export function Production() {
       {showNewRun && (
         <NewRunModal
           recipes={recipes}
-          onClose={() => setShowNewRun(false)}
-          onSave={() => { setShowNewRun(false); loadAll(); }}
+          onClose={() => {
+            setShowNewRun(false);
+            setPlanPrefill(null);
+          }}
+          onSave={() => {
+            setShowNewRun(false);
+            setPlanPrefill(null);
+            loadAll();
+          }}
           profile={profile}
+          initialRecipeId={planPrefill?.recipeId}
+          initialPlannedOutput={planPrefill?.quantity}
+          plannedBatchId={planPrefill?.plannedBatchId}
         />
       )}
       {viewRun && <RunDetailModal run={viewRun} onClose={() => setViewRun(null)} />}

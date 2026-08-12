@@ -9,6 +9,7 @@ import {
   type ReconcileOutletStockResult,
 } from '../utils/reconciliationService';
 import { formatDateForInput } from '../utils/dateRange';
+import { AlertsPanel, type AlertItem } from '../components/AlertsPanel';
 
 const COUNT_DUE_DAYS = 30;
 
@@ -177,9 +178,26 @@ export function AuditDashboard() {
       {error && <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
 
       {!loading && problemCount > 0 && (
-        <p className="text-sm text-amber-800">
-          {problemCount} outlet{problemCount !== 1 ? 's' : ''} need attention (variance, overdue count, or never counted).
-        </p>
+        <AlertsPanel
+          title="Attention needed"
+          alerts={
+            rows
+              .filter((r) => !r.loading && (Math.abs(r.unexplainedVariance) > 0.001 || r.countStatus !== 'ok'))
+              .slice(0, 8)
+              .map(
+                (r): AlertItem => ({
+                  id: `audit-${r.outlet.id}`,
+                  tone: Math.abs(r.unexplainedVariance) > 0.001 || r.countStatus === 'overdue' || r.countStatus === 'never' ? 'red' : 'amber',
+                  title: r.outlet.name,
+                  detail:
+                    Math.abs(r.unexplainedVariance) > 0.001
+                      ? `Unexplained variance ${r.unexplainedVariance}`
+                      : `Count status: ${r.countStatus}`,
+                  to: `/reconciliation?outlet=${r.outlet.id}`,
+                })
+              )
+          }
+        />
       )}
 
       <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">

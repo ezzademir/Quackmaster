@@ -4,14 +4,17 @@ import type { Outlet } from '../../types';
 import { supabase } from '../../utils/supabase';
 import { hubRowAvailableQuantity } from '../../utils/hubInventoryMath';
 import {
+  allocateSkuCountToLots,
   buildOutletStockTakeCsv,
   fetchOutletInventoryRowsForStockTake,
   getOutletStockTakeSessionDetail,
+  groupRowsForSkuCount,
   listOutletStockTakeSessions,
   postOutletStockTake,
   type OutletStockTakeSessionRow,
   type OutletStockTakeLineRow,
 } from '../../utils/outletStockTakeService';
+import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
 
 type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
 
@@ -29,6 +32,8 @@ type DraftRow = {
   item_detail: string;
   countedStr: string;
   remark: string;
+  expiry_date?: string | null;
+  created_at?: string | null;
 };
 
 function normBatch(pb: string | null | undefined): string {
@@ -152,6 +157,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   /** Populated when supervisor view loads `recipes` (for catalog + ingredient cross-reference). */
   const [supervisorRecipeCatalog, setSupervisorRecipeCatalog] = useState<RecipeMeta[]>([]);
+  /** Supervisor blind count: ingredients vs finished goods. */
+  const [supervisorTab, setSupervisorTab] = useState<'ingredients' | 'finished_goods'>('ingredients');
+  /** Staff/admin: count by lot row vs by SKU (product_batch / RM). */
+  const [countMode, setCountMode] = useState<'lot' | 'sku'>('lot');
+  /** Dual-count: second-entry map when variance exceeds threshold (staff/admin only). */
+  const [recountPhase, setRecountPhase] = useState(false);
+  const [recountStr, setRecountStr] = useState<Record<string, string>>({});
+  const [varianceThreshold, setVarianceThreshold] = useState(5);
 
   const blindSupervisor = !!lockedOutletId;
 
@@ -164,11 +177,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
       }
       setLoadingInv(true);
       setMessage(null);
+      setRecountPhase(false);
+      setRecountStr({});
 
       try {
         if (lockedOutletId) {
+          const isIngredients = supervisorTab === 'ingredients';
           const [invRes, recipeRes, ringRes] = await Promise.all([
-            fetchOutletInventoryRowsForStockTake(oid, { rmOnly: true }),
+            fetchOutletInventoryRowsForStockTake(oid, isIngredients ? { rmOnly: true } : { fgOnly: true }),
             supabase.from('recipes').select('id,name,default_product_batch').order('name'),
             supabase.from('recipe_ingredients').select('raw_material_id, recipes(name)'),
           ]);
@@ -182,21 +198,34 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           setSupervisorRecipeCatalog(recipes);
 
           const rmToRecipes = buildRmToRecipes(ringRes.data ?? []);
+          const recipeByBatch = new Map(
+            recipes
+              .filter((r) => r.default_product_batch?.trim())
+              .map((r) => [normBatch(r.default_product_batch), r.name] as const)
+          );
 
           const mapped: DraftRow[] = (inv ?? []).flatMap((r: unknown) => {
             const row = r as Record<string, unknown>;
             const rmid = row.raw_material_id ? String(row.raw_material_id) : null;
-            if (!rmid) return [];
+            if (isIngredients && !rmid) return [];
+            if (!isIngredients && rmid) return [];
             const qoh = Number(row.quantity_on_hand ?? 0);
             const res = Number(row.reserved_quantity ?? 0);
-            const lot = row.lot as { product_batch_label?: string | null } | null | undefined;
+            const lot = row.lot as { product_batch_label?: string | null; expiry_date?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
             const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
             const mat = nestedMaterialPayload(row);
             const pb = normBatch(row.product_batch as string | null | undefined);
-            const item_label = mat?.name?.trim() || 'Ingredient';
-            const hint = (rmToRecipes.get(rmid) ?? []).join(', ');
-            const item_detail = hint ? `Used in: ${hint}` : '';
+            let item_label: string;
+            let item_detail: string;
+            if (isIngredients) {
+              item_label = mat?.name?.trim() || 'Ingredient';
+              const hint = rmid ? (rmToRecipes.get(rmid) ?? []).join(', ') : '';
+              item_detail = hint ? `Used in: ${hint}` : '';
+            } else {
+              item_label = (pb && recipeByBatch.get(pb)) || pb || 'Finished good';
+              item_detail = pb && recipeByBatch.has(pb) ? `Batch: ${pb}` : '';
+            }
             return [
               {
                 id: String(row.id),
@@ -210,6 +239,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 item_detail,
                 countedStr: '',
                 remark: '',
+                expiry_date: lot?.expiry_date ?? null,
+                created_at: typeof row.created_at === 'string' ? row.created_at : null,
               } satisfies DraftRow,
             ];
           });
@@ -227,7 +258,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             const row = r as Record<string, unknown>;
             const qoh = Number(row.quantity_on_hand ?? 0);
             const res = Number(row.reserved_quantity ?? 0);
-            const lot = row.lot as { product_batch_label?: string | null } | null | undefined;
+            const lot = row.lot as { product_batch_label?: string | null; expiry_date?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
             const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
             const rmid = row.raw_material_id ? String(row.raw_material_id) : null;
@@ -254,6 +285,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               item_detail,
               countedStr: String(qoh),
               remark: '',
+              expiry_date: lot?.expiry_date ?? null,
+              created_at: typeof row.created_at === 'string' ? row.created_at : null,
             };
           });
           mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
@@ -267,7 +300,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         setLoadingInv(false);
       }
     },
-    [lockedOutletId]
+    [lockedOutletId, supervisorTab]
   );
 
   const refreshSessions = useCallback(async (oid?: string, opts?: { silent?: boolean }) => {
@@ -298,6 +331,13 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   useEffect(() => {
     void loadOutletStockTakeData(outletId);
   }, [outletId, loadOutletStockTakeData]);
+
+  useEffect(() => {
+    void (async () => {
+      const t = await fetchStockTakeVarianceThreshold();
+      setVarianceThreshold(t);
+    })();
+  }, []);
 
   useEffect(() => {
     void refreshSessions(outletId || undefined);
@@ -332,7 +372,38 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     return c - r.quantity_on_hand;
   };
 
-  const canSubmit =
+  const skuGroups = useMemo(() => {
+    if (blindSupervisor || countMode !== 'sku') return [];
+    return groupRowsForSkuCount(
+      rows.map((r) => ({
+        id: r.id,
+        raw_material_id: r.raw_material_id,
+        product_batch: r.product_batch,
+        quantity_on_hand: r.quantity_on_hand,
+        reserved_quantity: r.reserved_quantity,
+        expiry_date: r.expiry_date,
+        created_at: r.created_at,
+        item_label: r.item_label,
+      }))
+    );
+  }, [blindSupervisor, countMode, rows]);
+
+  const [skuCounted, setSkuCounted] = useState<Record<string, string>>({});
+  const [skuRemarks, setSkuRemarks] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (countMode !== 'sku') return;
+    const next: Record<string, string> = {};
+    for (const g of skuGroups) {
+      next[g.key] = String(g.system_qoh);
+    }
+    setSkuCounted(next);
+    setSkuRemarks({});
+    setRecountPhase(false);
+    setRecountStr({});
+  }, [countMode, outletId, rows.length]); // eslint-disable-line react-hooks/exhaustive-deps -- reset when inventory reloads
+
+  const canSubmitLot =
     outletId &&
     rows.length > 0 &&
     !submitting &&
@@ -342,12 +413,145 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
       return c !== null && c >= (r.reserved_quantity ?? 0);
     });
 
+  const canSubmitSku =
+    outletId &&
+    skuGroups.length > 0 &&
+    !submitting &&
+    !loadingInv &&
+    skuGroups.every((g) => {
+      const c = parseCount(skuCounted[g.key] ?? '');
+      return c !== null && c >= g.reserved;
+    });
+
+  const canSubmit = countMode === 'sku' && !blindSupervisor ? canSubmitSku : canSubmitLot;
+
+  const linesNeedingRecount = (): Array<{ key: string; label: string; first: number; system: number }> => {
+    if (blindSupervisor) return [];
+    if (countMode === 'sku') {
+      return skuGroups
+        .map((g) => {
+          const first = parseCount(skuCounted[g.key] ?? '');
+          if (first === null) return null;
+          const abs = Math.abs(first - g.system_qoh);
+          if (abs <= varianceThreshold) return null;
+          return { key: g.key, label: g.label, first, system: g.system_qoh };
+        })
+        .filter((x): x is { key: string; label: string; first: number; system: number } => !!x);
+    }
+    return rows
+      .map((r) => {
+        const first = parseCount(r.countedStr);
+        if (first === null) return null;
+        const abs = Math.abs(first - r.quantity_on_hand);
+        if (abs <= varianceThreshold) return null;
+        return { key: r.id, label: r.item_label, first, system: r.quantity_on_hand };
+      })
+      .filter((x): x is { key: string; label: string; first: number; system: number } => !!x);
+  };
+
+  const recountMatches = () => {
+    const need = linesNeedingRecount();
+    return need.every((n) => {
+      const second = parseCount(recountStr[n.key] ?? '');
+      return second !== null && Math.abs(second - n.first) < 0.0001;
+    });
+  };
+
+  const postLines = async (
+    lines: Array<{ outlet_inventory_id: string; counted_qty: number; line_remark?: string | null }>
+  ) => {
+    const idem = crypto.randomUUID();
+    const result = await postOutletStockTake({
+      outletId,
+      countDate,
+      notes: sessionNotes.trim() || null,
+      lines,
+      idempotencyKey: idem,
+    });
+
+    if (!result.success) {
+      setMessage({
+        tone: 'err',
+        text: describePostError(result as { error?: string }, { blindSupervisor }),
+      });
+      return;
+    }
+
+    const sessionId = result.session_id;
+    setMessage({
+      tone: 'ok',
+      text: result.idempotent_replay
+        ? 'Replayed existing stock take (same idempotency key).'
+        : 'Stock take posted and inventory updated.',
+    });
+
+    if (!blindSupervisor) {
+      const detail = await getOutletStockTakeSessionDetail(sessionId);
+      if (detail) {
+        const csvLines = detail.lines.map((l) => ({
+          outlet_inventory_id: l.outlet_inventory_id,
+          product_batch: csvPrimaryLabel(l.outlet_inventory),
+          lot_label: l.outlet_inventory?.lot?.product_batch_label ?? '',
+          system_qoh_before: Number(l.system_qoh_before),
+          counted_qty: Number(l.counted_qty),
+          variance: Number(l.variance),
+          line_remark: l.line_remark,
+        }));
+        const csv = buildOutletStockTakeCsv(detail, csvLines);
+        const safeDate = (detail.count_date ?? countDate).replace(/[^\d-]/g, '');
+        downloadCsv(`outlet-stock-take-${detail.id.slice(0, 8)}-${safeDate}.csv`, csv);
+      }
+    }
+
+    setSessionNotes('');
+    setRecountPhase(false);
+    setRecountStr({});
+    void loadOutletStockTakeData(outletId);
+    void refreshSessions(outletId, { silent: true });
+    onApplied?.();
+  };
+
   const handleSubmit = async () => {
-    if (!outletId || rows.length === 0) return;
+    if (!outletId) return;
     setSubmitting(true);
     setMessage(null);
-    const idem = crypto.randomUUID();
     try {
+      if (!blindSupervisor) {
+        const need = linesNeedingRecount();
+        if (need.length > 0 && !recountPhase) {
+          setRecountPhase(true);
+          setRecountStr(Object.fromEntries(need.map((n) => [n.key, ''])));
+          setMessage({
+            tone: 'err',
+            text: `${need.length} line(s) exceed the variance threshold (±${varianceThreshold}). Enter a matching recount to confirm before posting.`,
+          });
+          return;
+        }
+        if (recountPhase && !recountMatches()) {
+          setMessage({
+            tone: 'err',
+            text: 'Recount values must match the first count exactly for every highlighted line.',
+          });
+          return;
+        }
+      }
+
+      if (countMode === 'sku' && !blindSupervisor) {
+        const lines: Array<{ outlet_inventory_id: string; counted_qty: number; line_remark?: string | null }> = [];
+        for (const g of skuGroups) {
+          const c = parseCount(skuCounted[g.key] ?? '');
+          if (c === null) throw new Error('invalid_counts');
+          const allocated = allocateSkuCountToLots(g.lots, c);
+          const remark = skuRemarks[g.key]?.trim() || null;
+          for (const a of allocated) {
+            lines.push({ ...a, line_remark: remark });
+          }
+        }
+        await postLines(lines);
+        return;
+      }
+
+      if (rows.length === 0) return;
       const lines = rows.map((r) => {
         const c = parseCount(r.countedStr);
         if (c === null) throw new Error('invalid_counts');
@@ -357,61 +561,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           line_remark: r.remark.trim() || null,
         };
       });
-
-      const result = await postOutletStockTake({
-        outletId,
-        countDate,
-        notes: sessionNotes.trim() || null,
-        lines,
-        idempotencyKey: idem,
-      });
-
-      if (!result.success) {
-        setMessage({
-          tone: 'err',
-          text: describePostError(result as { error?: string }, { blindSupervisor }),
-        });
-        return;
-      }
-
-      const sessionId = result.session_id;
-      setMessage({
-        tone: 'ok',
-        text: result.idempotent_replay
-          ? 'Replayed existing stock take (same idempotency key).'
-          : blindSupervisor
-            ? 'Stock take posted and inventory updated.'
-            : 'Stock take posted and inventory updated.',
-      });
-
-      // Supervisors: no CSV (no auto-download and no export button in Recent sessions).
-      if (!blindSupervisor) {
-        const detail = await getOutletStockTakeSessionDetail(sessionId);
-        if (detail) {
-          const csvLines = detail.lines.map((l) => ({
-            outlet_inventory_id: l.outlet_inventory_id,
-            product_batch: csvPrimaryLabel(l.outlet_inventory),
-            lot_label: l.outlet_inventory?.lot?.product_batch_label ?? '',
-            system_qoh_before: Number(l.system_qoh_before),
-            counted_qty: Number(l.counted_qty),
-            variance: Number(l.variance),
-            line_remark: l.line_remark,
-          }));
-          const csv = buildOutletStockTakeCsv(detail, csvLines);
-          const safeDate = (detail.count_date ?? countDate).replace(/[^\d-]/g, '');
-          downloadCsv(`outlet-stock-take-${detail.id.slice(0, 8)}-${safeDate}.csv`, csv);
-        }
-      }
-
-      setSessionNotes('');
-      void loadOutletStockTakeData(outletId);
-      void refreshSessions(outletId, { silent: true });
-      onApplied?.();
+      await postLines(lines);
     } catch (e) {
       if ((e as Error).message === 'invalid_counts') {
         setMessage({
           tone: 'err',
-          text: blindSupervisor ? 'Enter a valid counted quantity on every line before submitting.' : 'Fix invalid counted quantities before submitting.',
+          text: blindSupervisor
+            ? 'Enter a valid counted quantity on every line before submitting.'
+            : 'Fix invalid counted quantities before submitting.',
         });
       } else {
         setMessage({ tone: 'err', text: e instanceof Error ? e.message : 'Submit failed.' });
@@ -452,7 +609,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
 
   const outletName = useMemo(() => outlets.find((o) => o.id === outletId)?.name ?? '', [outlets, outletId]);
 
-  const inventoryColTitle = blindSupervisor ? 'Ingredient' : 'Batch / ingredient';
+  const inventoryColTitle = blindSupervisor
+    ? supervisorTab === 'ingredients'
+      ? 'Ingredient'
+      : 'Finished good'
+    : 'Batch / ingredient';
 
   const renderMobileInventoryCards = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
@@ -631,14 +792,58 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         </span>
         <p className="mt-1.5 leading-relaxed text-amber-900/90">
           {lockedOutletId
-            ? 'Blind ingredient count only: ingredient names are shown — system quantities, lots, reservations, and variance are hidden on this screen. Admin and staff can export full session detail from Inventory → Outlet stock take. Finished goods stay on Inventory → Stock take. Enter every counted quantity; invalid or short counts may be rejected when you submit.'
-            : 'Count physical stock per outlet inventory row. Submitting updates on-hand and available quantities via the server, writes a session + lines, and records a data ledger entry. Counted quantity cannot be below reserved.'}
+            ? 'Blind count: use the Ingredients and Finished goods tabs. System quantities, lots, reservations, and variance are hidden. Enter every counted quantity for the active tab, then post. Admin and staff can export full session detail from Stock take.'
+            : 'Count physical stock per lot row or by SKU. Submitting updates on-hand via the server. Lines exceeding the variance threshold require a matching recount before post. Counted quantity cannot be below reserved.'}
         </p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
           <h2 className="text-sm font-semibold text-gray-800">New count</h2>
+          {lockedOutletId ? (
+            <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+              {(
+                [
+                  ['ingredients', 'Ingredients'],
+                  ['finished_goods', 'Finished goods'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSupervisorTab(id)}
+                  className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    supervisorTab === id ? 'bg-white text-amber-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+              {(
+                [
+                  ['lot', 'By lot'],
+                  ['sku', 'By SKU'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    setCountMode(id);
+                    setRecountPhase(false);
+                  }}
+                  className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    countMode === id ? 'bg-white text-amber-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:items-end">
             <div className="min-w-0">
               <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
@@ -696,14 +901,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <div className="py-8 text-center text-sm text-gray-400">Loading inventory…</div>
           ) : !outletId ? (
             <p className="text-sm text-gray-500">Choose an outlet to load rows.</p>
-          ) : rows.length === 0 ? (
+          ) : (countMode === 'sku' && !blindSupervisor ? skuGroups.length === 0 : rows.length === 0) ? (
             <div className="space-y-1 text-sm text-amber-800">
               <p>
                 {lockedOutletId
-                  ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
+                  ? supervisorTab === 'ingredients'
+                    ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
+                    : 'No finished-goods stock at this outlet — receive hub supply first before running this count.'
                   : 'No outlet inventory rows — receive stock before running a stock take.'}
               </p>
-              {lockedOutletId && supervisorRecipeCatalog.length > 0 ? (
+              {lockedOutletId && supervisorTab === 'ingredients' && supervisorRecipeCatalog.length > 0 ? (
                 <p className="text-xs text-gray-600">
                   Recipe catalog loaded ({supervisorRecipeCatalog.length} recipes); rows appear when hub supply creates ingredient lines.
                 </p>
@@ -714,8 +921,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               {lockedOutletId ? (
                 <div className="space-y-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-800">Ingredients</h3>
-                    {supervisorRecipeCatalog.length > 0 ? (
+                    <h3 className="text-sm font-semibold text-gray-800">
+                      {supervisorTab === 'ingredients' ? 'Ingredients' : 'Finished goods'}
+                    </h3>
+                    {supervisorTab === 'ingredients' && supervisorRecipeCatalog.length > 0 ? (
                       <p className="mt-0.5 text-xs text-gray-500">
                         Recipe catalog loaded ({supervisorRecipeCatalog.length} recipes) — usage hints shown per line where known.
                       </p>
@@ -723,15 +932,130 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   </div>
                   {renderTableShell(rows, true)}
                 </div>
+              ) : countMode === 'sku' ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500">
+                    Enter one counted total per SKU / ingredient. On post, quantities are allocated to lots FIFO by expiry.
+                  </p>
+                  <div className="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
+                    <table className="w-full min-w-[520px] text-sm">
+                      <thead className="border-b border-gray-200 bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">SKU / ingredient</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Lots</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Remark</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {skuGroups.map((g) => {
+                          const c = parseCount(skuCounted[g.key] ?? '');
+                          const v = c === null ? null : c - g.system_qoh;
+                          return (
+                            <tr key={g.key} className="hover:bg-gray-50">
+                              <td className="px-3 py-2 font-medium text-gray-900">{g.label}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-600">{g.lots.length}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{g.system_qoh}</td>
+                              <td className="px-3 py-2 text-right">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={skuCounted[g.key] ?? ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSkuCounted((prev) => ({ ...prev, [g.key]: val }));
+                                    setRecountPhase(false);
+                                  }}
+                                  className="w-24 rounded border border-gray-300 px-2 py-1 text-right text-sm tabular-nums"
+                                />
+                              </td>
+                              <td
+                                className={`px-3 py-2 text-right tabular-nums ${
+                                  v != null && Math.abs(v) > varianceThreshold ? 'font-semibold text-amber-800' : 'text-gray-600'
+                                }`}
+                              >
+                                {v === null ? '—' : v}
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  value={skuRemarks[g.key] ?? ''}
+                                  onChange={(e) => setSkuRemarks((prev) => ({ ...prev, [g.key]: e.target.value }))}
+                                  className="w-full min-w-[6rem] rounded border border-gray-300 px-2 py-1 text-xs"
+                                  placeholder="Optional"
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="space-y-3 md:hidden">
+                    {skuGroups.map((g) => {
+                      const c = parseCount(skuCounted[g.key] ?? '');
+                      const v = c === null ? null : c - g.system_qoh;
+                      return (
+                        <div key={g.key} className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+                          <p className="font-medium text-gray-900">{g.label}</p>
+                          <p className="text-xs text-gray-500">
+                            {g.lots.length} lot(s) · System {g.system_qoh}
+                            {v != null ? ` · Var ${v}` : ''}
+                          </p>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={skuCounted[g.key] ?? ''}
+                            onChange={(e) => {
+                              setSkuCounted((prev) => ({ ...prev, [g.key]: e.target.value }));
+                              setRecountPhase(false);
+                            }}
+                            className="mt-2 min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-right"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               ) : (
                 renderTableShell(rows, false)
               )}
+
+              {recountPhase && !blindSupervisor ? (
+                <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                  <p className="text-sm font-semibold text-amber-950">Recount required</p>
+                  <p className="text-xs text-amber-900">
+                    Re-enter the same counted quantity for each line below (threshold ±{varianceThreshold}).
+                  </p>
+                  {linesNeedingRecount().map((n) => (
+                    <div key={n.key} className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="min-w-[8rem] flex-1 font-medium text-gray-800">{n.label}</span>
+                      <span className="text-xs text-gray-500">First: {n.first}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={recountStr[n.key] ?? ''}
+                        onChange={(e) => setRecountStr((prev) => ({ ...prev, [n.key]: e.target.value }))}
+                        placeholder="Recount"
+                        className="w-28 rounded border border-amber-400 px-2 py-1 text-right text-sm"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                 <p className="order-2 text-xs text-gray-500 sm:order-1">
                   {outletName ? (
                     <>
-                      Outlet: <span className="font-medium text-gray-700">{outletName}</span> · {rows.length} row
-                      {rows.length !== 1 ? 's' : ''}
+                      Outlet: <span className="font-medium text-gray-700">{outletName}</span> ·{' '}
+                      {countMode === 'sku' && !blindSupervisor
+                        ? `${skuGroups.length} SKU${skuGroups.length !== 1 ? 's' : ''}`
+                        : `${rows.length} row${rows.length !== 1 ? 's' : ''}`}
                       {blindSupervisor && supervisorRecipeCatalog.length > 0 ? (
                         <> · {supervisorRecipeCatalog.length} recipes in catalog</>
                       ) : null}
@@ -744,7 +1068,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   disabled={!canSubmit}
                   className="order-1 min-h-11 w-full shrink-0 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 sm:order-2 sm:min-h-0 sm:w-auto sm:py-2 active:bg-amber-800"
                 >
-                  {submitting ? 'Posting…' : 'Post stock take'}
+                  {submitting ? 'Posting…' : recountPhase ? 'Confirm recount & post' : 'Post stock take'}
                 </button>
               </div>
             </>

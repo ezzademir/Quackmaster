@@ -18,6 +18,7 @@ import {
   receiveOutletTransfer,
   cancelOutletTransfer,
 } from '../utils/distributionService';
+import { suggestReorder, type ReorderSuggestion } from '../utils/parService';
 import { validateSupplyOrder } from '../utils/validation';
 import type { Outlet, OutletTransfer, OutletInventory, OutletTransferLine, SupplyOrder } from '../types';
 import { useAuth } from '../utils/auth';
@@ -234,6 +235,25 @@ function NewSupplyOrderModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [parSuggestions, setParSuggestions] = useState<ReorderSuggestion[]>([]);
+
+  useEffect(() => {
+    if (!outlet_id) {
+      setParSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    void suggestReorder(outlet_id)
+      .then((rows) => {
+        if (!cancelled) setParSuggestions(rows.filter((r) => r.suggested_qty > 0 && r.kind === 'fg'));
+      })
+      .catch(() => {
+        if (!cancelled) setParSuggestions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [outlet_id]);
 
   const qtyParsed = parseFloat(quantity);
   const allocationPreview = useMemo(() => {
@@ -316,6 +336,27 @@ function NewSupplyOrderModal({
             <option value="">Select outlet…</option>
             {outlets.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.location_code})</option>)}
           </select>
+          {parSuggestions.length > 0 && (
+            <div className="mt-2 rounded-lg border border-teal-200 bg-teal-50/80 p-3">
+              <p className="text-xs font-semibold text-teal-900">PAR reorder suggestions</p>
+              <ul className="mt-1 space-y-1 text-xs text-teal-900">
+                {parSuggestions.slice(0, 6).map((s) => (
+                  <li key={s.par_key} className="flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      {s.label}: need {s.suggested_qty} (on hand {s.on_hand_available} / target {s.target_qty}+{s.safety_stock})
+                    </span>
+                    <button
+                      type="button"
+                      className="font-medium text-teal-800 underline"
+                      onClick={() => setQuantity(String(s.suggested_qty))}
+                    >
+                      Use qty
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Supply date *</label>
