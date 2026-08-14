@@ -615,7 +615,38 @@ function SODetailModal({
 }) {
   const [saving, setSaving] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const [lines, setLines] = useState<Array<{ id: string; quantity: number; product_batch: string | null; lot_label: string | null }>>([]);
   const canHardDelete = isAdmin && supplyOrderAllowsAdminHardDelete(so.status);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from('supply_order_lines')
+        .select('id, quantity, product_batch, hub:hub_inventory_id(product_batch, lot:inventory_lots(product_batch_label))')
+        .eq('supply_order_id', so.id);
+      if (cancelled) return;
+      const rows = (data ?? []).map((ln) => {
+        const hubRaw = ln.hub as
+          | { product_batch?: string | null; lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null }
+          | { product_batch?: string | null; lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null }[]
+          | null;
+        const hub = Array.isArray(hubRaw) ? hubRaw[0] : hubRaw;
+        const lotRaw = hub?.lot;
+        const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+        return {
+          id: ln.id as string,
+          quantity: Number(ln.quantity ?? 0),
+          product_batch: (ln.product_batch as string | null) ?? hub?.product_batch ?? null,
+          lot_label: lot?.product_batch_label?.trim() || null,
+        };
+      });
+      setLines(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [so.id]);
 
   async function askCancelOrder() {
     const st = normalizeSOStatus(so.status);
@@ -712,6 +743,28 @@ function SODetailModal({
           {so.received_date && <div><p className="text-xs text-gray-500">Received date</p><p className="font-semibold text-gray-900">{formatSupplyCalendarDate(so.received_date)}</p></div>}
           {so.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{so.notes}</p></div>}
         </div>
+        {lines.length > 0 && (
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="w-full text-sm">
+              <thead className="border-b border-gray-200 bg-white">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Lot</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {lines.map((ln) => (
+                  <tr key={ln.id}>
+                    <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-900">
+                      {ln.lot_label || ln.product_batch || '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">{ln.quantity.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {isPending && (
           <div>
             <label className="mb-1 block text-xs font-medium text-gray-600">Cancellation reason (optional)</label>
@@ -1842,6 +1895,35 @@ export function Distribution() {
           )}
         </div>
       </div>
+
+      {hubProductLines.filter((l) => l.available > 0 || (l.lot_label && l.lot_label.length > 0)).length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-1 text-sm font-semibold text-gray-900">Hub lots ready to supply</h3>
+          <p className="mb-4 text-xs text-gray-500">Printable lot codes. Supply orders allocate these FEFO and the same code arrives at the outlet.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-gray-50 text-left">
+                <tr>
+                  <th className="px-3 py-2 font-medium text-gray-700">Lot</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Available</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {hubProductLines
+                  .filter((l) => l.available > 0)
+                  .map((l) => (
+                    <tr key={l.id}>
+                      <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-900">
+                        {l.lot_label || l.product_batch || '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-800">{l.available.toLocaleString()}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Outlet Inventory Breakdown */}
       {outlets.length > 0 && (

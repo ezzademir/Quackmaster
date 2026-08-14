@@ -94,7 +94,7 @@ export interface ProductionRun {
   planned_output: number;
   actual_output: number;
   yield_percentage?: number;
-  status: 'in_progress' | 'completed' | 'cancelled';
+  status: 'in_progress' | 'completed' | 'cancelled' | 'voided';
   notes?: string;
   planned_batch_id?: string | null;
   created_at: string;
