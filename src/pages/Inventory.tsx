@@ -8,6 +8,8 @@ import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../uti
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { fetchOutletMovements, type OutletMovementRow } from '../utils/reconciliationService';
 import { nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
+import { filterByStockView, type StockView } from '../utils/stockView';
+import { StockViewToggle } from '../components/StockViewToggle';
 import type { RawMaterial, Outlet } from '../types';
 
 type Tab = 'hub' | 'outlets';
@@ -150,6 +152,7 @@ export function Inventory() {
   const [adjustRow, setAdjustRow] = useState<HubRow | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [stockView, setStockView] = useState<StockView>('in_stock');
   const [timelineRow, setTimelineRow] = useState<OutletRow | null>(null);
   const [timelineMoves, setTimelineMoves] = useState<OutletMovementRow[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -274,13 +277,34 @@ export function Inventory() {
     setDateRange(range);
   };
 
-  const filteredHubRows = dateRange
+  const datedHubRows = dateRange
     ? hubRows.filter((r) => isDateInRange(r.last_updated, dateRange))
     : hubRows;
 
-  const filteredOutletRows = dateRange
+  const datedOutletRows = dateRange
     ? outletRows.filter((r) => isDateInRange(r.last_updated, dateRange))
     : outletRows;
+
+  const filteredHubRows = filterByStockView(datedHubRows, stockView, (r) => r.quantity_on_hand);
+  const filteredOutletRows = filterByStockView(datedOutletRows, stockView, (r) => r.quantity_on_hand);
+
+  const hubMaterialRows = filteredHubRows.filter((r) => r.type === 'material');
+  const hubProductRows = filteredHubRows
+    .filter((r) => r.type === 'product')
+    .slice()
+    .sort((a, b) => {
+      const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+      const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+      if (ae !== be) return ae - be;
+      return (a.lot_label || a.name).localeCompare(b.lot_label || b.name);
+    });
+
+  const outletDisplayRows = filteredOutletRows.slice().sort((a, b) => {
+    const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+    const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+    if (ae !== be) return ae - be;
+    return (a.lot_label || a.display_name).localeCompare(b.lot_label || b.display_name);
+  });
 
   const hubFinishedAtpAll = useMemo(
     () => aggregateFinishedGoodsHubTotals(hubRows.filter((r) => r.type === 'product')),
@@ -372,7 +396,8 @@ export function Inventory() {
             <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
           </div>
           {(tab === 'hub' || tab === 'outlets') && (
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-4">
+              <StockViewToggle value={stockView} onChange={setStockView} />
               <label className="flex items-center gap-2 text-xs text-gray-600">
                 <input
                   type="checkbox"
@@ -419,10 +444,14 @@ export function Inventory() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {filteredHubRows.filter((r) => r.type === 'material').length === 0 ? (
-                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">No raw material stock — receive a purchase order to add stock</td></tr>
+                      {hubMaterialRows.length === 0 ? (
+                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">
+                          {stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'material')
+                            ? 'No in-stock raw materials. Switch to All lots for empty / audit.'
+                            : 'No raw material stock — receive a purchase order to add stock'}
+                        </td></tr>
                       ) : (
-                        filteredHubRows.filter((r) => r.type === 'material').map((row) => (
+                        hubMaterialRows.map((row) => (
                           <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${row.quantity_on_hand === 0 ? 'bg-red-50/30' : row.quantity_on_hand <= (row.reorder_level ?? 10) ? 'bg-amber-50/30' : ''}`}>
                             <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.name}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
@@ -462,10 +491,14 @@ export function Inventory() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {filteredHubRows.filter((r) => r.type === 'product').length === 0 ? (
-                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">No product stock — complete a production run to add product</td></tr>
+                      {hubProductRows.length === 0 ? (
+                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">
+                          {stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'product')
+                            ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                            : 'No product stock — complete a production run to add product'}
+                        </td></tr>
                       ) : (
-                        filteredHubRows.filter((r) => r.type === 'product').map((row) => (
+                        hubProductRows.map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                             <td className="px-4 md:px-6 py-4 font-mono text-xs sm:text-sm font-medium text-gray-900">{row.lot_label || row.name}</td>
                             <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">{skuForDisplay(row.lot_label, row.product_batch, row.recipe_sku) || '—'}</td>
@@ -513,10 +546,14 @@ export function Inventory() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredOutletRows.length === 0 ? (
-                      <tr><td colSpan={7} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">No outlet stock yet</td></tr>
+                    {outletDisplayRows.length === 0 ? (
+                      <tr><td colSpan={7} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">
+                        {stockView === 'in_stock' && datedOutletRows.length > 0
+                          ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                          : 'No outlet stock yet'}
+                      </td></tr>
                     ) : (
-                      filteredOutletRows.map((row) => (
+                      outletDisplayRows.map((row) => (
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.outlet_name}</td>
                           <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{row.display_name}</td>

@@ -10,6 +10,7 @@ export interface HubLotLine {
   id: string;
   product_batch: string | null;
   available: number;
+  onHand: number;
   last_updated?: string;
   expiry_date?: string | null;
   lot_label?: string | null;
