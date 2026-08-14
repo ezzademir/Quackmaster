@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, Truck, MapPin, AlertCircle, ArrowLeftRight } from 'lucide-react';
+import { Plus, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { HubAtpCompact } from '../components/HubAtpCompact';
@@ -20,69 +20,34 @@ import {
 } from '../utils/distributionService';
 import { suggestReorder, type ReorderSuggestion } from '../utils/parService';
 import { validateSupplyOrder } from '../utils/validation';
-import type { Outlet, OutletTransfer, OutletInventory, OutletTransferLine, SupplyOrder } from '../types';
+import type { Outlet, OutletInventory, OutletTransferLine } from '../types';
 import { useAuth } from '../utils/auth';
 import {
   aggregateFinishedGoodsHubTotals,
   hubRowAvailableQuantity,
   type FinishedHubTotals,
 } from '../utils/hubInventoryMath';
-
-type Tab = 'orders' | 'outlets' | 'transfers';
-
-/** Calendar date from DB `date` or timestamptz — avoids UTC midnight shifting the displayed day */
-function formatSupplyCalendarDate(value: string | undefined | null): string {
-  if (value == null || value === '') return '—';
-  const trimmed = String(value).trim();
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
-  if (dateOnly) {
-    const y = Number(dateOnly[1]);
-    const mo = Number(dateOnly[2]) - 1;
-    const day = Number(dateOnly[3]);
-    const d = new Date(y, mo, day);
-    if (!Number.isNaN(d.getTime())) return d.toLocaleDateString();
-  }
-  const d = new Date(trimmed);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString();
-}
-
-/** Admin hard-delete is allowed for these statuses (RPC reverses inventory when applicable). */
-function supplyOrderAllowsAdminHardDelete(status: string | undefined): boolean {
-  const s = String(status ?? '').toLowerCase().trim();
-  return s === 'pending' || s === 'cancelled' || s === 'dispatched' || s === 'received';
-}
-
-function supplyOrderAdminDeleteConfirmDetail(status: string | undefined): string {
-  const stNorm = String(status ?? '').toLowerCase().trim();
-  switch (stNorm) {
-    case 'pending':
-      return 'Reserved hub stock will be released.';
-    case 'dispatched':
-      return 'Hub shipment will be reversed (stock returned to hub batches). Outlet on-hand was not increased until receipt, so it is unchanged.';
-    case 'received':
-      return 'Outlet on-hand will be reduced and hub finished-goods stock will be restored for each line (admin correction).';
-    case 'cancelled':
-      return 'This removes the cancelled record only. Inventory is not adjusted automatically; if this order was dispatched before cancel, correct hub/outlet stock manually if needed.';
-    default:
-      return 'This order will be permanently removed.';
-  }
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const key = String(status ?? '').toLowerCase().trim();
-  const map: Record<string, string> = {
-    pending: 'bg-blue-100 text-blue-700',
-    dispatched: 'bg-amber-100 text-amber-700',
-    received: 'bg-emerald-100 text-emerald-700',
-    cancelled: 'bg-gray-100 text-gray-700',
-  };
-  return (
-    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[key] ?? 'bg-gray-100 text-gray-700'}`}>
-      {key.replace(/_/g, ' ') || '—'}
-    </span>
-  );
-}
+import { nestedLotLabel } from '../utils/lotLabel';
+import {
+  formatSupplyCalendarDate,
+  normalizeSOStatus,
+  supplyOrderAdminDeleteConfirmDetail,
+  supplyOrderAllowsAdminHardDelete,
+  tabClass,
+} from './distribution/helpers';
+import { StatusBadge } from './distribution/StatusBadge';
+import { OrdersTab } from './distribution/OrdersTab';
+import { OutletsTab } from './distribution/OutletsTab';
+import { TransfersTab } from './distribution/TransfersTab';
+import { LotsTab } from './distribution/LotsTab';
+import type {
+  DistributionTab,
+  HubLotLine,
+  OTWithOutlets,
+  OutletLotRow,
+  OutletStockRow,
+  SOWithOutlet,
+} from './distribution/types';
 
 // ---- Outlet Modal ----
 function OutletModal({
@@ -598,8 +563,6 @@ function NewRawMaterialSupplyModal({
 }
 
 // ---- Supply Order Detail Modal ----
-type SOWithOutlet = SupplyOrder & { outlet?: Outlet };
-
 function SODetailModal({
   so,
   onClose,
@@ -826,8 +789,6 @@ function SODetailModal({
     </Modal>
   );
 }
-
-type OTWithOutlets = OutletTransfer & { from_outlet?: Outlet; to_outlet?: Outlet };
 
 function outletTransferDateForRangeFilter(ot: OTWithOutlets): string {
   const st = normalizeSOStatus(ot.status);
@@ -1287,30 +1248,10 @@ function TransferDetailModal({
 }
 
 // ---- Main Distribution Page ----
-function normalizeSOStatus(status: string | undefined): string {
-  return String(status ?? '').toLowerCase().trim();
-}
-
-/** Filter by supply_date — matches the Supply column in the orders table. */
 function supplyOrderDateForRangeFilter(so: SOWithOutlet): string {
   const supplyDate = (so.supply_date ?? so.dispatch_date)?.trim();
   if (supplyDate) return supplyDate.includes('T') ? supplyDate : `${supplyDate}T12:00:00`;
   return so.created_at ?? '';
-}
-
-interface OutletStockRow {
-  outletId: string;
-  outletName: string;
-  /** Period view: units received in range; all-time view: on-hand at outlet */
-  onHand: number;
-  /** Sum of sellable quantity (available) across outlet_inventory rows — after reservations */
-  availableSellable: number;
-  /** Dispatched, not yet received — in transit; not included in on hand until receipt */
-  awaitingReceiptQty: number;
-  /** Pending supply orders — hub reserved only */
-  pendingSupplyQty: number;
-  /** Live outlet_inventory total (only when date filter is active) */
-  currentOnHandSnapshot?: number;
 }
 
 interface StockMetrics {
@@ -1327,21 +1268,13 @@ type CompletedProdRun = { actual_output: number | null; production_date: string 
 
 export function Distribution() {
   const { isAdmin } = useAuth();
-  const [tab, setTab] = useState<Tab>('orders');
+  const [tab, setTab] = useState<DistributionTab>('orders');
   const [orders, setOrders] = useState<SOWithOutlet[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [hubProductQty, setHubProductQty] = useState(0);
   /** Finished-goods hub rows for reservations (real UUIDs). */
-  const [hubProductLines, setHubProductLines] = useState<
-    {
-      id: string;
-      product_batch: string | null;
-      available: number;
-      last_updated?: string;
-      expiry_date?: string | null;
-      lot_label?: string | null;
-    }[]
-  >([]);
+  const [hubProductLines, setHubProductLines] = useState<HubLotLine[]>([]);
+  const [outletLots, setOutletLots] = useState<OutletLotRow[]>([]);
   const [hubFinishedAtp, setHubFinishedAtp] = useState<FinishedHubTotals>({
     onHand: 0,
     reserved: 0,
@@ -1392,7 +1325,7 @@ export function Distribution() {
       supabase.from('production_runs').select('actual_output, production_date').eq('status', 'completed'),
       supabase
         .from('outlet_inventory')
-        .select('outlet_id, quantity_on_hand, reserved_quantity, available_quantity')
+        .select('id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, lot:inventory_lots(product_batch_label)')
         .is('raw_material_id', null),
       supabase
         .from('hub_inventory')
@@ -1492,16 +1425,41 @@ export function Distribution() {
 
     const qtyByOutlet = new Map<string, number>();
     const availByOutlet = new Map<string, number>();
+    const nameByOutlet = new Map(outlets_list.map((o) => [o.id, o.name] as const));
+    const lotRows: OutletLotRow[] = [];
     for (const inv of outletInv ?? []) {
-      const oid = (inv as { outlet_id: string }).outlet_id;
+      const row = inv as {
+        id?: string;
+        outlet_id: string;
+        product_batch?: string | null;
+        quantity_on_hand: number;
+        reserved_quantity?: number;
+        available_quantity?: number | null;
+        lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
+      };
+      const oid = row.outlet_id;
       if (!oid) continue;
-      const q = Number((inv as { quantity_on_hand: number }).quantity_on_hand ?? 0);
-      const res = Number((inv as { reserved_quantity?: number }).reserved_quantity ?? 0);
-      const stored = (inv as { available_quantity?: number | null }).available_quantity;
+      const q = Number(row.quantity_on_hand ?? 0);
+      const res = Number(row.reserved_quantity ?? 0);
+      const stored = row.available_quantity;
       const avail = hubRowAvailableQuantity(q, res, stored);
       qtyByOutlet.set(oid, (qtyByOutlet.get(oid) ?? 0) + q);
       availByOutlet.set(oid, (availByOutlet.get(oid) ?? 0) + Math.max(0, avail));
+      lotRows.push({
+        key: row.id ?? `${oid}-${row.product_batch ?? ''}-${lotRows.length}`,
+        outletId: oid,
+        outletName: nameByOutlet.get(oid) ?? 'Outlet',
+        lotLabel: nestedLotLabel(row.lot),
+        productBatch: row.product_batch ?? null,
+        onHand: q,
+        available: Math.max(0, avail),
+      });
     }
+    lotRows.sort(
+      (a, b) =>
+        a.outletName.localeCompare(b.outletName) ||
+        (a.lotLabel ?? a.productBatch ?? '').localeCompare(b.lotLabel ?? b.productBatch ?? '')
+    );
 
     const outletInventoryBreakdown = outlets_list
       .map((o) => ({
@@ -1519,6 +1477,7 @@ export function Distribution() {
     setOutlets(outlets_list);
     setTransfers((ots ?? []) as OTWithOutlets[]);
     setHubProductLines(hubLines);
+    setOutletLots(lotRows);
     setHubProductQty(currentAvailable);
     setStockMetrics({
       totalGenerated,
@@ -1733,18 +1692,13 @@ export function Distribution() {
     void loadAll();
   }
 
-  const tabClass = (t: Tab) =>
-    `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
-      tab === t ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-    }`;
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Distribution</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Manage outlets, hub supply orders, and outlet-to-outlet stock transfers
+            Manage outlets, hub supply orders, lots at each outlet, and outlet-to-outlet transfers
           </p>
         </div>
         {tab === 'orders' && (
@@ -1781,12 +1735,13 @@ export function Distribution() {
 
       <div className="border-b border-gray-200">
         <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <div className="flex gap-6">
-            <button type="button" className={tabClass('orders')} onClick={() => setTab('orders')}>Supply Orders</button>
-            <button type="button" className={tabClass('transfers')} onClick={() => setTab('transfers')}>Outlet transfers</button>
-            <button type="button" className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlets</button>
+          <div className="flex flex-wrap gap-6">
+            <button type="button" className={tabClass(tab, 'orders')} onClick={() => setTab('orders')}>Supply Orders</button>
+            <button type="button" className={tabClass(tab, 'transfers')} onClick={() => setTab('transfers')}>Outlet transfers</button>
+            <button type="button" className={tabClass(tab, 'outlets')} onClick={() => setTab('outlets')}>Outlets</button>
+            <button type="button" className={tabClass(tab, 'lots')} onClick={() => setTab('lots')}>Lots</button>
           </div>
-          {tab !== 'outlets' && (
+          {tab !== 'outlets' && tab !== 'lots' && (
             <DateFilter
               onFilterChange={handleDateFilterChange}
               hint="Supply orders: supply date. Transfers: dispatch date. Summary cards use production, supply, and receipt dates."
@@ -1896,35 +1851,6 @@ export function Distribution() {
         </div>
       </div>
 
-      {hubProductLines.filter((l) => l.available > 0 || (l.lot_label && l.lot_label.length > 0)).length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-1 text-sm font-semibold text-gray-900">Hub lots ready to supply</h3>
-          <p className="mb-4 text-xs text-gray-500">Printable lot codes. Supply orders allocate these FEFO and the same code arrives at the outlet.</p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50 text-left">
-                <tr>
-                  <th className="px-3 py-2 font-medium text-gray-700">Lot</th>
-                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Available</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {hubProductLines
-                  .filter((l) => l.available > 0)
-                  .map((l) => (
-                    <tr key={l.id}>
-                      <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-900">
-                        {l.lot_label || l.product_batch || '—'}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-gray-800">{l.available.toLocaleString()}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {/* Outlet Inventory Breakdown */}
       {outlets.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -1995,204 +1921,27 @@ export function Distribution() {
       ) : (
         <>
           {tab === 'orders' && (
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
-                  <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Order #</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Qty</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Supply</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="px-6 py-12 text-center">
-                        <Truck className="mx-auto mb-3 text-gray-300" size={40} />
-                        <p className="text-gray-400">No supply orders yet</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredOrders.map((so) => (
-                      <tr key={so.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{so.supply_order_number}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{so.outlet?.name ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{so.total_quantity}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
-                          {['dispatched', 'received'].includes(normalizeSOStatus(so.status))
-                            ? formatSupplyCalendarDate(so.dispatch_date)
-                            : '—'}
-                        </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">{so.received_date ? formatSupplyCalendarDate(so.received_date) : '—'}</td>
-                        <td className="px-4 md:px-6 py-4"><StatusBadge status={so.status} /></td>
-                        <td className="px-4 md:px-6 py-4">
-                          <div className="flex flex-wrap items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setViewSO(so)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                            >
-                              Manage <ChevronRight size={14} />
-                            </button>
-                            {isAdmin && supplyOrderAllowsAdminHardDelete(so.status) && (
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteSupplyOrderRow(so)}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
-                                title="Delete supply order (admin)"
-                              >
-                                <Trash2 size={14} aria-hidden />
-                                Delete
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <OrdersTab
+              orders={filteredOrders}
+              isAdmin={isAdmin}
+              onManage={setViewSO}
+              onDelete={(so) => void handleDeleteSupplyOrderRow(so)}
+            />
           )}
-
           {tab === 'outlets' && (
-            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-              {outlets.length === 0 ? (
-                <div className="sm:col-span-3 rounded-xl border-2 border-dashed border-gray-200 px-6 py-12 text-center text-gray-400">
-                  No outlets added yet
-                </div>
-              ) : (
-                outlets.map((outlet) => {
-                  const stock = outletStockById.get(outlet.id);
-                  return (
-                  <div key={outlet.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:border-teal-200 transition-all">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-lg bg-teal-100 p-2 text-teal-600"><MapPin size={18} /></div>
-                        <div>
-                          <h3 className="font-semibold text-gray-900">{outlet.name}</h3>
-                          <p className="text-xs text-gray-400">{outlet.location_code}</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-1">
-                        <button onClick={() => { setEditOutlet(outlet); setShowOutletModal(true); }} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={15} /></button>
-                        {isAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => void deleteOutlet(outlet.id)}
-                            className="p-1 text-gray-400 hover:text-red-600 transition-colors"
-                            title="Delete outlet (admin)"
-                          >
-                            <Trash2 size={15} aria-hidden />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50/80 px-3 py-2 text-xs">
-                      <p className="font-semibold text-emerald-900">
-                        Stock on hand:{' '}
-                        <span className="tabular-nums">{(stock?.onHand ?? 0).toLocaleString()}</span>
-                      </p>
-                      {(stock?.pendingSupplyQty ?? 0) > 0 && (
-                        <p className="mt-0.5 text-blue-800">
-                          Pending orders (hub reserved):{' '}
-                          <span className="font-semibold tabular-nums">
-                            {(stock?.pendingSupplyQty ?? 0).toLocaleString()}
-                          </span>
-                        </p>
-                      )}
-                      {(stock?.awaitingReceiptQty ?? 0) > 0 && (
-                        <p className="mt-0.5 text-amber-800">
-                          Dispatched, awaiting receipt:{' '}
-                          <span className="font-semibold tabular-nums">
-                            {(stock?.awaitingReceiptQty ?? 0).toLocaleString()}
-                          </span>{' '}
-                          <span className="font-normal text-gray-600">(not in on hand yet)</span>
-                        </p>
-                      )}
-                    </div>
-                    <div className="mt-4 space-y-1 text-xs text-gray-600">
-                      {outlet.city && <p>{outlet.city}{outlet.country ? `, ${outlet.country}` : ''}</p>}
-                      {outlet.address && <p className="text-gray-400 line-clamp-1">{outlet.address}</p>}
-                      {outlet.manager_name && (
-                        <div className="mt-2 border-t border-gray-100 pt-2">
-                          <p className="font-medium text-gray-700">{outlet.manager_name}</p>
-                          {outlet.manager_phone && <p>{outlet.manager_phone}</p>}
-                          {outlet.manager_email && <p className="text-gray-400">{outlet.manager_email}</p>}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  );
-                })
-              )}
-            </div>
+            <OutletsTab
+              outlets={outlets}
+              outletStockById={outletStockById}
+              isAdmin={isAdmin}
+              onEdit={(outlet) => { setEditOutlet(outlet); setShowOutletModal(true); }}
+              onDelete={(id) => void deleteOutlet(id)}
+            />
           )}
-
           {tab === 'transfers' && (
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
-                  <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Transfer #</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">From</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">To</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Qty</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredTransfers.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-6 py-12 text-center">
-                        <ArrowLeftRight className="mx-auto mb-3 text-gray-300" size={40} />
-                        <p className="text-gray-400">No outlet transfers yet</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredTransfers.map((tx) => (
-                      <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{tx.transfer_number}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{tx.from_outlet?.name ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{tx.to_outlet?.name ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">
-                          {Number(tx.total_quantity).toLocaleString()}
-                        </td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
-                          {tx.dispatch_date ? formatSupplyCalendarDate(tx.dispatch_date) : '—'}
-                        </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
-                          {tx.received_date ? formatSupplyCalendarDate(tx.received_date) : '—'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4">
-                          <StatusBadge status={tx.status} />
-                        </td>
-                        <td className="px-4 md:px-6 py-4">
-                          <div className="flex flex-wrap items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setViewTransfer(tx)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                            >
-                              Manage <ChevronRight size={14} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <TransfersTab transfers={filteredTransfers} onManage={setViewTransfer} />
+          )}
+          {tab === 'lots' && (
+            <LotsTab hubProductLines={hubProductLines} outletLots={outletLots} />
           )}
         </>
       )}

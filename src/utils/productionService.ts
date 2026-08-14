@@ -320,3 +320,35 @@ export async function rejectProductionRun(
     };
   }
 }
+
+/** Fill EXP on lots for this recipe that still have a null expiry (does not rewrite existing EXP). */
+export async function backfillLotExpiryForRecipe(
+  recipeId: string,
+  shelfLifeDays: number
+): Promise<{ updated: number; error?: string }> {
+  if (!Number.isFinite(shelfLifeDays) || shelfLifeDays <= 0) return { updated: 0 };
+  const { data: runs, error: runErr } = await supabase.from('production_runs').select('id').eq('recipe_id', recipeId);
+  if (runErr) return { updated: 0, error: runErr.message };
+  const runIds = (runs ?? []).map((r) => r.id as string);
+  if (runIds.length === 0) return { updated: 0 };
+
+  const { data: lots, error: lotErr } = await supabase
+    .from('inventory_lots')
+    .select('id, manufactured_at')
+    .in('production_run_id', runIds)
+    .is('expiry_date', null);
+  if (lotErr) return { updated: 0, error: lotErr.message };
+
+  let updated = 0;
+  for (const lot of lots ?? []) {
+    const mfg = typeof lot.manufactured_at === 'string' ? lot.manufactured_at.slice(0, 10) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(mfg)) continue;
+    const [y, mo, d] = mfg.split('-').map(Number);
+    const exp = new Date(y, mo - 1, d);
+    exp.setDate(exp.getDate() + shelfLifeDays);
+    const expiry = `${exp.getFullYear()}-${String(exp.getMonth() + 1).padStart(2, '0')}-${String(exp.getDate()).padStart(2, '0')}`;
+    const { error } = await supabase.from('inventory_lots').update({ expiry_date: expiry }).eq('id', lot.id);
+    if (!error) updated += 1;
+  }
+  return { updated };
+}

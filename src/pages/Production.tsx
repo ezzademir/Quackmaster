@@ -9,11 +9,13 @@ import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
 import {
+  backfillLotExpiryForRecipe,
   completeProductionRun,
   deleteProductionRun,
   restoreVoidedProductionRun,
   voidProductionRun,
 } from '../utils/productionService';
+import { voidConfirmMatches } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
@@ -151,6 +153,9 @@ function RecipeModal({
     await supabase.from('recipe_ingredients').insert(
       validLines.map((l) => ({ recipe_id: recipeId, raw_material_id: l.raw_material_id, quantity_required: parseFloat(l.quantity_required) }))
     );
+    if (recipeId && shelfDays != null && shelfDays > 0) {
+      await backfillLotExpiryForRecipe(recipeId, shelfDays);
+    }
     await logActivity({ action: recipe ? 'updated' : 'created', entityType: 'recipe', entityId: recipeId ?? '', entityLabel: form.name });
     onSave();
   }
@@ -190,10 +195,13 @@ function RecipeModal({
             <input
               value={form.default_product_batch}
               onChange={(e) => setForm({ ...form, default_product_batch: e.target.value })}
-              placeholder="Product SKU (e.g. KT-01)"
+              placeholder="Product SKU (e.g. QUACKTEOW)"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
-            <p className="mt-1 text-xs text-gray-500">Product code printed as SKU. Each run gets a unique lot like SKU-YYMMDD-0007 for ink labels.</p>
+            <p className="mt-1 text-xs text-gray-500">
+              What you sell, PAR, and FIFO against. Each completed run gets a unique lot like SKU-YYMMDD-0007.
+              Changing SKU only affects <span className="font-medium">new</span> lots — already-inked codes stay as printed.
+            </p>
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700">Shelf life (days)</label>
@@ -206,7 +214,10 @@ function RecipeModal({
               placeholder="e.g. 7"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
-            <p className="mt-1 text-xs text-gray-500">Used to print EXP on the lot label. Leave blank if you do not date-code expiry.</p>
+            <p className="mt-1 text-xs text-gray-500">
+              Days from production date to EXP on the lot label. Also powers “Lots expiring soon” on Overview. Saving
+              fills expiry on lots that still have none.
+            </p>
           </div>
         </div>
 
@@ -951,10 +962,7 @@ export function Production() {
     const expected = runAction.run.run_number.trim();
     const lotCode = firstFgLot(runAction.run)?.product_batch_label?.trim() ?? '';
     const typed = confirmText.trim();
-    if (
-      typed.toUpperCase() !== expected.toUpperCase() &&
-      (!lotCode || typed.toUpperCase() !== lotCode.toUpperCase())
-    ) {
+    if (!voidConfirmMatches(typed, expected, lotCode || null)) {
       setActionError(`Type ${expected}${lotCode ? ` or ${lotCode}` : ''} to confirm`);
       return;
     }

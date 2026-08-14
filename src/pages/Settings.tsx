@@ -190,6 +190,30 @@ export function Settings() {
         </button>
       </div>
 
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold text-gray-900">SKU vs lot</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Two identifiers, one story. Do not invent a third code.
+        </p>
+        <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-gray-700">
+          <li>
+            <span className="font-medium">SKU</span> = recipe product code (what you sell, PAR, and FIFO against).
+            Current finished-goods SKU is <span className="font-mono text-xs">QUACKTEOW</span>.
+          </li>
+          <li>
+            <span className="font-medium">Lot</span> = unique printable code inked on packs (
+            <span className="font-mono text-xs">SKU-YYMMDD-RUN</span>), and what outlets receive.
+          </li>
+          <li>
+            Older rows may still store a legacy <span className="font-mono text-xs">BATCH-…</span> column. Screens
+            show the lot first; that legacy string is not the label staff should use.
+          </li>
+        </ul>
+        <p className="mt-3 text-xs text-gray-500">
+          Set shelf life on the recipe so EXP prints on lot labels. Shortening SKU (optional) only applies to new lots.
+        </p>
+      </div>
+
       {isAdmin && (
         <div
           id="qc-audit-settings"
@@ -321,7 +345,7 @@ export function Settings() {
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="font-semibold text-gray-900">Outlet PAR levels</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Finished goods: use product batch code as par_key. Raw materials: use <code className="text-[11px]">rm:&lt;uuid&gt;</code>.
+            Finished goods: use the <span className="font-medium">SKU</span> as par_key (not the printable lot). Raw materials: use <code className="text-[11px]">rm:&lt;uuid&gt;</code>.
             Suggested reorder = target + safety − available on hand.
           </p>
           <div className="mt-3">
