@@ -113,6 +113,7 @@ const OUTLET_INV_SELECT_WITH_RM = `
   reserved_quantity,
   available_quantity,
   created_at,
+  last_updated,
   lot:inventory_lots (
     product_batch_label,
     expiry_date,
@@ -129,6 +130,7 @@ const OUTLET_INV_SELECT_LEGACY = `
   reserved_quantity,
   available_quantity,
   created_at,
+  last_updated,
   lot:inventory_lots (
     product_batch_label,
     expiry_date,
@@ -146,12 +148,18 @@ export async function fetchOutletInventoryRowsForStockTake(
   } else if (options?.fgOnly) {
     q = q.is('raw_material_id', null);
   }
+  q = q.order('last_updated', { ascending: false });
+
   const first = await q;
   let data: unknown[] | null = (first.data as unknown[] | undefined) ?? null;
   let error: unknown = first.error ?? null;
 
   if (error && outletInventoryRmSelectFailed(error)) {
-    const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+    const fr = await supabase
+      .from('outlet_inventory')
+      .select(OUTLET_INV_SELECT_LEGACY)
+      .eq('outlet_id', outletId)
+      .order('last_updated', { ascending: false });
     if (options?.rmOnly) {
       data = [];
       error = fr.error ?? null;

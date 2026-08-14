@@ -570,7 +570,7 @@ export function Inventory() {
       {timelineRow && (
         <Modal isOpen onClose={() => setTimelineRow(null)} title={`Movements · ${timelineRow.display_name}`} size="lg">
           <p className="mb-3 text-xs text-gray-500">
-            {timelineRow.outlet_name} · last 90 days · on hand {timelineRow.quantity_on_hand}
+            {timelineRow.outlet_name} · last 90 days · on hand {timelineRow.quantity_on_hand} · newest first
           </p>
           {timelineLoading ? (
             <p className="text-sm text-gray-400">Loading…</p>
@@ -589,7 +589,14 @@ export function Inventory() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {timelineMoves.map((m) => (
+                  {[...timelineMoves]
+                    .sort(
+                      (a, b) =>
+                        Date.parse(b.created_at) - Date.parse(a.created_at) ||
+                        b.business_date.localeCompare(a.business_date) ||
+                        b.id.localeCompare(a.id)
+                    )
+                    .map((m) => (
                     <tr key={m.id}>
                       <td className="px-2 py-1.5 tabular-nums text-gray-700">{m.business_date}</td>
                       <td className="px-2 py-1.5 text-gray-800">{m.movement_type}</td>
