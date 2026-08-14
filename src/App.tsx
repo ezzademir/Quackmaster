@@ -88,8 +88,9 @@ function AuditGate() {
 }
 
 function GenealogyGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <Genealogy /> : <Navigate to="/" replace />;
+  const { isAdmin, profile } = useAuth();
+  const canView = isAdmin || profile?.role === 'staff';
+  return canView ? <Genealogy /> : <Navigate to="/" replace />;
 }
 
 function LayoutShell() {

@@ -31,6 +31,13 @@ export interface ProductionCompletionResult {
   message: string;
   error?: string;
   inventoryPosted?: boolean;
+  lotLabel?: string;
+  sku?: string;
+  lotId?: string;
+  expiryDate?: string | null;
+  manufacturedAt?: string | null;
+  runNumber?: string;
+  finishedQuantity?: number;
 }
 
 /**
@@ -115,11 +122,11 @@ export async function completeProductionRun(
       };
     }
 
-    const batchId = params.productBatch || `BATCH-${Date.now()}`;
+    const skuHint = params.productBatch?.trim() || '';
     const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
       supabase.rpc('post_production_completion_inventory', {
         p_production_run_id: params.productionRunId,
-        p_product_batch: batchId,
+        p_product_batch: skuHint,
         p_finished_quantity: params.actualOutput,
       })
     );
@@ -138,6 +145,13 @@ export async function completeProductionRun(
       success?: boolean;
       error?: string;
       hub_inventory_id?: string;
+      lot_id?: string;
+      lot_label?: string;
+      sku?: string;
+      expiry_date?: string | null;
+      manufactured_at?: string | null;
+      run_number?: string;
+      finished_quantity?: number;
     } | null;
 
     if (rpcPayload?.success === false) {
@@ -161,10 +175,15 @@ export async function completeProductionRun(
         yield_percentage: qcResult.yieldPercentage,
         qc_status: qcResult.status,
         output_quantity: params.actualOutput,
-        product_batch: batchId,
+        product_batch: rpcPayload?.sku ?? skuHint,
+        lot_id: rpcPayload?.lot_id ?? null,
+        lot_label: rpcPayload?.lot_label ?? null,
         hub_inventory_id: rpcPayload?.hub_inventory_id ?? null,
       },
-      metadata: { entity_label: `Production completed · ${batchId}`, summary: 'production_completed' },
+      metadata: {
+        entity_label: `Production completed · ${rpcPayload?.lot_label ?? rpcPayload?.sku ?? skuHint}`,
+        summary: 'production_completed',
+      },
     });
 
     return {
@@ -172,6 +191,13 @@ export async function completeProductionRun(
       qcReport,
       message: `Production completed successfully. ${qcResult.message}`,
       inventoryPosted: true,
+      lotLabel: rpcPayload?.lot_label,
+      sku: rpcPayload?.sku,
+      lotId: rpcPayload?.lot_id,
+      expiryDate: rpcPayload?.expiry_date ?? null,
+      manufacturedAt: rpcPayload?.manufactured_at ?? null,
+      runNumber: rpcPayload?.run_number,
+      finishedQuantity: rpcPayload?.finished_quantity ?? params.actualOutput,
     };
   } catch (err) {
     return {
