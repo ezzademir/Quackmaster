@@ -23,6 +23,8 @@ interface HubRow {
   last_updated: string;
   raw_material_id?: string;
   product_batch?: string;
+  lot_label?: string | null;
+  expiry_date?: string | null;
 }
 
 interface OutletRow {
@@ -33,6 +35,8 @@ interface OutletRow {
   raw_material_id?: string | null;
   /** Finished-goods batch or raw material display */
   display_name: string;
+  lot_label?: string | null;
+  expiry_date?: string | null;
   quantity_on_hand: number;
   reserved_quantity: number;
   available_quantity: number;
@@ -151,17 +155,20 @@ export function Inventory() {
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     const [{ data: hubInv }, { data: outs }] = await Promise.all([
-      supabase.from('hub_inventory').select(`*, material:raw_material_id(*)`).order('last_updated', { ascending: false }),
+      supabase.from('hub_inventory').select(`*, material:raw_material_id(*), lot:inventory_lots(product_batch_label, expiry_date)`).order('last_updated', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
     ]);
     setOutlets(outs ?? []);
 
     const rows: HubRow[] = (hubInv ?? []).map((inv) => {
       const mat = inv.material as RawMaterial | null;
+      const lotRaw = inv.lot as { product_batch_label?: string | null; expiry_date?: string | null } | { product_batch_label?: string | null; expiry_date?: string | null }[] | null;
+      const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+      const lotLabel = lot?.product_batch_label?.trim() || null;
       return {
         id: inv.id,
         type: inv.raw_material_id ? 'material' : 'product',
-        name: mat?.name ?? inv.product_batch ?? '—',
+        name: mat?.name ?? lotLabel ?? inv.product_batch ?? '—',
         unit: mat?.unit_of_measure ?? 'units',
         quantity_on_hand: inv.quantity_on_hand,
         reserved_quantity: inv.reserved_quantity ?? 0,
@@ -174,6 +181,8 @@ export function Inventory() {
         last_updated: inv.last_updated,
         raw_material_id: inv.raw_material_id ?? undefined,
         product_batch: inv.product_batch ?? undefined,
+        lot_label: lotLabel,
+        expiry_date: lot?.expiry_date ?? null,
       };
     });
     setHubRows(rows);
@@ -183,16 +192,19 @@ export function Inventory() {
   const loadOutletInventory = useCallback(async (outletId?: string) => {
     const query = supabase
       .from('outlet_inventory')
-      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure)`)
+      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure), lot:inventory_lots(product_batch_label, expiry_date)`)
       .order('last_updated', { ascending: false });
     if (outletId) query.eq('outlet_id', outletId);
     const { data } = await query;
     const rows: OutletRow[] = (data ?? []).map((inv) => {
       const mat = inv.material as { name?: string; unit_of_measure?: string } | null;
+      const lotRaw = inv.lot as { product_batch_label?: string | null; expiry_date?: string | null } | { product_batch_label?: string | null; expiry_date?: string | null }[] | null;
+      const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+      const lotLabel = lot?.product_batch_label?.trim() || null;
       const isRm = !!inv.raw_material_id;
       const display_name = isRm
         ? [mat?.name?.trim() || 'Ingredient', mat?.unit_of_measure?.trim()].filter(Boolean).join(' · ') || 'Ingredient'
-        : inv.product_batch?.trim() || '—';
+        : lotLabel || inv.product_batch?.trim() || '—';
       return {
         id: inv.id,
         outlet_id: inv.outlet_id,
@@ -200,6 +212,8 @@ export function Inventory() {
         product_batch: inv.product_batch,
         raw_material_id: inv.raw_material_id ?? undefined,
         display_name,
+        lot_label: lotLabel,
+        expiry_date: lot?.expiry_date ?? null,
         quantity_on_hand: inv.quantity_on_hand,
         reserved_quantity: inv.reserved_quantity ?? 0,
         available_quantity: hubRowAvailableQuantity(
@@ -432,7 +446,9 @@ export function Inventory() {
                   <table className="w-full text-sm">
                     <thead className="border-b border-gray-200 bg-gray-50">
                       <tr>
-                        <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Batch</th>
+                        <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
+                        <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">SKU</th>
+                        <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Expiry</th>
                         <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
                         <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
                         <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
@@ -442,11 +458,13 @@ export function Inventory() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {filteredHubRows.filter((r) => r.type === 'product').length === 0 ? (
-                        <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-400">No product stock — complete a production run to add product</td></tr>
+                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">No product stock — complete a production run to add product</td></tr>
                       ) : (
                         filteredHubRows.filter((r) => r.type === 'product').map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.name}</td>
+                            <td className="px-4 md:px-6 py-4 font-mono text-xs sm:text-sm font-medium text-gray-900">{row.lot_label || row.name}</td>
+                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">{row.product_batch || '—'}</td>
+                            <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-500">{row.expiry_date || '—'}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
                             <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
@@ -481,7 +499,7 @@ export function Inventory() {
                   <thead className="border-b border-gray-200 bg-gray-50">
                     <tr>
                       <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Batch / ingredient</th>
+                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot / ingredient</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>

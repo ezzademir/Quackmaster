@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield, Printer } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
+import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
@@ -93,6 +94,7 @@ function RecipeModal({
     batch_unit: recipe?.batch_unit ?? '',
     target_yield_percentage: recipe?.target_yield_percentage?.toString() ?? '100',
     default_product_batch: recipe?.default_product_batch ?? '',
+    shelf_life_days: recipe?.shelf_life_days?.toString() ?? '',
   });
   const [lines, setLines] = useState<IngredientLine[]>(
     ingredients.length > 0
@@ -114,8 +116,14 @@ function RecipeModal({
     }
     const validLines = lines.filter((l) => l.raw_material_id && parseFloat(l.quantity_required) > 0);
     if (validLines.length === 0) { setError('Add at least one ingredient'); return; }
-    setSaving(true);
     const batchCode = form.default_product_batch.trim();
+    const shelfRaw = form.shelf_life_days.trim();
+    const shelfDays = shelfRaw === '' ? null : parseInt(shelfRaw, 10);
+    if (shelfRaw !== '' && (!Number.isFinite(shelfDays) || (shelfDays ?? 0) < 0)) {
+      setError('Shelf life must be a non-negative number of days');
+      return;
+    }
+    setSaving(true);
     const payload = {
       name: form.name,
       description: form.description || null,
@@ -123,6 +131,7 @@ function RecipeModal({
       batch_unit: form.batch_unit,
       target_yield_percentage: parseFloat(form.target_yield_percentage) || 100,
       default_product_batch: batchCode ? batchCode : null,
+      shelf_life_days: shelfDays,
     };
     let recipeId = recipe?.id;
     if (recipe) {
@@ -171,14 +180,27 @@ function RecipeModal({
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Default product batch</label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Product SKU</label>
             <input
               value={form.default_product_batch}
               onChange={(e) => setForm({ ...form, default_product_batch: e.target.value })}
-              placeholder="Matches hub / outlet finished-goods product_batch (e.g. KT-BATCH-01)"
+              placeholder="Product SKU (e.g. KT-01)"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
-            <p className="mt-1 text-xs text-gray-500">Used for dashboard “By recipe” stock and supply chain alignment. Leave blank if not set up yet.</p>
+            <p className="mt-1 text-xs text-gray-500">Product code printed as SKU. Each run gets a unique lot like SKU-YYMMDD-0007 for ink labels.</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Shelf life (days)</label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={form.shelf_life_days}
+              onChange={(e) => setForm({ ...form, shelf_life_days: e.target.value })}
+              placeholder="e.g. 7"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">Used to print EXP on the lot label. Leave blank if you do not date-code expiry.</p>
           </div>
         </div>
 
@@ -287,6 +309,7 @@ function NewRunModal({
   const [runMaterials, setRunMaterials] = useState<RunMaterial[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [printLabel, setPrintLabel] = useState<FinishedGoodsLotLabelData | null>(null);
 
   useEffect(() => {
     if (initialRecipeId) void selectRecipe(initialRecipeId);
@@ -472,7 +495,7 @@ function NewRunModal({
         plannedOutput,
         actualOutput: actualOutputQty,
         targetYield,
-        productBatch: `BATCH-${run.id.slice(0, 8)}`,
+        productBatch: selectedRecipe?.default_product_batch?.trim() || undefined,
         isAdmin: profile?.role === 'admin',
       });
 
@@ -499,16 +522,31 @@ function NewRunModal({
         action: 'completed',
         entityType: 'production_run',
         entityId: run.id,
-        entityLabel: run_number,
+        entityLabel: result.lotLabel || run_number,
         details: {
           yield_percentage: result.qcReport?.qcResult.yieldPercentage,
           actual_output: actualOutputQty,
           qc_status: result.qcReport?.qcResult.status,
           inventory_posted: result.inventoryPosted,
+          lot_label: result.lotLabel,
+          sku: result.sku,
         },
       });
 
       setSaving(false);
+      if (result.inventoryPosted && result.lotLabel) {
+        setPrintLabel({
+          productName: selectedRecipe?.name ?? 'Finished goods',
+          lotLabel: result.lotLabel,
+          sku: result.sku || selectedRecipe?.default_product_batch || 'FG',
+          runNumber: result.runNumber || run_number,
+          manufacturedAt: result.manufacturedAt ?? production_date,
+          expiryDate: result.expiryDate ?? null,
+          quantity: result.finishedQuantity ?? actualOutputQty,
+          unit: selectedRecipe?.batch_unit ?? null,
+        });
+        return;
+      }
       onSave();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to complete production run');
@@ -517,6 +555,14 @@ function NewRunModal({
   }
 
   const selectedRecipe = recipes.find((r) => r.id === recipe_id);
+
+  if (printLabel) {
+    return (
+      <Modal isOpen onClose={() => onSave()} title="Print finished-goods label" size="md">
+        <FinishedGoodsLotLabel data={printLabel} onDone={() => onSave()} doneLabel="Close" />
+      </Modal>
+    );
+  }
 
   return (
     <Modal isOpen onClose={onClose} title="New Production Run" size="xl">
@@ -571,6 +617,20 @@ function NewRunModal({
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
         </div>
+
+        {selectedRecipe && (
+          <p className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900">
+            After complete, print this lot on packs:{' '}
+            <span className="font-mono font-semibold">
+              {(selectedRecipe.default_product_batch || selectedRecipe.name || 'FG')
+                .toUpperCase()
+                .replace(/[^A-Z0-9]+/g, '-')
+                .replace(/^-|-$/g, '')}
+              -{production_date.replace(/-/g, '').slice(2)}-####
+            </span>
+            <span className="text-emerald-800"> (#### is the run number, e.g. 0007)</span>
+          </p>
+        )}
 
         {planned_output && actual_output && (
           <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm">
@@ -653,17 +713,48 @@ function NewRunModal({
 }
 
 // ---- Run Detail Modal ----
+type FgLotEmbed = {
+  product_batch_label: string;
+  expiry_date: string | null;
+  manufactured_at: string | null;
+};
+
 type RunWithDetails = ProductionRun & {
   recipe?: Recipe;
   materials?: { raw_material_id: string; quantity_consumed: number; material?: RawMaterial }[];
+  fg_lot?: FgLotEmbed | FgLotEmbed[] | null;
 };
+
+function firstFgLot(run: RunWithDetails): FgLotEmbed | null {
+  const lot = run.fg_lot;
+  if (!lot) return null;
+  return Array.isArray(lot) ? (lot[0] ?? null) : lot;
+}
 
 function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => void }) {
   const variants = run.planned_output - run.actual_output;
   const yieldPct = effectiveRunYieldPct(run);
+  const lot = firstFgLot(run);
+  const [showLabel, setShowLabel] = useState(false);
 
   return (
     <Modal isOpen onClose={onClose} title={`Production Run: ${run.run_number}`} size="lg">
+      {showLabel && lot ? (
+        <FinishedGoodsLotLabel
+          data={{
+            productName: run.recipe?.name ?? 'Finished goods',
+            lotLabel: lot.product_batch_label,
+            sku: run.recipe?.default_product_batch || lot.product_batch_label.split('-').slice(0, -2).join('-') || 'FG',
+            runNumber: run.run_number,
+            manufacturedAt: lot.manufactured_at ?? run.production_date,
+            expiryDate: lot.expiry_date,
+            quantity: run.actual_output,
+            unit: run.recipe?.batch_unit ?? null,
+          }}
+          onDone={() => setShowLabel(false)}
+          doneLabel="Back"
+        />
+      ) : (
       <div className="space-y-5">
         <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
           <div><p className="text-xs text-gray-500">Recipe</p><p className="font-semibold text-gray-900">{run.recipe?.name ?? '—'}</p></div>
@@ -680,6 +771,15 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
           </div>
           <div><p className="text-xs text-gray-500">Yield</p>{yieldPct != null ? <YieldBar value={yieldPct} /> : <p className="text-gray-400">—</p>}</div>
           {run.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{run.notes}</p></div>}
+          {lot && (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-gray-500">Printable lot</p>
+              <p className="font-mono text-sm font-semibold text-gray-900">{lot.product_batch_label}</p>
+              <p className="mt-0.5 text-xs text-gray-500">
+                EXP {lot.expiry_date ?? '—'} · ink-label packs with this code
+              </p>
+            </div>
+          )}
         </div>
         {(run.materials ?? []).length > 0 && (
           <div>
@@ -705,7 +805,17 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
           </div>
         )}
       </div>
-      <div className="mt-6 flex justify-end">
+      )}
+      <div className="mt-6 flex justify-end gap-2">
+        {lot && !showLabel && (
+          <button
+            type="button"
+            onClick={() => setShowLabel(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+          >
+            <Printer size={15} /> Print label
+          </button>
+        )}
         <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
       </div>
     </Modal>
@@ -746,7 +856,7 @@ export function Production() {
     const [{ data: r }, { data: rec }, { data: mats }] = await Promise.all([
       supabase
         .from('production_runs')
-        .select(`*, recipe:recipe_id(*), materials:production_run_materials(*, material:raw_material_id(*))`)
+        .select(`*, recipe:recipe_id(*), materials:production_run_materials(*, material:raw_material_id(*)), fg_lot:inventory_lots!production_run_id(product_batch_label, expiry_date, manufactured_at)`)
         .order('created_at', { ascending: false }),
       supabase
         .from('recipes')
@@ -774,7 +884,7 @@ export function Production() {
     if (!isAdmin) return;
     const detail =
       run.status === 'completed'
-        ? 'This will remove the hub finished-goods batch (if present), restore consumed raw materials to hub stock, and delete the run record.'
+        ? 'This will remove the hub finished-goods lot (if present), restore consumed raw materials to hub stock, and delete the run record.'
         : 'This will delete the run and its material lines.';
     if (
       !confirm(
@@ -871,6 +981,7 @@ export function Production() {
                 <thead className="border-b border-gray-200 bg-gray-50">
                   <tr>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Run #</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Recipe</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Date</th>
                     <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Planned</th>
@@ -884,14 +995,14 @@ export function Production() {
                 <tbody className="divide-y divide-gray-100">
                   {runs.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-6 py-12 text-center">
+                      <td colSpan={10} className="px-6 py-12 text-center">
                         <FlaskConical className="mx-auto mb-3 text-gray-300" size={40} />
                         <p className="text-gray-400">No production runs yet</p>
                       </td>
                     </tr>
                   ) : filteredRuns.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-6 py-12 text-center">
+                      <td colSpan={10} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No runs match this date range.</p>
                         <p className="mt-1 text-sm text-gray-400">Try All time or adjust the filter.</p>
                       </td>
@@ -902,6 +1013,9 @@ export function Production() {
                       return (
                       <tr key={run.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{run.run_number}</td>
+                        <td className="px-4 md:px-6 py-4 font-mono text-xs text-gray-800">
+                          {firstFgLot(run)?.product_batch_label ?? '—'}
+                        </td>
                         <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{run.recipe?.name ?? '—'}</td>
                         <td className="px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{new Date(run.production_date).toLocaleDateString()}</td>
                         <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-700 text-xs">{run.planned_output}</td>

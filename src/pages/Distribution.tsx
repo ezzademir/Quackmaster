@@ -181,17 +181,20 @@ function allocateHubProductItems(
     available: number;
     last_updated?: string;
     expiry_date?: string | null;
+    lot_label?: string | null;
   }[],
   quantity: number
-): { product_batch: string; hubInventoryId: string; quantity: number }[] | null {
+): { product_batch: string; hubInventoryId: string; quantity: number; lot_label?: string | null }[] | null {
   const sorted = [...batches]
     .filter((b) => b.available > 0)
-    .sort(
-      (a, b) =>
-        new Date(a.last_updated ?? 0).getTime() - new Date(b.last_updated ?? 0).getTime()
-    );
+    .sort((a, b) => {
+      const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+      const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+      if (ae !== be) return ae - be;
+      return (a.last_updated ?? '').localeCompare(b.last_updated ?? '');
+    });
   let remaining = quantity;
-  const items: { product_batch: string; hubInventoryId: string; quantity: number }[] = [];
+  const items: { product_batch: string; hubInventoryId: string; quantity: number; lot_label?: string | null }[] = [];
 
   for (const b of sorted) {
     const take = Math.min(remaining, b.available);
@@ -200,6 +203,7 @@ function allocateHubProductItems(
       product_batch: b.product_batch ?? 'PRODUCT',
       hubInventoryId: b.id,
       quantity: take,
+      lot_label: b.lot_label ?? null,
     });
     remaining -= take;
     if (remaining <= 1e-9) break;
@@ -225,6 +229,7 @@ function NewSupplyOrderModal({
     available: number;
     last_updated?: string;
     expiry_date?: string | null;
+    lot_label?: string | null;
   }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
@@ -375,7 +380,7 @@ function NewSupplyOrderModal({
               <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm">
                 {allocationPreview.map((line, i) => (
                   <li key={`${line.hubInventoryId}-${i}`} className="flex justify-between gap-3 border-b border-gray-100 pb-1 text-gray-700 last:border-0">
-                    <span className="truncate font-medium">{line.product_batch}</span>
+                    <span className="truncate font-medium">{line.lot_label || line.product_batch}</span>
                     <span className="flex-shrink-0 font-semibold tabular-nums text-gray-900">{line.quantity}</span>
                   </li>
                 ))}
@@ -1281,6 +1286,7 @@ export function Distribution() {
       available: number;
       last_updated?: string;
       expiry_date?: string | null;
+      lot_label?: string | null;
     }[]
   >([]);
   const [hubFinishedAtp, setHubFinishedAtp] = useState<FinishedHubTotals>({
@@ -1338,7 +1344,7 @@ export function Distribution() {
       supabase
         .from('hub_inventory')
         .select(
-          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date)'
+          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date, product_batch_label)'
         )
         .is('raw_material_id', null),
       supabase
@@ -1387,13 +1393,14 @@ export function Distribution() {
       const reserved = Number(row.reserved_quantity ?? 0);
       const onHand = Number(row.quantity_on_hand ?? 0);
       const avail = hubRowAvailableQuantity(onHand, reserved, row.available_quantity);
-      const lot = row.lot as { expiry_date?: string | null } | null;
+      const lot = row.lot as { expiry_date?: string | null; product_batch_label?: string | null } | null;
       return {
         id: row.id,
         product_batch: row.product_batch,
         available: avail,
         last_updated: row.last_updated,
         expiry_date: lot?.expiry_date ?? null,
+        lot_label: lot?.product_batch_label ?? null,
       };
     });
 

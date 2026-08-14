@@ -76,8 +76,10 @@ function displaySkuFromOutletRow(row: OutletInventoryRowForSku): string {
 function distinctSortedSkus(rows: OutletInventoryRowForSku[]): string[] {
   const set = new Set<string>();
   for (const row of rows) {
-    const k = displaySkuFromOutletRow(row);
-    if (k) set.add(k);
+    const sku = String(row.product_batch ?? '').trim();
+    if (sku) set.add(sku);
+    const lot = displaySkuFromOutletRow(row);
+    if (lot) set.add(lot);
   }
   return [...set].sort((a, b) => a.localeCompare(b));
 }

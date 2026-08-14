@@ -34,12 +34,12 @@ const opsNav = [
   { path: '/sales', label: 'Outlet sales', icon: CircleDollarSign, exact: true },
   { path: '/waste', label: 'Waste', icon: Trash2, exact: true },
   { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
+  { path: '/genealogy', label: 'Lot trace', icon: GitBranch, exact: true },
 ];
 
 const stockIntegrityNav = [
   { path: '/audit', label: 'Stock audit', icon: ClipboardCheck, exact: true },
   { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
-  { path: '/genealogy', label: 'Genealogy', icon: GitBranch, exact: true },
 ];
 
 const adminNav = [

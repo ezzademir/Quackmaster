@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
@@ -21,9 +22,10 @@ interface LotDetail {
 }
 
 export function Genealogy() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [lots, setLots] = useState<LotRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(() => searchParams.get('q') ?? '');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LotDetail | null>(null);
@@ -87,6 +89,15 @@ export function Genealogy() {
       cancelled = true;
     };
   }, [selectedId, lots]);
+
+  useEffect(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle || lots.length === 0) return;
+    const exact = lots.find((l) => l.product_batch_label.toLowerCase() === needle);
+    const partial = lots.find((l) => l.product_batch_label.toLowerCase().includes(needle));
+    const match = exact ?? partial;
+    if (match) setSelectedId(match.id);
+  }, [q, lots]);
 
   const childrenOf = useMemo(() => {
     const m = new Map<string, LotRow[]>();
@@ -175,14 +186,20 @@ export function Genealogy() {
           Lot traceability
         </h1>
         <p className="mt-1 text-sm text-gray-500">
-          Parent/child lot tree with hub & outlet on-hand and production links.
+          Search the lot code from the ink label. Tree shows parent ingredients, production run, and hub/outlet on-hand.
         </p>
       </div>
       <input
         type="search"
-        placeholder="Filter by batch label…"
+        placeholder="Paste printed lot code…"
         value={q}
-        onChange={(e) => setQ(e.target.value)}
+        onChange={(e) => {
+          const next = e.target.value;
+          setQ(next);
+          const trimmed = next.trim();
+          if (trimmed) setSearchParams({ q: trimmed }, { replace: true });
+          else setSearchParams({}, { replace: true });
+        }}
         className="max-w-md rounded-lg border border-gray-300 px-3 py-2 text-sm"
       />
       <div className="grid gap-4 lg:grid-cols-2">
@@ -204,7 +221,7 @@ export function Genealogy() {
             <dl className="space-y-2 text-sm">
               <div className="flex justify-between gap-4">
                 <dt className="text-gray-500">Batch</dt>
-                <dd className="font-medium text-gray-900">{selected.product_batch_label}</dd>
+                <dd className="font-mono font-medium text-gray-900">{selected.product_batch_label}</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-gray-500">Expiry</dt>
