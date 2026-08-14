@@ -3,6 +3,7 @@
  */
 
 import { supabase } from './supabase';
+import { isLegacyBatchCode, skuForDisplay } from './lotLabel';
 import type { Outlet } from '../types';
 
 export interface OutletStockTakeLineInput {
@@ -112,7 +113,12 @@ const OUTLET_INV_SELECT_WITH_RM = `
   reserved_quantity,
   available_quantity,
   created_at,
-  lot:inventory_lots ( product_batch_label, expiry_date ),
+  last_updated,
+  lot:inventory_lots (
+    product_batch_label,
+    expiry_date,
+    production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+  ),
   raw_materials ( name, unit_of_measure )
 `;
 
@@ -124,7 +130,12 @@ const OUTLET_INV_SELECT_LEGACY = `
   reserved_quantity,
   available_quantity,
   created_at,
-  lot:inventory_lots ( product_batch_label, expiry_date )
+  last_updated,
+  lot:inventory_lots (
+    product_batch_label,
+    expiry_date,
+    production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+  )
 `;
 
 export async function fetchOutletInventoryRowsForStockTake(
@@ -137,13 +148,18 @@ export async function fetchOutletInventoryRowsForStockTake(
   } else if (options?.fgOnly) {
     q = q.is('raw_material_id', null);
   }
+  q = q.order('product_batch', { ascending: true });
 
   const first = await q;
   let data: unknown[] | null = (first.data as unknown[] | undefined) ?? null;
   let error: unknown = first.error ?? null;
 
   if (error && outletInventoryRmSelectFailed(error)) {
-    const fr = await supabase.from('outlet_inventory').select(OUTLET_INV_SELECT_LEGACY).eq('outlet_id', outletId);
+    const fr = await supabase
+      .from('outlet_inventory')
+      .select(OUTLET_INV_SELECT_LEGACY)
+      .eq('outlet_id', outletId)
+      .order('product_batch', { ascending: true });
     if (options?.rmOnly) {
       data = [];
       error = fr.error ?? null;
@@ -190,7 +206,11 @@ const SESSION_LINE_SELECT_WITH_RM = `
         product_batch,
         raw_material_id,
         raw_materials ( name, unit_of_measure ),
-        lot:inventory_lots ( product_batch_label, expiry_date )
+        lot:inventory_lots (
+          product_batch_label,
+          expiry_date,
+          production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+        )
       )
     `;
 
@@ -198,7 +218,11 @@ const SESSION_LINE_SELECT_LEGACY = `
       *,
       outlet_inventory:outlet_inventory_id (
         product_batch,
-        lot:inventory_lots ( product_batch_label, expiry_date )
+        lot:inventory_lots (
+          product_batch_label,
+          expiry_date,
+          production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+        )
       )
     `;
 
@@ -296,6 +320,7 @@ export interface SkuCountLotRow {
   id: string;
   raw_material_id: string | null;
   product_batch: string | null;
+  recipe_sku?: string | null;
   quantity_on_hand: number;
   reserved_quantity: number;
   expiry_date?: string | null;
@@ -312,12 +337,15 @@ export interface SkuCountGroup {
   lots: SkuCountLotRow[];
 }
 
-/** Group lot rows by finished-goods product_batch or raw_material_id. */
+/** Group lot rows by recipe SKU (via lot) or raw_material_id. Legacy BATCH- codes are not their own SKU. */
 export function groupRowsForSkuCount(rows: SkuCountLotRow[]): SkuCountGroup[] {
   const map = new Map<string, SkuCountGroup>();
   for (const row of rows) {
     const isRm = !!row.raw_material_id;
-    const key = isRm ? `rm:${row.raw_material_id}` : `fg:${(row.product_batch ?? '').trim()}`;
+    const pb = (row.product_batch ?? '').trim();
+    const recipe = (row.recipe_sku ?? '').trim();
+    const fgSku = recipe || (!isLegacyBatchCode(pb) ? pb : '');
+    const key = isRm ? `rm:${row.raw_material_id}` : fgSku ? `fg:${fgSku}` : `fg-row:${row.id}`;
     if (!key || key === 'fg:' || key === 'rm:') continue;
     const existing = map.get(key);
     if (existing) {
@@ -327,7 +355,9 @@ export function groupRowsForSkuCount(rows: SkuCountLotRow[]): SkuCountGroup[] {
     } else {
       map.set(key, {
         key,
-        label: isRm ? row.item_label || row.raw_material_id || key : (row.product_batch ?? '').trim() || key,
+        label: isRm
+          ? row.item_label || row.raw_material_id || key
+          : skuForDisplay(null, pb, recipe) || fgSku || row.item_label || key,
         kind: isRm ? 'rm' : 'fg',
         system_qoh: Number(row.quantity_on_hand ?? 0),
         reserved: Number(row.reserved_quantity ?? 0),

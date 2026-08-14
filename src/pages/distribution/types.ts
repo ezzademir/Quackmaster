@@ -10,9 +10,11 @@ export interface HubLotLine {
   id: string;
   product_batch: string | null;
   available: number;
+  onHand: number;
   last_updated?: string;
   expiry_date?: string | null;
   lot_label?: string | null;
+  recipe_sku?: string | null;
 }
 
 export interface OutletStockRow {
@@ -31,6 +33,7 @@ export interface OutletLotRow {
   outletName: string;
   lotLabel: string | null;
   productBatch: string | null;
+  recipeSku?: string | null;
   onHand: number;
   available: number;
 }

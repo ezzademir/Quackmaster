@@ -15,7 +15,9 @@ import {
   type OutletStockTakeLineRow,
 } from '../../utils/outletStockTakeService';
 import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
-import { displayLotFirst, displaySkuSecond, nestedLotLabel } from '../../utils/lotLabel';
+import { displayLotFirst, displaySkuSecond, nestedLotLabel, nestedRecipeSku } from '../../utils/lotLabel';
+import { filterByStockView, type StockView } from '../../utils/stockView';
+import { StockViewToggle } from '../StockViewToggle';
 
 type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
 
@@ -35,6 +37,8 @@ type DraftRow = {
   remark: string;
   expiry_date?: string | null;
   created_at?: string | null;
+  last_updated?: string | null;
+  recipe_sku?: string | null;
 };
 
 function normBatch(pb: string | null | undefined): string {
@@ -97,6 +101,26 @@ function parseCount(raw: string): number | null {
   const n = parseFloat(raw);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
+}
+
+function formatUpdatedAt(iso?: string | null): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function sortStockTakeRows<T extends { expiry_date?: string | null; lot_label?: string; item_label: string; product_batch: string | null }>(
+  rows: T[]
+): T[] {
+  return rows.sort((a, b) => {
+    const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+    const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+    if (ae !== be) return ae - be;
+    const al = (a.lot_label || a.item_label || '').toString();
+    const bl = (b.lot_label || b.item_label || '').toString();
+    return al.localeCompare(bl) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch));
+  });
 }
 
 function describePostError(
@@ -164,6 +188,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const [supervisorTab, setSupervisorTab] = useState<'ingredients' | 'finished_goods'>('ingredients');
   /** Staff/admin: count by lot row vs by SKU (product_batch / RM). */
   const [countMode, setCountMode] = useState<'lot' | 'sku'>('lot');
+  const [stockView, setStockView] = useState<StockView>('in_stock');
   /** Dual-count: second-entry map when variance exceeds threshold (staff/admin only). */
   const [recountPhase, setRecountPhase] = useState(false);
   const [recountStr, setRecountStr] = useState<Record<string, string>>({});
@@ -216,6 +241,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             const res = Number(row.reserved_quantity ?? 0);
             const lot = row.lot as { product_batch_label?: string | null; expiry_date?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
+            const recipeSku = nestedRecipeSku(row.lot);
             const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
             const mat = nestedMaterialPayload(row);
             const pb = normBatch(row.product_batch as string | null | undefined);
@@ -226,9 +252,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               const hint = rmid ? (rmToRecipes.get(rmid) ?? []).join(', ') : '';
               item_detail = hint ? `Used in: ${hint}` : '';
             } else {
-              const recipeName = (pb && recipeByBatch.get(pb)) || '';
+              const recipeName = (recipeSku && recipeByBatch.get(recipeSku)) || (pb && recipeByBatch.get(pb)) || '';
               item_label = displayLotFirst(lotLabel, pb) || recipeName || 'Finished good';
-              const sku = displaySkuSecond(lotLabel, pb);
+              const sku = displaySkuSecond(lotLabel, pb, recipeSku);
               item_detail = [sku ? `SKU: ${sku}` : '', recipeName && recipeName !== item_label ? recipeName : '']
                 .filter(Boolean)
                 .join(' · ');
@@ -239,6 +265,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 raw_material_id: rmid,
                 product_batch: pb || null,
                 lot_label: lotLabel,
+                recipe_sku: recipeSku || null,
                 quantity_on_hand: qoh,
                 reserved_quantity: res,
                 available_quantity: av,
@@ -248,12 +275,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 remark: '',
                 expiry_date: lot?.expiry_date ?? null,
                 created_at: typeof row.created_at === 'string' ? row.created_at : null,
+                last_updated: typeof row.last_updated === 'string' ? row.last_updated : null,
               } satisfies DraftRow,
             ];
           });
 
-          mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
-          setRows(mapped);
+          setRows(sortStockTakeRows(mapped));
         } else {
           setSupervisorRecipeCatalog([]);
           const invRes = await fetchOutletInventoryRowsForStockTake(oid);
@@ -267,6 +294,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             const res = Number(row.reserved_quantity ?? 0);
             const lot = row.lot as { product_batch_label?: string | null; expiry_date?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
+            const recipeSku = nestedRecipeSku(row.lot);
             const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
             const rmid = row.raw_material_id ? String(row.raw_material_id) : null;
             const mat = nestedMaterialPayload(row);
@@ -278,7 +306,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               item_detail = '';
             } else {
               item_label = displayLotFirst(lotLabel, pb) || '—';
-              const sku = displaySkuSecond(lotLabel, pb);
+              const sku = displaySkuSecond(lotLabel, pb, recipeSku);
               item_detail = sku ? `SKU: ${sku}` : '';
             }
             return {
@@ -286,6 +314,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               raw_material_id: rmid,
               product_batch: pb || null,
               lot_label: lotLabel,
+              recipe_sku: recipeSku || null,
               quantity_on_hand: qoh,
               reserved_quantity: res,
               available_quantity: av,
@@ -295,10 +324,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               remark: '',
               expiry_date: lot?.expiry_date ?? null,
               created_at: typeof row.created_at === 'string' ? row.created_at : null,
+              last_updated: typeof row.last_updated === 'string' ? row.last_updated : null,
             };
           });
-          mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
-          setRows(mapped);
+          setRows(sortStockTakeRows(mapped));
         }
       } catch (e) {
         setMessage({ tone: 'err', text: describeUnknownFetchError('Could not load outlet inventory', e) });
@@ -380,13 +409,19 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     return c - r.quantity_on_hand;
   };
 
+  const visibleRows = useMemo(
+    () => filterByStockView(rows, stockView, (r) => r.quantity_on_hand),
+    [rows, stockView]
+  );
+
   const skuGroups = useMemo(() => {
     if (blindSupervisor || countMode !== 'sku') return [];
     return groupRowsForSkuCount(
-      rows.map((r) => ({
+      visibleRows.map((r) => ({
         id: r.id,
         raw_material_id: r.raw_material_id,
         product_batch: r.product_batch,
+        recipe_sku: r.recipe_sku,
         quantity_on_hand: r.quantity_on_hand,
         reserved_quantity: r.reserved_quantity,
         expiry_date: r.expiry_date,
@@ -394,7 +429,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         item_label: r.item_label,
       }))
     );
-  }, [blindSupervisor, countMode, rows]);
+  }, [blindSupervisor, countMode, visibleRows]);
 
   const [skuCounted, setSkuCounted] = useState<Record<string, string>>({});
   const [skuRemarks, setSkuRemarks] = useState<Record<string, string>>({});
@@ -411,12 +446,27 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     setRecountStr({});
   }, [countMode, outletId, rows.length]); // eslint-disable-line react-hooks/exhaustive-deps -- reset when inventory reloads
 
+  useEffect(() => {
+    if (countMode !== 'sku') return;
+    setSkuCounted((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const g of skuGroups) {
+        if (next[g.key] === undefined) {
+          next[g.key] = String(g.system_qoh);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [countMode, skuGroups]);
+
   const canSubmitLot =
     outletId &&
-    rows.length > 0 &&
+    visibleRows.length > 0 &&
     !submitting &&
     !loadingInv &&
-    rows.every((r) => {
+    visibleRows.every((r) => {
       const c = parseCount(r.countedStr);
       return c !== null && c >= (r.reserved_quantity ?? 0);
     });
@@ -446,7 +496,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         })
         .filter((x): x is { key: string; label: string; first: number; system: number } => !!x);
     }
-    return rows
+    return visibleRows
       .map((r) => {
         const first = parseCount(r.countedStr);
         if (first === null) return null;
@@ -559,8 +609,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         return;
       }
 
-      if (rows.length === 0) return;
-      const lines = rows.map((r) => {
+      if (visibleRows.length === 0) return;
+      const lines = visibleRows.map((r) => {
         const c = parseCount(r.countedStr);
         if (c === null) throw new Error('invalid_counts');
         return {
@@ -626,6 +676,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const renderMobileInventoryCards = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
       const v = blind ? null : varianceOf(r);
+      const updatedLabel = !blind ? formatUpdatedAt(r.last_updated || r.created_at) : null;
       const bad = (() => {
         const c = parseCount(r.countedStr);
         if (c === null) return true;
@@ -642,12 +693,13 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{inventoryColTitle}</p>
             <p className="mt-0.5 font-medium leading-snug text-gray-900">{r.item_label}</p>
             {r.item_detail ? <p className="mt-1 text-xs leading-relaxed text-gray-500">{r.item_detail}</p> : null}
+            {updatedLabel ? <p className="mt-1 text-xs text-gray-400">Updated {updatedLabel}</p> : null}
           </div>
           {!blind ? (
             <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
               <div>
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">SKU</dt>
-                <dd className="tabular-nums text-gray-800">{displaySkuSecond(r.lot_label, r.product_batch) || '—'}</dd>
+                <dd className="tabular-nums text-gray-800">{displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}</dd>
               </div>
               <div>
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">System QoH</dt>
@@ -711,6 +763,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const renderInventoryRows = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
       const v = blind ? null : varianceOf(r);
+      const updatedLabel = !blind ? formatUpdatedAt(r.last_updated || r.created_at) : null;
       const bad = (() => {
         const c = parseCount(r.countedStr);
         if (c === null) return true;
@@ -721,10 +774,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           <td className="px-3 py-2 text-gray-900">
             <div className="font-medium">{r.item_label}</div>
             {r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
+            {updatedLabel ? <div className="text-xs text-gray-400">Updated {updatedLabel}</div> : null}
           </td>
           {!blind ? (
             <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">
-              {r.raw_material_id ? '—' : displaySkuSecond(r.lot_label, r.product_batch) || '—'}
+              {r.raw_material_id ? '—' : displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}
             </td>
           ) : null}
           {!blind ? <td className="px-3 py-2 text-right tabular-nums">{r.quantity_on_hand}</td> : null}
@@ -769,9 +823,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
 
   const renderTableShell = (bodyRows: DraftRow[], blind: boolean) => (
     <>
-      <div className="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
+      <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-gray-200 md:block">
         <table className={`w-full text-sm ${blind ? 'min-w-[420px]' : 'min-w-[640px]'}`}>
-          <thead className="border-b border-gray-200 bg-gray-50">
+          <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
             <tr>
               <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
               {!blind ? (
@@ -789,7 +843,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows, blind)}</tbody>
         </table>
       </div>
-      <div className="space-y-3 md:hidden">{renderMobileInventoryCards(bodyRows, blind)}</div>
+      <div className="max-h-[min(28rem,55vh)] space-y-3 overflow-y-auto overscroll-y-contain md:hidden">
+        {renderMobileInventoryCards(bodyRows, blind)}
+      </div>
     </>
   );
 
@@ -897,6 +953,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             />
           </div>
 
+          <StockViewToggle
+            value={stockView}
+            onChange={(view) => {
+              setStockView(view);
+              setRecountPhase(false);
+            }}
+          />
+
           {message && (
             <p
               className={`rounded-lg px-3 py-2 text-sm ${
@@ -911,14 +975,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <div className="py-8 text-center text-sm text-gray-400">Loading inventory…</div>
           ) : !outletId ? (
             <p className="text-sm text-gray-500">Choose an outlet to load rows.</p>
-          ) : (countMode === 'sku' && !blindSupervisor ? skuGroups.length === 0 : rows.length === 0) ? (
+          ) : (countMode === 'sku' && !blindSupervisor ? skuGroups.length === 0 : visibleRows.length === 0) ? (
             <div className="space-y-1 text-sm text-amber-800">
               <p>
-                {lockedOutletId
-                  ? supervisorTab === 'ingredients'
-                    ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
-                    : 'No finished-goods stock at this outlet — receive hub supply first before running this count.'
-                  : 'No outlet inventory rows — receive stock before running a stock take.'}
+                {rows.length > 0 && stockView === 'in_stock'
+                  ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                  : lockedOutletId
+                    ? supervisorTab === 'ingredients'
+                      ? 'No ingredient stock at this outlet — receive hub supply first before running this count.'
+                      : 'No finished-goods stock at this outlet — receive hub supply first before running this count.'
+                    : 'No outlet inventory rows — receive stock before running a stock take.'}
               </p>
               {lockedOutletId && supervisorTab === 'ingredients' && supervisorRecipeCatalog.length > 0 ? (
                 <p className="text-xs text-gray-600">
@@ -940,16 +1006,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       </p>
                     ) : null}
                   </div>
-                  {renderTableShell(rows, true)}
+                  {renderTableShell(visibleRows, true)}
                 </div>
               ) : countMode === 'sku' ? (
                 <div className="space-y-3">
                   <p className="text-xs text-gray-500">
                     Enter one counted total per SKU / ingredient. On post, quantities are allocated to lots FIFO by expiry.
                   </p>
-                  <div className="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
+                  <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-gray-200 md:block">
                     <table className="w-full min-w-[520px] text-sm">
-                      <thead className="border-b border-gray-200 bg-gray-50">
+                      <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
                         <tr>
                           <th className="px-3 py-2 text-left font-semibold text-gray-700">SKU / ingredient</th>
                           <th className="px-3 py-2 text-right font-semibold text-gray-700">Lots</th>
@@ -1003,7 +1069,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       </tbody>
                     </table>
                   </div>
-                  <div className="space-y-3 md:hidden">
+                  <div className="max-h-[min(28rem,55vh)] space-y-3 overflow-y-auto overscroll-y-contain md:hidden">
                     {skuGroups.map((g) => {
                       const c = parseCount(skuCounted[g.key] ?? '');
                       const v = c === null ? null : c - g.system_qoh;
@@ -1031,7 +1097,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   </div>
                 </div>
               ) : (
-                renderTableShell(rows, false)
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500">
+                    One row per lot, sorted by expiry then lot (FEFO). When In stock is on, only visible lines are posted.
+                  </p>
+                  {renderTableShell(visibleRows, false)}
+                </div>
               )}
 
               {recountPhase && !blindSupervisor ? (
@@ -1065,7 +1136,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       Outlet: <span className="font-medium text-gray-700">{outletName}</span> ·{' '}
                       {countMode === 'sku' && !blindSupervisor
                         ? `${skuGroups.length} SKU${skuGroups.length !== 1 ? 's' : ''}`
-                        : `${rows.length} row${rows.length !== 1 ? 's' : ''}`}
+                        : `${visibleRows.length} row${visibleRows.length !== 1 ? 's' : ''}`}
                       {blindSupervisor && supervisorRecipeCatalog.length > 0 ? (
                         <> · {supervisorRecipeCatalog.length} recipes in catalog</>
                       ) : null}
