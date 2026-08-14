@@ -13,7 +13,7 @@ import {
   voidSalesJournal,
   type SalesJournalLineInput,
 } from '../utils/visibilityService';
-import { displayLotFirst, formatLotWithSku, isLegacyBatchCode, nestedLotLabel } from '../utils/lotLabel';
+import { displayLotFirst, formatLotWithSku, isLegacyBatchCode, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
 import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
@@ -34,6 +34,7 @@ interface OutletInventoryLot {
   expiry_date: string | null;
   manufactured_at: string | null;
   product_batch_label?: string | null;
+  production_run?: unknown;
 }
 
 interface OutletInventoryRowForFifo {
@@ -60,28 +61,13 @@ function normalizeLot(lot: OutletInventoryRowForFifo['lot']): OutletInventoryLot
   return Array.isArray(lot) ? (lot[0] ?? null) : lot;
 }
 
-function normalizeLotWithLabel(
-  lot: OutletInventoryRowForSku['lot']
-): OutletInventoryLotWithLabel | null {
-  if (lot == null) return null;
-  return Array.isArray(lot) ? (lot[0] ?? null) : lot;
-}
-
-/** Matches server / plan: COALESCE(lot.product_batch_label, product_batch) with trim. */
-function displaySkuFromOutletRow(row: OutletInventoryRowForSku): string {
-  const lot = normalizeLotWithLabel(row.lot);
-  const fromLabel =
-    lot?.product_batch_label != null ? String(lot.product_batch_label).trim() : '';
-  if (fromLabel !== '') return fromLabel;
-  return String(row.product_batch ?? '').trim();
-}
-
 function distinctSortedSkus(rows: OutletInventoryRowForSku[]): string[] {
   const set = new Set<string>();
   for (const row of rows) {
-    const sku = String(row.product_batch ?? '').trim();
-    if (sku && !isLegacyBatchCode(sku)) set.add(sku);
-    const lot = displaySkuFromOutletRow(row);
+    const lot = nestedLotLabel(row.lot);
+    const recipeSku = nestedRecipeSku(row.lot);
+    const sku = skuForDisplay(lot, row.product_batch, recipeSku);
+    if (sku) set.add(sku);
     if (lot && !isLegacyBatchCode(lot)) set.add(lot);
   }
   return [...set].sort((a, b) => a.localeCompare(b));
@@ -246,7 +232,7 @@ export function Sales() {
     try {
       const { data, error } = await supabase
         .from('outlet_inventory')
-        .select('product_batch, lot:inventory_lots(product_batch_label)')
+        .select('product_batch, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))')
         .eq('outlet_id', oid)
         .is('raw_material_id', null)
         .gt('quantity_on_hand', 0);
@@ -458,7 +444,7 @@ export function Sales() {
         const { data, error } = await supabase
           .from('outlet_inventory')
           .select(
-            'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label)'
+            'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
           )
           .eq('outlet_id', outletSnap)
           .is('raw_material_id', null)

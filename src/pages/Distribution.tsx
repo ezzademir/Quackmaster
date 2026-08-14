@@ -20,14 +20,14 @@ import {
 } from '../utils/distributionService';
 import { suggestReorder, type ReorderSuggestion } from '../utils/parService';
 import { validateSupplyOrder } from '../utils/validation';
-import type { Outlet, OutletInventory, OutletTransferLine } from '../types';
+import type { Outlet, OutletInventory } from '../types';
 import { useAuth } from '../utils/auth';
 import {
   aggregateFinishedGoodsHubTotals,
   hubRowAvailableQuantity,
   type FinishedHubTotals,
 } from '../utils/hubInventoryMath';
-import { nestedLotLabel } from '../utils/lotLabel';
+import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 import {
   formatSupplyCalendarDate,
   normalizeSOStatus,
@@ -844,7 +844,7 @@ function NewOutletTransferModal({
       const { data, error: e } = await supabase
         .from('outlet_inventory')
         .select(
-          'id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity'
+          'id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
         )
         .eq('outlet_id', from_outlet_id)
         .is('raw_material_id', null)
@@ -970,12 +970,21 @@ function NewOutletTransferModal({
                     }}
                     className="min-w-[12rem] flex-1 rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   >
-                    <option value="">Batch…</option>
-                    {invRows.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.product_batch} (avail {availableFor(r).toFixed(2)})
-                      </option>
-                    ))}
+                    <option value="">Lot…</option>
+                    {invRows.map((r) => {
+                      const lotLabel = nestedLotLabel(
+                        (r as OutletInventory & { lot?: unknown }).lot as
+                          | { product_batch_label?: string | null }
+                          | { product_batch_label?: string | null }[]
+                          | null
+                      );
+                      const recipeSku = nestedRecipeSku((r as { lot?: unknown }).lot);
+                      return (
+                        <option key={r.id} value={r.id}>
+                          {formatLotWithSku(lotLabel, r.product_batch, recipeSku)} (avail {availableFor(r).toFixed(2)})
+                        </option>
+                      );
+                    })}
                   </select>
                   <input
                     type="number"
@@ -1052,7 +1061,9 @@ function TransferDetailModal({
   onStatusChange: () => void | Promise<void>;
 }) {
   const [saving, setSaving] = useState(false);
-  const [lines, setLines] = useState<OutletTransferLine[]>([]);
+  const [lines, setLines] = useState<
+    Array<{ id: string; quantity: number; product_batch: string | null; lot_label: string | null; recipe_sku: string | null }>
+  >([]);
   const [loadErr, setLoadErr] = useState('');
 
   useEffect(() => {
@@ -1061,12 +1072,42 @@ function TransferDetailModal({
       setLoadErr('');
       const { data, error } = await supabase
         .from('outlet_transfer_lines')
-        .select('*')
+        .select(
+          'id, quantity, product_batch, source:source_outlet_inventory_id(product_batch, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch))))'
+        )
         .eq('outlet_transfer_id', transfer.id)
         .order('created_at');
       if (cancelled) return;
       if (error) setLoadErr(error.message);
-      else setLines((data ?? []) as OutletTransferLine[]);
+      else {
+        setLines(
+          ((data ?? []) as Array<{
+            id: string;
+            quantity: number;
+            product_batch?: string | null;
+            source?:
+              | {
+                  product_batch?: string | null;
+                  lot?: unknown;
+                }
+              | {
+                  product_batch?: string | null;
+                  lot?: unknown;
+                }[]
+              | null;
+          }>).map((ln) => {
+            const sourceRaw = ln.source;
+            const source = Array.isArray(sourceRaw) ? sourceRaw[0] : sourceRaw;
+            return {
+              id: ln.id,
+              quantity: Number(ln.quantity ?? 0),
+              product_batch: ln.product_batch ?? source?.product_batch ?? null,
+              lot_label: nestedLotLabel(source?.lot as { product_batch_label?: string | null } | null),
+              recipe_sku: nestedRecipeSku(source?.lot),
+            };
+          })
+        );
+      }
     }
     void load();
     return () => {
@@ -1169,7 +1210,7 @@ function TransferDetailModal({
           <table className="w-full text-sm">
             <thead className="border-b border-gray-200 bg-gray-50">
               <tr>
-                <th className="px-3 py-2 text-left font-semibold text-gray-700">Product batch</th>
+                <th className="px-3 py-2 text-left font-semibold text-gray-700">Lot</th>
                 <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty</th>
               </tr>
             </thead>
@@ -1183,7 +1224,9 @@ function TransferDetailModal({
               ) : (
                 lines.map((ln) => (
                   <tr key={ln.id}>
-                    <td className="px-3 py-2 font-medium text-gray-900">{ln.product_batch}</td>
+                    <td className="px-3 py-2 font-medium text-gray-900">
+                      {formatLotWithSku(ln.lot_label, ln.product_batch, ln.recipe_sku)}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-800">{Number(ln.quantity).toLocaleString()}</td>
                   </tr>
                 ))
@@ -1325,12 +1368,12 @@ export function Distribution() {
       supabase.from('production_runs').select('actual_output, production_date').eq('status', 'completed'),
       supabase
         .from('outlet_inventory')
-        .select('id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, lot:inventory_lots(product_batch_label)')
+        .select('id, outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))')
         .is('raw_material_id', null),
       supabase
         .from('hub_inventory')
         .select(
-          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date, product_batch_label)'
+          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
         )
         .is('raw_material_id', null),
       supabase
@@ -1387,6 +1430,7 @@ export function Distribution() {
         last_updated: row.last_updated,
         expiry_date: lot?.expiry_date ?? null,
         lot_label: lot?.product_batch_label ?? null,
+        recipe_sku: nestedRecipeSku(row.lot),
       };
     });
 
@@ -1451,6 +1495,7 @@ export function Distribution() {
         outletName: nameByOutlet.get(oid) ?? 'Outlet',
         lotLabel: nestedLotLabel(row.lot),
         productBatch: row.product_batch ?? null,
+        recipeSku: nestedRecipeSku(row.lot),
         onHand: q,
         available: Math.max(0, avail),
       });

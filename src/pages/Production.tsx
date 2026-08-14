@@ -131,6 +131,29 @@ function RecipeModal({
       setError('Shelf life must be a non-negative number of days');
       return;
     }
+    const prevSku = (recipe?.default_product_batch ?? '').trim();
+    if (recipe && prevSku !== batchCode) {
+      const { data: runs } = await supabase.from('production_runs').select('id').eq('recipe_id', recipe.id);
+      const runIds = (runs ?? []).map((r) => r.id as string);
+      let hasLotsOrStock = false;
+      if (runIds.length > 0) {
+        const { count: lotCount } = await supabase
+          .from('inventory_lots')
+          .select('id', { count: 'exact', head: true })
+          .in('production_run_id', runIds);
+        hasLotsOrStock = (lotCount ?? 0) > 0;
+      }
+      if (hasLotsOrStock) {
+        const token = batchCode || 'CONFIRM';
+        const typed = window.prompt(
+          `This recipe has existing lots or stock.\n\nChanging the SKU only applies to NEW lots. Inked lot codes stay unchanged.\nLeftover stock will still sell under the old SKU and the new one after matching is updated.\n\nType ${token} to confirm.`
+        );
+        if ((typed ?? '').trim() !== token) {
+          setError('SKU change cancelled');
+          return;
+        }
+      }
+    }
     setSaving(true);
     const payload = {
       name: form.name,

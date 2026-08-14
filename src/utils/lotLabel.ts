@@ -24,28 +24,53 @@ function toYymmdd(mfg: Date | string): string {
   return `${yy}${mm}${dd}`;
 }
 
-/** Postgres: trim(query) equals trim(product_batch) OR trim(lot_label). */
+/** Postgres: trim(query) equals trim(product_batch) OR trim(lot_label) OR trim(recipe_sku). */
 export function fgIdentifierMatches(
   productBatch: string | null | undefined,
   lotLabel: string | null | undefined,
-  query: string | null | undefined
+  query: string | null | undefined,
+  recipeSku?: string | null
 ): boolean {
   const q = (query ?? '').trim();
   if (q === '') return false;
-  return (productBatch ?? '').trim() === q || (lotLabel ?? '').trim() === q;
+  return (
+    (productBatch ?? '').trim() === q ||
+    (lotLabel ?? '').trim() === q ||
+    (recipeSku ?? '').trim() === q
+  );
 }
 
+type NestedRecipe = { default_product_batch?: string | null };
+type NestedRun = {
+  recipe?: NestedRecipe | NestedRecipe[] | null;
+  recipes?: NestedRecipe | NestedRecipe[] | null;
+};
+type NestedLot = {
+  product_batch_label?: string | null;
+  production_run?: NestedRun | NestedRun[] | null;
+  production_runs?: NestedRun | NestedRun[] | null;
+};
+
 export function nestedLotLabel(
-  lot:
-    | { product_batch_label?: string | null }
-    | { product_batch_label?: string | null }[]
-    | null
-    | undefined
+  lot: NestedLot | NestedLot[] | null | undefined
 ): string | null {
   if (lot == null) return null;
   const obj = Array.isArray(lot) ? lot[0] : lot;
   const label = obj?.product_batch_label != null ? String(obj.product_batch_label).trim() : '';
   return label || null;
+}
+
+/** Recipe default_product_batch via lot → production_run → recipe (PostgREST embed). */
+export function nestedRecipeSku(lot: unknown): string | null {
+  if (lot == null) return null;
+  const obj = (Array.isArray(lot) ? lot[0] : lot) as NestedLot | undefined;
+  if (!obj) return null;
+  const runRaw = obj.production_run ?? obj.production_runs;
+  const run = Array.isArray(runRaw) ? runRaw[0] : runRaw;
+  const recRaw = run?.recipe ?? run?.recipes;
+  const rec = Array.isArray(recRaw) ? recRaw[0] : recRaw;
+  const sku = rec?.default_product_batch != null ? String(rec.default_product_batch).trim() : '';
+  return sku || null;
 }
 export function displayLotFirst(
   lotLabel: string | null | undefined,
@@ -56,27 +81,40 @@ export function displayLotFirst(
   return (productBatch ?? '').trim();
 }
 
-/** SKU shown second when it is not the same as the lot and not a legacy BATCH- code. */
+/** Never a BATCH- code. Prefers recipe SKU, then a non-legacy product_batch. */
+export function skuForDisplay(
+  lotLabel: string | null | undefined,
+  productBatch: string | null | undefined,
+  recipeSku?: string | null
+): string | null {
+  const sku = (recipeSku ?? '').trim() || (productBatch ?? '').trim();
+  if (!sku || isLegacyBatchCode(sku)) return null;
+  const lot = (lotLabel ?? '').trim();
+  if (lot && sku === lot) return null;
+  return sku;
+}
+
+/** SKU shown second when a distinct lot is already shown. */
 export function displaySkuSecond(
   lotLabel: string | null | undefined,
-  productBatch: string | null | undefined
+  productBatch: string | null | undefined,
+  recipeSku?: string | null
 ): string | null {
   const lot = (lotLabel ?? '').trim();
-  const pb = (productBatch ?? '').trim();
-  if (!pb || isLegacyBatchCode(pb)) return null;
-  if (lot && pb === lot) return null;
   if (!lot) return null;
-  return pb;
+  return skuForDisplay(lotLabel, productBatch, recipeSku);
 }
 
 export function formatLotWithSku(
   lotLabel: string | null | undefined,
-  productBatch: string | null | undefined
+  productBatch: string | null | undefined,
+  recipeSku?: string | null
 ): string {
   const primary = displayLotFirst(lotLabel, productBatch);
-  const sku = displaySkuSecond(lotLabel, productBatch);
+  const sku = skuForDisplay(lotLabel, productBatch, recipeSku);
   if (!primary) return sku || '—';
-  return sku ? `${primary} · ${sku}` : primary;
+  if (sku && sku !== primary) return `${primary} · ${sku}`;
+  return primary;
 }
 
 export function voidConfirmMatches(
