@@ -1,4 +1,7 @@
+import { useState } from 'react';
+import { StockViewToggle } from '../../components/StockViewToggle';
 import { displaySkuSecond, formatLotWithSku } from '../../utils/lotLabel';
+import { filterByStockView, type StockView } from '../../utils/stockView';
 import type { HubLotLine, OutletLotRow } from './types';
 
 export function LotsTab({
@@ -8,11 +11,13 @@ export function LotsTab({
   hubProductLines: HubLotLine[];
   outletLots: OutletLotRow[];
 }) {
-  const hubReady = hubProductLines.filter((l) => l.available > 0);
-  const outletReady = outletLots.filter((l) => l.onHand > 0);
+  const [stockView, setStockView] = useState<StockView>('in_stock');
+  const hubReady = filterByStockView(hubProductLines, stockView, (l) => l.onHand);
+  const outletReady = filterByStockView(outletLots, stockView, (l) => l.onHand);
 
   return (
     <div className="space-y-6">
+      <StockViewToggle value={stockView} onChange={setStockView} />
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h3 className="mb-1 text-sm font-semibold text-gray-900">Hub lots ready to supply</h3>
         <p className="mb-4 text-xs text-gray-500">Printable lot codes. Supply orders allocate these FEFO and the same code arrives at the outlet.</p>
@@ -28,7 +33,11 @@ export function LotsTab({
             <tbody className="divide-y">
               {hubReady.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-3 py-8 text-center text-gray-400">No hub lots available</td>
+                  <td colSpan={3} className="px-3 py-8 text-center text-gray-400">
+                    {stockView === 'in_stock' && hubProductLines.length > 0
+                      ? 'No in-stock hub lots. Switch to All lots for empty / audit.'
+                      : 'No hub lots available'}
+                  </td>
                 </tr>
               ) : (
                 hubReady.map((l) => (
@@ -64,7 +73,11 @@ export function LotsTab({
             <tbody className="divide-y">
               {outletReady.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-3 py-8 text-center text-gray-400">No finished-goods lots at outlets</td>
+                  <td colSpan={4} className="px-3 py-8 text-center text-gray-400">
+                    {stockView === 'in_stock' && outletLots.length > 0
+                      ? 'No in-stock outlet lots. Switch to All lots for empty / audit.'
+                      : 'No finished-goods lots at outlets'}
+                  </td>
                 </tr>
               ) : (
                 outletReady.map((row) => (

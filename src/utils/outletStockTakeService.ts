@@ -148,7 +148,7 @@ export async function fetchOutletInventoryRowsForStockTake(
   } else if (options?.fgOnly) {
     q = q.is('raw_material_id', null);
   }
-  q = q.order('last_updated', { ascending: false });
+  q = q.order('product_batch', { ascending: true });
 
   const first = await q;
   let data: unknown[] | null = (first.data as unknown[] | undefined) ?? null;
@@ -159,7 +159,7 @@ export async function fetchOutletInventoryRowsForStockTake(
       .from('outlet_inventory')
       .select(OUTLET_INV_SELECT_LEGACY)
       .eq('outlet_id', outletId)
-      .order('last_updated', { ascending: false });
+      .order('product_batch', { ascending: true });
     if (options?.rmOnly) {
       data = [];
       error = fr.error ?? null;

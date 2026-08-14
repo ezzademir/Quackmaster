@@ -848,11 +848,12 @@ function NewOutletTransferModal({
         )
         .eq('outlet_id', from_outlet_id)
         .is('raw_material_id', null)
+        .gt('quantity_on_hand', 0)
         .order('product_batch');
 
       if (!cancelled) {
         if (e) setInvRows([]);
-        else setInvRows((data ?? []) as OutletInventory[]);
+        else setInvRows((data ?? []) as unknown as OutletInventory[]);
       }
     }
     void load();
@@ -955,7 +956,7 @@ function NewOutletTransferModal({
             </p>
           ) : invRows.length === 0 ? (
             <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-4 text-sm text-amber-900">
-              No outlet inventory for this outlet yet. Receive stock from a supply order first.
+              No in-stock lots to transfer. Receive stock from a supply order first.
             </p>
           ) : (
             <div className="space-y-2">
@@ -1427,6 +1428,7 @@ export function Distribution() {
         id: row.id,
         product_batch: row.product_batch,
         available: avail,
+        onHand,
         last_updated: row.last_updated,
         expiry_date: lot?.expiry_date ?? null,
         lot_label: lot?.product_batch_label ?? null,
