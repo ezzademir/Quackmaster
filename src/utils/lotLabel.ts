@@ -129,6 +129,14 @@ export function voidConfirmMatches(
   return lot !== '' && t === lot.toUpperCase();
 }
 
+/** Draft/cancelled delete may drop this run's hub FG only if it never left the hub. */
+export function draftRunFgCanBeRemoved(flags: {
+  reservedQty: number;
+  outletQty: number;
+}): boolean {
+  return flags.reservedQty <= 0 && flags.outletQty <= 0;
+}
+
 export type VoidBlockReason = 'reserved' | 'outlet_stock' | 'supply_order' | 'sales' | 'waste';
 
 /** Mirrors admin_void_production_run guards: blocked once the lot left the hub. */
