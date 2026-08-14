@@ -15,7 +15,7 @@ import {
   type OutletStockTakeLineRow,
 } from '../../utils/outletStockTakeService';
 import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
-import { displayLotFirst, displaySkuSecond, nestedLotLabel } from '../../utils/lotLabel';
+import { displayLotFirst, displaySkuSecond, nestedLotLabel, nestedRecipeSku } from '../../utils/lotLabel';
 
 type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
 
@@ -35,6 +35,7 @@ type DraftRow = {
   remark: string;
   expiry_date?: string | null;
   created_at?: string | null;
+  recipe_sku?: string | null;
 };
 
 function normBatch(pb: string | null | undefined): string {
@@ -216,6 +217,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             const res = Number(row.reserved_quantity ?? 0);
             const lot = row.lot as { product_batch_label?: string | null; expiry_date?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
+            const recipeSku = nestedRecipeSku(row.lot);
             const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
             const mat = nestedMaterialPayload(row);
             const pb = normBatch(row.product_batch as string | null | undefined);
@@ -226,9 +228,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               const hint = rmid ? (rmToRecipes.get(rmid) ?? []).join(', ') : '';
               item_detail = hint ? `Used in: ${hint}` : '';
             } else {
-              const recipeName = (pb && recipeByBatch.get(pb)) || '';
+              const recipeName = (recipeSku && recipeByBatch.get(recipeSku)) || (pb && recipeByBatch.get(pb)) || '';
               item_label = displayLotFirst(lotLabel, pb) || recipeName || 'Finished good';
-              const sku = displaySkuSecond(lotLabel, pb);
+              const sku = displaySkuSecond(lotLabel, pb, recipeSku);
               item_detail = [sku ? `SKU: ${sku}` : '', recipeName && recipeName !== item_label ? recipeName : '']
                 .filter(Boolean)
                 .join(' · ');
@@ -239,6 +241,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 raw_material_id: rmid,
                 product_batch: pb || null,
                 lot_label: lotLabel,
+                recipe_sku: recipeSku || null,
                 quantity_on_hand: qoh,
                 reserved_quantity: res,
                 available_quantity: av,
@@ -267,6 +270,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             const res = Number(row.reserved_quantity ?? 0);
             const lot = row.lot as { product_batch_label?: string | null; expiry_date?: string | null } | null | undefined;
             const lotLabel = lot?.product_batch_label?.trim() || '';
+            const recipeSku = nestedRecipeSku(row.lot);
             const av = hubRowAvailableQuantity(qoh, res, row.available_quantity != null ? Number(row.available_quantity) : null);
             const rmid = row.raw_material_id ? String(row.raw_material_id) : null;
             const mat = nestedMaterialPayload(row);
@@ -278,7 +282,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               item_detail = '';
             } else {
               item_label = displayLotFirst(lotLabel, pb) || '—';
-              const sku = displaySkuSecond(lotLabel, pb);
+              const sku = displaySkuSecond(lotLabel, pb, recipeSku);
               item_detail = sku ? `SKU: ${sku}` : '';
             }
             return {
@@ -286,6 +290,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               raw_material_id: rmid,
               product_batch: pb || null,
               lot_label: lotLabel,
+              recipe_sku: recipeSku || null,
               quantity_on_hand: qoh,
               reserved_quantity: res,
               available_quantity: av,
@@ -387,6 +392,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         id: r.id,
         raw_material_id: r.raw_material_id,
         product_batch: r.product_batch,
+        recipe_sku: r.recipe_sku,
         quantity_on_hand: r.quantity_on_hand,
         reserved_quantity: r.reserved_quantity,
         expiry_date: r.expiry_date,
@@ -647,7 +653,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
               <div>
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">SKU</dt>
-                <dd className="tabular-nums text-gray-800">{displaySkuSecond(r.lot_label, r.product_batch) || '—'}</dd>
+                <dd className="tabular-nums text-gray-800">{displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}</dd>
               </div>
               <div>
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">System QoH</dt>
@@ -724,7 +730,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           </td>
           {!blind ? (
             <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">
-              {r.raw_material_id ? '—' : displaySkuSecond(r.lot_label, r.product_batch) || '—'}
+              {r.raw_material_id ? '—' : displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}
             </td>
           ) : null}
           {!blind ? <td className="px-3 py-2 text-right tabular-nums">{r.quantity_on_hand}</td> : null}

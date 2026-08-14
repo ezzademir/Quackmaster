@@ -7,6 +7,7 @@ import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { fetchOutletMovements, type OutletMovementRow } from '../utils/reconciliationService';
+import { nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
 import type { RawMaterial, Outlet } from '../types';
 
 type Tab = 'hub' | 'outlets';
@@ -24,6 +25,7 @@ interface HubRow {
   raw_material_id?: string;
   product_batch?: string;
   lot_label?: string | null;
+  recipe_sku?: string | null;
   expiry_date?: string | null;
 }
 
@@ -155,7 +157,7 @@ export function Inventory() {
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     const [{ data: hubInv }, { data: outs }] = await Promise.all([
-      supabase.from('hub_inventory').select(`*, material:raw_material_id(*), lot:inventory_lots(product_batch_label, expiry_date)`).order('last_updated', { ascending: false }),
+      supabase.from('hub_inventory').select(`*, material:raw_material_id(*), lot:inventory_lots(product_batch_label, expiry_date, production_run:production_run_id(recipe:recipe_id(default_product_batch)))`).order('last_updated', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
     ]);
     setOutlets(outs ?? []);
@@ -165,10 +167,11 @@ export function Inventory() {
       const lotRaw = inv.lot as { product_batch_label?: string | null; expiry_date?: string | null } | { product_batch_label?: string | null; expiry_date?: string | null }[] | null;
       const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
       const lotLabel = lot?.product_batch_label?.trim() || null;
+      const recipeSku = nestedRecipeSku(inv.lot);
       return {
         id: inv.id,
         type: inv.raw_material_id ? 'material' : 'product',
-        name: mat?.name ?? lotLabel ?? inv.product_batch ?? '—',
+        name: mat?.name ?? lotLabel ?? skuForDisplay(lotLabel, inv.product_batch, recipeSku) ?? '—',
         unit: mat?.unit_of_measure ?? 'units',
         quantity_on_hand: inv.quantity_on_hand,
         reserved_quantity: inv.reserved_quantity ?? 0,
@@ -182,6 +185,7 @@ export function Inventory() {
         raw_material_id: inv.raw_material_id ?? undefined,
         product_batch: inv.product_batch ?? undefined,
         lot_label: lotLabel,
+        recipe_sku: recipeSku,
         expiry_date: lot?.expiry_date ?? null,
       };
     });
@@ -192,7 +196,7 @@ export function Inventory() {
   const loadOutletInventory = useCallback(async (outletId?: string) => {
     const query = supabase
       .from('outlet_inventory')
-      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure), lot:inventory_lots(product_batch_label, expiry_date)`)
+      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure), lot:inventory_lots(product_batch_label, expiry_date, production_run:production_run_id(recipe:recipe_id(default_product_batch)))`)
       .order('last_updated', { ascending: false });
     if (outletId) query.eq('outlet_id', outletId);
     const { data } = await query;
@@ -201,10 +205,11 @@ export function Inventory() {
       const lotRaw = inv.lot as { product_batch_label?: string | null; expiry_date?: string | null } | { product_batch_label?: string | null; expiry_date?: string | null }[] | null;
       const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
       const lotLabel = lot?.product_batch_label?.trim() || null;
+      const recipeSku = nestedRecipeSku(inv.lot);
       const isRm = !!inv.raw_material_id;
       const display_name = isRm
         ? [mat?.name?.trim() || 'Ingredient', mat?.unit_of_measure?.trim()].filter(Boolean).join(' · ') || 'Ingredient'
-        : lotLabel || inv.product_batch?.trim() || '—';
+        : lotLabel || skuForDisplay(lotLabel, inv.product_batch, recipeSku) || '—';
       return {
         id: inv.id,
         outlet_id: inv.outlet_id,
@@ -463,7 +468,7 @@ export function Inventory() {
                         filteredHubRows.filter((r) => r.type === 'product').map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                             <td className="px-4 md:px-6 py-4 font-mono text-xs sm:text-sm font-medium text-gray-900">{row.lot_label || row.name}</td>
-                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">{row.product_batch || '—'}</td>
+                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">{skuForDisplay(row.lot_label, row.product_batch, row.recipe_sku) || '—'}</td>
                             <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-500">{row.expiry_date || '—'}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
                             <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>

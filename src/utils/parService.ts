@@ -5,6 +5,7 @@
 
 import { supabase } from './supabase';
 import { outletRowAvailableQuantity } from './hubInventoryMath';
+import { isLegacyBatchCode, nestedRecipeSku } from './lotLabel';
 
 export interface OutletParRow {
   id: string;
@@ -71,7 +72,9 @@ export async function suggestReorder(outletId: string): Promise<ReorderSuggestio
   const pars = await listOutletPar(outletId);
   const { data: inv } = await supabase
     .from('outlet_inventory')
-    .select('product_batch, raw_material_id, quantity_on_hand, reserved_quantity, available_quantity, raw_materials(name)')
+    .select(
+      'product_batch, raw_material_id, quantity_on_hand, reserved_quantity, available_quantity, raw_materials(name), lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+    )
     .eq('outlet_id', outletId);
 
   const availByKey = new Map<string, number>();
@@ -85,6 +88,7 @@ export async function suggestReorder(outletId: string): Promise<ReorderSuggestio
       reserved_quantity?: number;
       available_quantity?: number | null;
       raw_materials?: { name?: string } | null;
+      lot?: unknown;
     };
     const avail = outletRowAvailableQuantity(
       Number(r.quantity_on_hand ?? 0),
@@ -97,9 +101,14 @@ export async function suggestReorder(outletId: string): Promise<ReorderSuggestio
       labelByKey.set(k, r.raw_materials?.name ?? k);
     } else {
       const batch = (r.product_batch ?? '').trim();
-      if (!batch) continue;
-      availByKey.set(batch, (availByKey.get(batch) ?? 0) + avail);
-      labelByKey.set(batch, batch);
+      const recipeSku = nestedRecipeSku(r.lot);
+      const keys = new Set<string>();
+      if (recipeSku) keys.add(recipeSku);
+      if (batch && !isLegacyBatchCode(batch)) keys.add(batch);
+      for (const k of keys) {
+        availByKey.set(k, (availByKey.get(k) ?? 0) + avail);
+        labelByKey.set(k, k);
+      }
     }
   }
 

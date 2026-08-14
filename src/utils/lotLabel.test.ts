@@ -6,6 +6,7 @@ import {
   formatFgLotLabel,
   formatLotWithSku,
   isLegacyBatchCode,
+  skuForDisplay,
   voidBlockedIfSupplied,
   voidConfirmMatches,
 } from './lotLabel';
@@ -39,6 +40,16 @@ describe('fgIdentifierMatches (sales FIFO SKU-or-lot)', () => {
     expect(fgIdentifierMatches('BATCH-e9a2296e', 'QUACKTEOW-260812-0082', 'QUACKTEOW')).toBe(false);
   });
 
+  it('matches recipe SKU when the inventory column is still a leftover BATCH- code', () => {
+    expect(fgIdentifierMatches('BATCH-e9a2296e', 'QUACKTEOW-260812-0082', 'QUACKTEOW', 'QUACKTEOW')).toBe(true);
+  });
+
+  it('still matches the printable lot when recipe SKU is passed', () => {
+    expect(
+      fgIdentifierMatches('BATCH-e9a2296e', 'QUACKTEOW-260812-0082', 'QUACKTEOW-260812-0082', 'QUACKTEOW')
+    ).toBe(true);
+  });
+
   it('rejects empty queries', () => {
     expect(fgIdentifierMatches('QUACKTEOW', 'QUACKTEOW-260812-0082', '  ')).toBe(false);
   });
@@ -55,6 +66,13 @@ describe('lot-first display', () => {
     expect(displayLotFirst('QUACKTEOW-260812-0082', 'QUACKTEOW')).toBe('QUACKTEOW-260812-0082');
     expect(displaySkuSecond('QUACKTEOW-260812-0082', 'QUACKTEOW')).toBe('QUACKTEOW');
     expect(formatLotWithSku('QUACKTEOW-260812-0082', 'QUACKTEOW')).toBe('QUACKTEOW-260812-0082 · QUACKTEOW');
+  });
+
+  it('skuForDisplay never returns a BATCH- code', () => {
+    expect(skuForDisplay('QUACKTEOW-260812-0082', 'BATCH-e9a2296e')).toBeNull();
+    expect(skuForDisplay('QUACKTEOW-260812-0082', 'BATCH-e9a2296e', 'QUACKTEOW')).toBe('QUACKTEOW');
+    expect(skuForDisplay(null, 'BATCH-e9a2296e', null)).toBeNull();
+    expect(skuForDisplay(null, 'QUACKTEOW', null)).toBe('QUACKTEOW');
   });
 });
 

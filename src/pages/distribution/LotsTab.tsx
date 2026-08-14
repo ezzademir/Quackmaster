@@ -37,7 +37,7 @@ export function LotsTab({
                       {l.lot_label || l.product_batch || '—'}
                     </td>
                     <td className="px-3 py-2 text-xs text-gray-600">
-                      {displaySkuSecond(l.lot_label, l.product_batch) || '—'}
+                      {displaySkuSecond(l.lot_label, l.product_batch, l.recipe_sku) || '—'}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-800">{l.available.toLocaleString()}</td>
                   </tr>
@@ -71,7 +71,7 @@ export function LotsTab({
                   <tr key={row.key}>
                     <td className="px-3 py-2 text-gray-800">{row.outletName}</td>
                     <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-900">
-                      {formatLotWithSku(row.lotLabel, row.productBatch)}
+                      {formatLotWithSku(row.lotLabel, row.productBatch, row.recipeSku)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{row.onHand.toLocaleString()}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-700">{row.available.toLocaleString()}</td>
