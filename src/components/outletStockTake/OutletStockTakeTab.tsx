@@ -35,6 +35,7 @@ type DraftRow = {
   remark: string;
   expiry_date?: string | null;
   created_at?: string | null;
+  last_updated?: string | null;
   recipe_sku?: string | null;
 };
 
@@ -98,6 +99,31 @@ function parseCount(raw: string): number | null {
   const n = parseFloat(raw);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
+}
+
+function recencyMs(r: { last_updated?: string | null; created_at?: string | null }): number {
+  const s = r.last_updated || r.created_at;
+  if (!s) return 0;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function formatUpdatedAt(iso?: string | null): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function sortNewestStockFirst<T extends { last_updated?: string | null; created_at?: string | null; item_label: string; product_batch: string | null }>(
+  rows: T[]
+): T[] {
+  return rows.sort(
+    (a, b) =>
+      recencyMs(b) - recencyMs(a) ||
+      a.item_label.localeCompare(b.item_label) ||
+      normBatch(a.product_batch).localeCompare(normBatch(b.product_batch))
+  );
 }
 
 function describePostError(
@@ -251,12 +277,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 remark: '',
                 expiry_date: lot?.expiry_date ?? null,
                 created_at: typeof row.created_at === 'string' ? row.created_at : null,
+                last_updated: typeof row.last_updated === 'string' ? row.last_updated : null,
               } satisfies DraftRow,
             ];
           });
 
-          mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
-          setRows(mapped);
+          setRows(sortNewestStockFirst(mapped));
         } else {
           setSupervisorRecipeCatalog([]);
           const invRes = await fetchOutletInventoryRowsForStockTake(oid);
@@ -300,10 +326,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               remark: '',
               expiry_date: lot?.expiry_date ?? null,
               created_at: typeof row.created_at === 'string' ? row.created_at : null,
+              last_updated: typeof row.last_updated === 'string' ? row.last_updated : null,
             };
           });
-          mapped.sort((a, b) => a.item_label.localeCompare(b.item_label) || normBatch(a.product_batch).localeCompare(normBatch(b.product_batch)));
-          setRows(mapped);
+          setRows(sortNewestStockFirst(mapped));
         }
       } catch (e) {
         setMessage({ tone: 'err', text: describeUnknownFetchError('Could not load outlet inventory', e) });
@@ -632,6 +658,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const renderMobileInventoryCards = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
       const v = blind ? null : varianceOf(r);
+      const updatedLabel = !blind ? formatUpdatedAt(r.last_updated || r.created_at) : null;
       const bad = (() => {
         const c = parseCount(r.countedStr);
         if (c === null) return true;
@@ -648,6 +675,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{inventoryColTitle}</p>
             <p className="mt-0.5 font-medium leading-snug text-gray-900">{r.item_label}</p>
             {r.item_detail ? <p className="mt-1 text-xs leading-relaxed text-gray-500">{r.item_detail}</p> : null}
+            {updatedLabel ? <p className="mt-1 text-xs text-gray-400">Updated {updatedLabel}</p> : null}
           </div>
           {!blind ? (
             <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
@@ -717,6 +745,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const renderInventoryRows = (subset: DraftRow[], blind: boolean) =>
     subset.map((r) => {
       const v = blind ? null : varianceOf(r);
+      const updatedLabel = !blind ? formatUpdatedAt(r.last_updated || r.created_at) : null;
       const bad = (() => {
         const c = parseCount(r.countedStr);
         if (c === null) return true;
@@ -727,6 +756,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           <td className="px-3 py-2 text-gray-900">
             <div className="font-medium">{r.item_label}</div>
             {r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
+            {updatedLabel ? <div className="text-xs text-gray-400">Updated {updatedLabel}</div> : null}
           </td>
           {!blind ? (
             <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">
@@ -775,9 +805,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
 
   const renderTableShell = (bodyRows: DraftRow[], blind: boolean) => (
     <>
-      <div className="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
+      <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-gray-200 md:block">
         <table className={`w-full text-sm ${blind ? 'min-w-[420px]' : 'min-w-[640px]'}`}>
-          <thead className="border-b border-gray-200 bg-gray-50">
+          <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
             <tr>
               <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
               {!blind ? (
@@ -795,7 +825,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows, blind)}</tbody>
         </table>
       </div>
-      <div className="space-y-3 md:hidden">{renderMobileInventoryCards(bodyRows, blind)}</div>
+      <div className="max-h-[min(28rem,55vh)] space-y-3 overflow-y-auto overscroll-y-contain md:hidden">
+        {renderMobileInventoryCards(bodyRows, blind)}
+      </div>
     </>
   );
 
@@ -953,9 +985,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   <p className="text-xs text-gray-500">
                     Enter one counted total per SKU / ingredient. On post, quantities are allocated to lots FIFO by expiry.
                   </p>
-                  <div className="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
+                  <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-gray-200 md:block">
                     <table className="w-full min-w-[520px] text-sm">
-                      <thead className="border-b border-gray-200 bg-gray-50">
+                      <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
                         <tr>
                           <th className="px-3 py-2 text-left font-semibold text-gray-700">SKU / ingredient</th>
                           <th className="px-3 py-2 text-right font-semibold text-gray-700">Lots</th>
@@ -1009,7 +1041,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       </tbody>
                     </table>
                   </div>
-                  <div className="space-y-3 md:hidden">
+                  <div className="max-h-[min(28rem,55vh)] space-y-3 overflow-y-auto overscroll-y-contain md:hidden">
                     {skuGroups.map((g) => {
                       const c = parseCount(skuCounted[g.key] ?? '');
                       const v = c === null ? null : c - g.system_qoh;
@@ -1037,7 +1069,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   </div>
                 </div>
               ) : (
-                renderTableShell(rows, false)
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500">
+                    One row per lot. Newest stock movements appear first (by last update).
+                  </p>
+                  {renderTableShell(rows, false)}
+                </div>
               )}
 
               {recountPhase && !blindSupervisor ? (
