@@ -13,12 +13,14 @@ import {
   voidSalesJournal,
   type SalesJournalLineInput,
 } from '../utils/visibilityService';
+import { displayLotFirst, formatLotWithSku, isLegacyBatchCode, nestedLotLabel } from '../utils/lotLabel';
 import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
   key: string;
   /** UI-only; from inventory_lots.manufactured_at when loaded */
   production_date_label: string | null;
+  lot_label?: string | null;
 }
 
 const blankLines = (): LineRow[] => [
@@ -31,6 +33,7 @@ const HISTORY_PAGE_SIZE = 25;
 interface OutletInventoryLot {
   expiry_date: string | null;
   manufactured_at: string | null;
+  product_batch_label?: string | null;
 }
 
 interface OutletInventoryRowForFifo {
@@ -77,9 +80,9 @@ function distinctSortedSkus(rows: OutletInventoryRowForSku[]): string[] {
   const set = new Set<string>();
   for (const row of rows) {
     const sku = String(row.product_batch ?? '').trim();
-    if (sku) set.add(sku);
+    if (sku && !isLegacyBatchCode(sku)) set.add(sku);
     const lot = displaySkuFromOutletRow(row);
-    if (lot) set.add(lot);
+    if (lot && !isLegacyBatchCode(lot)) set.add(lot);
   }
   return [...set].sort((a, b) => a.localeCompare(b));
 }
@@ -128,16 +131,18 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
     const avail = hubRowAvailableQuantity(qoh, res, row.available_quantity);
     return {
       key: crypto.randomUUID(),
-      product_batch: batch,
+      product_batch: displayLotFirst(nestedLotLabel(lot), batch) || batch,
       quantity_sold: avail,
       outlet_inventory_id: row.id,
       production_date_label: formatProductionDateLabel(lot?.manufactured_at),
+      lot_label: nestedLotLabel(lot),
     };
   });
 }
 
 interface ModalDraftLine extends SalesJournalLineInput {
   key: string;
+  lot_label?: string | null;
 }
 
 interface SalesJournalHistoryRow {
@@ -145,7 +150,7 @@ interface SalesJournalHistoryRow {
   business_date: string;
   outlet_id: string;
   notes: string | null;
-  lines: { product_batch: string; quantity_sold: number }[];
+  lines: { product_batch: string; quantity_sold: number; lot_label: string | null }[];
 }
 
 /** Group fetched lines under each journal id, ordered by created_at per journal. */
@@ -155,11 +160,12 @@ function linesByJournalFromDb(
     product_batch: string;
     quantity_sold: string | number;
     created_at: string;
+    lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
   }[]
-): Map<string, { product_batch: string; quantity_sold: number }[]> {
+): Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]> {
   const buckets = new Map<
     string,
-    { product_batch: string; quantity_sold: number; created_at: string }[]
+    { product_batch: string; quantity_sold: number; created_at: string; lot_label: string | null }[]
   >();
   for (const row of rows) {
     const jid = row.sales_journal_id;
@@ -168,14 +174,15 @@ function linesByJournalFromDb(
       product_batch: row.product_batch,
       quantity_sold: Number(row.quantity_sold),
       created_at: row.created_at,
+      lot_label: nestedLotLabel(row.lot),
     });
   }
-  const out = new Map<string, { product_batch: string; quantity_sold: number }[]>();
+  const out = new Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]>();
   for (const [jid, arr] of buckets) {
     arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     out.set(
       jid,
-      arr.map(({ product_batch, quantity_sold }) => ({ product_batch, quantity_sold }))
+      arr.map(({ product_batch, quantity_sold, lot_label }) => ({ product_batch, quantity_sold, lot_label }))
     );
   }
   return out;
@@ -274,7 +281,7 @@ export function Sales() {
 
     const { data: jl, error: lErr } = await supabase
       .from('sales_journal_lines')
-      .select('product_batch,quantity_sold')
+      .select('product_batch,quantity_sold,lot:inventory_lots(product_batch_label)')
       .eq('sales_journal_id', journalId)
       .order('created_at');
 
@@ -293,6 +300,10 @@ export function Sales() {
         key: crypto.randomUUID(),
         product_batch: row.product_batch,
         quantity_sold: Number(row.quantity_sold),
+        lot_label: nestedLotLabel(
+          (row as { lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null })
+            .lot
+        ),
       }))
     );
     return true;
@@ -370,12 +381,12 @@ export function Sales() {
       const list = journals ?? [];
       const ids = list.map((j) => j.id);
 
-      let lineMap = new Map<string, { product_batch: string; quantity_sold: number }[]>();
+      let lineMap = new Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]>();
 
       if (ids.length > 0) {
         const { data: jl, error: lErr } = await supabase
           .from('sales_journal_lines')
-          .select('sales_journal_id,product_batch,quantity_sold,created_at')
+          .select('sales_journal_id,product_batch,quantity_sold,created_at,lot:inventory_lots(product_batch_label)')
           .in('sales_journal_id', ids);
         if (lErr) {
           console.error('[Sales] Failed to load sales journal lines:', lErr);
@@ -447,7 +458,7 @@ export function Sales() {
         const { data, error } = await supabase
           .from('outlet_inventory')
           .select(
-            'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at)'
+            'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label)'
           )
           .eq('outlet_id', outletSnap)
           .is('raw_material_id', null)
@@ -713,8 +724,7 @@ export function Sales() {
         <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
           <h2 className="text-sm font-semibold text-gray-900">FIFO sale by SKU</h2>
           <p className="mt-1 text-xs text-gray-600">
-            Chooses outlet stock in FIFO order (expiry, manufacture date, then receipt). Uses the same
-            SKU label as inventory: lot label when linked, otherwise the stored product batch string.
+            Pick the SKU (or a specific lot). Consumption follows FEFO; the journal shows which lot was sold.
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_auto_auto] sm:items-end">
             <div>
@@ -822,7 +832,7 @@ export function Sales() {
             actually sold before posting.
           </p>
           <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
-            <div className="min-w-[140px] flex-1 text-xs font-medium text-gray-500">Product batch</div>
+            <div className="min-w-[140px] flex-1 text-xs font-medium text-gray-500">Lot</div>
             <div className="w-28 min-w-[7rem] text-xs font-medium text-gray-500">Prod. date</div>
             <div className="w-28 text-xs font-medium text-gray-500">Qty sold</div>
             <div className="w-10 shrink-0" aria-hidden />
@@ -831,9 +841,9 @@ export function Sales() {
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-[140px] flex-1">
-                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Product batch</span>
+                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Lot</span>
                   <input
-                    placeholder="Product batch"
+                    placeholder="Lot or SKU"
                     value={line.product_batch}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -956,7 +966,7 @@ export function Sales() {
                             <li key={`${h.id}-${i}-${ln.product_batch}`}>
                               <span className="font-semibold">{ln.quantity_sold}</span>
                               <span className="mx-1 text-gray-400">×</span>
-                              <span className="break-all">{ln.product_batch}</span>
+                              <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
                             </li>
                           ))}
                         </ul>
@@ -1077,7 +1087,7 @@ export function Sales() {
                   <table className="w-full text-sm">
                     <thead className="border-b bg-gray-50">
                       <tr>
-                        <th className="px-3 py-2 text-left font-medium text-gray-600">Product batch</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Lot</th>
                         <th className="px-3 py-2 text-right font-medium text-gray-600">Qty sold</th>
                       </tr>
                     </thead>
@@ -1091,7 +1101,9 @@ export function Sales() {
                       ) : (
                         modalLines.map((ln) => (
                           <tr key={ln.key}>
-                            <td className="px-3 py-2 font-medium text-gray-900">{ln.product_batch}</td>
+                            <td className="px-3 py-2 font-medium text-gray-900">
+                              {formatLotWithSku(ln.lot_label, ln.product_batch)}
+                            </td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-800">
                               {ln.quantity_sold}
                             </td>
@@ -1114,7 +1126,7 @@ export function Sales() {
                               prev.map((row, i) => (i === mi ? { ...row, product_batch: v } : row))
                             );
                           }}
-                          placeholder="Product batch"
+                          placeholder="Lot or SKU"
                           className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
                         />
                       </div>

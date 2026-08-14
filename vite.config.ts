@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -41,6 +42,10 @@ function resolveBase(command: string): string {
 export default defineConfig(({ command }) => ({
   base: resolveBase(command),
   plugins: [react(), ...(command === 'serve' ? [devClientLogPlugin()] : [])],
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
   build: {
     rollupOptions: {
       output: {

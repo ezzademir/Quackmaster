@@ -15,6 +15,7 @@ import {
   type OutletStockTakeLineRow,
 } from '../../utils/outletStockTakeService';
 import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
+import { displayLotFirst, displaySkuSecond, nestedLotLabel } from '../../utils/lotLabel';
 
 type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
 
@@ -60,6 +61,8 @@ function csvPrimaryLabel(
   inv: OutletStockTakeLineRow['outlet_inventory']
 ): string {
   if (!inv) return '';
+  const lot = nestedLotLabel(inv.lot);
+  if (lot) return lot;
   const pb = typeof inv.product_batch === 'string' ? inv.product_batch.trim() : '';
   if (pb) return pb;
   const m = inv.raw_materials ?? inv.material;
@@ -223,8 +226,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               const hint = rmid ? (rmToRecipes.get(rmid) ?? []).join(', ') : '';
               item_detail = hint ? `Used in: ${hint}` : '';
             } else {
-              item_label = (pb && recipeByBatch.get(pb)) || pb || 'Finished good';
-              item_detail = pb && recipeByBatch.has(pb) ? `Batch: ${pb}` : '';
+              const recipeName = (pb && recipeByBatch.get(pb)) || '';
+              item_label = displayLotFirst(lotLabel, pb) || recipeName || 'Finished good';
+              const sku = displaySkuSecond(lotLabel, pb);
+              item_detail = [sku ? `SKU: ${sku}` : '', recipeName && recipeName !== item_label ? recipeName : '']
+                .filter(Boolean)
+                .join(' · ');
             }
             return [
               {
@@ -270,8 +277,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               item_label = [mat?.name?.trim() || 'Ingredient', mat?.unit_of_measure?.trim()].filter(Boolean).join(' · ') || 'Ingredient';
               item_detail = '';
             } else {
-              item_label = pb || '—';
-              item_detail = '';
+              item_label = displayLotFirst(lotLabel, pb) || '—';
+              const sku = displaySkuSecond(lotLabel, pb);
+              item_detail = sku ? `SKU: ${sku}` : '';
             }
             return {
               id: String(row.id),
@@ -638,8 +646,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           {!blind ? (
             <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
               <div>
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Lot</dt>
-                <dd className="tabular-nums text-gray-800">{r.lot_label || '—'}</dd>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">SKU</dt>
+                <dd className="tabular-nums text-gray-800">{displaySkuSecond(r.lot_label, r.product_batch) || '—'}</dd>
               </div>
               <div>
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">System QoH</dt>
@@ -715,7 +723,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             {r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
           </td>
           {!blind ? (
-            <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">{r.lot_label || '—'}</td>
+            <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">
+              {r.raw_material_id ? '—' : displaySkuSecond(r.lot_label, r.product_batch) || '—'}
+            </td>
           ) : null}
           {!blind ? <td className="px-3 py-2 text-right tabular-nums">{r.quantity_on_hand}</td> : null}
           {!blind ? (
@@ -765,7 +775,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <tr>
               <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
               {!blind ? (
-                <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">Lot label</th>
+                <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">SKU</th>
               ) : null}
               {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th> : null}
               {!blind ? (
