@@ -209,14 +209,71 @@ export async function completeProductionRun(
   }
 }
 
-/**
- * Reject production run (manual override by QC inspector)
- */
-/** Permanently delete a production run (admin RPC). Reverses hub inventory when completed. */
+function rpcErrorMessage(error: { message?: string } | null): string {
+  return error?.message ?? 'Request failed';
+}
+
+/** Void a completed run (admin). Keeps the run/lot; reverses hub FG if still at hub. */
+export async function voidProductionRun(options: {
+  runId: string;
+  confirmText: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await supabase.rpc('admin_void_production_run', {
+      p_run_id: options.runId,
+      p_confirm_text: options.confirmText,
+    });
+
+    if (error) {
+      return { success: false, error: rpcErrorMessage(error) };
+    }
+
+    const payload = data as { ok?: boolean; error?: string } | null;
+    if (payload && payload.ok === false) {
+      return { success: false, error: payload.error ?? 'Could not void production run' };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to void production run',
+    };
+  }
+}
+
+/** Restore a voided run (admin). Puts hub FG back and re-consumes raw materials. */
+export async function restoreVoidedProductionRun(options: {
+  runId: string;
+  confirmText: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await supabase.rpc('admin_restore_voided_production_run', {
+      p_run_id: options.runId,
+      p_confirm_text: options.confirmText,
+    });
+
+    if (error) {
+      return { success: false, error: rpcErrorMessage(error) };
+    }
+
+    const payload = data as { ok?: boolean; error?: string } | null;
+    if (payload && payload.ok === false) {
+      return { success: false, error: payload.error ?? 'Could not restore production run' };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to restore production run',
+    };
+  }
+}
+
+/** Permanently delete a draft/cancelled run (admin). Completed runs must be voided. */
 export async function deleteProductionRun(options: {
   runId: string;
-  runNumber: string;
-  status: string;
 }): Promise<{ success: boolean; error?: string }> {
   try {
     const { error } = await supabase.rpc('admin_delete_production_run', {
@@ -224,18 +281,8 @@ export async function deleteProductionRun(options: {
     });
 
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: rpcErrorMessage(error) };
     }
-
-    await writeLedgerEntry({
-      action: 'deleted',
-      entityType: 'production_run',
-      entityId: options.runId,
-      module: 'production',
-      operation: 'delete',
-      beforeData: { run_number: options.runNumber, status: options.status },
-      metadata: { entity_label: options.runNumber, prior_status: options.status },
-    });
 
     return { success: true };
   } catch (err) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield, Printer } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
@@ -8,7 +8,12 @@ import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../compon
 import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
-import { completeProductionRun, deleteProductionRun } from '../utils/productionService';
+import {
+  completeProductionRun,
+  deleteProductionRun,
+  restoreVoidedProductionRun,
+  voidProductionRun,
+} from '../utils/productionService';
 import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
@@ -34,6 +39,7 @@ function StatusBadge({ status }: { status: string }) {
     in_progress: 'bg-blue-100 text-blue-700',
     completed: 'bg-emerald-100 text-emerald-700',
     cancelled: 'bg-red-100 text-red-700',
+    voided: 'bg-gray-200 text-gray-700',
   };
   return (
     <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${map[status] ?? 'bg-gray-100 text-gray-700'}`}>
@@ -731,7 +737,21 @@ function firstFgLot(run: RunWithDetails): FgLotEmbed | null {
   return Array.isArray(lot) ? (lot[0] ?? null) : lot;
 }
 
-function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => void }) {
+function RunDetailModal({
+  run,
+  isAdmin,
+  onClose,
+  onVoid,
+  onRestore,
+  onDelete,
+}: {
+  run: RunWithDetails;
+  isAdmin: boolean;
+  onClose: () => void;
+  onVoid: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+}) {
   const variants = run.planned_output - run.actual_output;
   const yieldPct = effectiveRunYieldPct(run);
   const lot = firstFgLot(run);
@@ -759,6 +779,11 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
         <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
           <div><p className="text-xs text-gray-500">Recipe</p><p className="font-semibold text-gray-900">{run.recipe?.name ?? '—'}</p></div>
           <div><p className="text-xs text-gray-500">Status</p><StatusBadge status={run.status} /></div>
+          {run.status === 'voided' && (
+            <div className="sm:col-span-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600">
+              This run is voided. Hub finished goods were reversed. Restore to put the lot back into hub stock.
+            </div>
+          )}
           <div><p className="text-xs text-gray-500">Date</p><p className="font-semibold text-gray-900">{new Date(run.production_date).toLocaleDateString()}</p></div>
           <div><p className="text-xs text-gray-500">Planned Output</p><p className="font-semibold text-gray-900">{run.planned_output} {run.recipe?.batch_unit}</p></div>
           <div><p className="text-xs text-gray-500">Actual Output</p><p className="font-semibold text-gray-900">{run.actual_output} {run.recipe?.batch_unit}</p></div>
@@ -806,7 +831,34 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
         )}
       </div>
       )}
-      <div className="mt-6 flex justify-end gap-2">
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+        {isAdmin && run.status === 'completed' && (
+          <button
+            type="button"
+            onClick={onVoid}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+          >
+            <Ban size={15} /> Void run
+          </button>
+        )}
+        {isAdmin && run.status === 'voided' && (
+          <button
+            type="button"
+            onClick={onRestore}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
+          >
+            <RotateCcw size={15} /> Restore run
+          </button>
+        )}
+        {isAdmin && (run.status === 'in_progress' || run.status === 'cancelled') && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+          >
+            <Trash2 size={15} /> Delete draft
+          </button>
+        )}
         {lot && !showLabel && (
           <button
             type="button"
@@ -837,6 +889,13 @@ export function Production() {
   const [editIngredients, setEditIngredients] = useState<RecipeIngredient[]>([]);
   const [showRecipeModal, setShowRecipeModal] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const [runAction, setRunAction] = useState<{
+    kind: 'void' | 'restore' | 'delete';
+    run: RunWithDetails;
+  } | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [planPrefill, setPlanPrefill] = useState<{
     recipeId: string;
     quantity: number;
@@ -880,30 +939,54 @@ export function Production() {
     loadAll();
   }
 
-  async function handleDeleteProductionRun(run: RunWithDetails) {
+  function openRunAction(kind: 'void' | 'restore' | 'delete', run: RunWithDetails) {
     if (!isAdmin) return;
-    const detail =
-      run.status === 'completed'
-        ? 'This will remove the hub finished-goods lot (if present), restore consumed raw materials to hub stock, and delete the run record.'
-        : 'This will delete the run and its material lines.';
+    setRunAction({ kind, run });
+    setConfirmText('');
+    setActionError(null);
+  }
+
+  async function submitRunAction() {
+    if (!isAdmin || !runAction) return;
+    const expected = runAction.run.run_number.trim();
+    const lotCode = firstFgLot(runAction.run)?.product_batch_label?.trim() ?? '';
+    const typed = confirmText.trim();
     if (
-      !confirm(
-        `Permanently delete production run ${run.run_number}?\n\n${detail}\n\nThis cannot be undone.`
-      )
+      typed.toUpperCase() !== expected.toUpperCase() &&
+      (!lotCode || typed.toUpperCase() !== lotCode.toUpperCase())
     ) {
+      setActionError(`Type ${expected}${lotCode ? ` or ${lotCode}` : ''} to confirm`);
       return;
     }
-    const result = await deleteProductionRun({
-      runId: run.id,
-      runNumber: run.run_number,
-      status: run.status,
-    });
+
+    setActionBusy(true);
+    setActionError(null);
+    const result =
+      runAction.kind === 'void'
+        ? await voidProductionRun({ runId: runAction.run.id, confirmText: typed })
+        : runAction.kind === 'restore'
+          ? await restoreVoidedProductionRun({ runId: runAction.run.id, confirmText: typed })
+          : await deleteProductionRun({ runId: runAction.run.id });
+    setActionBusy(false);
+
     if (!result.success) {
-      alert(result.error ?? 'Could not delete production run');
+      setActionError(result.error ?? 'Action failed');
       return;
     }
-    if (viewRun?.id === run.id) setViewRun(null);
-    loadAll();
+
+    if (viewRun?.id === runAction.run.id) {
+      if (runAction.kind === 'delete') {
+        setViewRun(null);
+      } else {
+        setViewRun({
+          ...viewRun,
+          status: runAction.kind === 'void' ? 'voided' : 'completed',
+        });
+      }
+    }
+    setRunAction(null);
+    setConfirmText('');
+    await loadAll();
   }
 
   function openEditRecipe(recipe: RecipeWithIngredients) {
@@ -1034,17 +1117,6 @@ export function Production() {
                             >
                               Manage <ChevronRight size={14} />
                             </button>
-                            {isAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteProductionRun(run)}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
-                                title="Delete production run (admin)"
-                              >
-                                <Trash2 size={14} aria-hidden />
-                                Delete
-                              </button>
-                            )}
                           </div>
                         </td>
                       </tr>
@@ -1116,7 +1188,96 @@ export function Production() {
           plannedBatchId={planPrefill?.plannedBatchId}
         />
       )}
-      {viewRun && <RunDetailModal run={viewRun} onClose={() => setViewRun(null)} />}
+      {viewRun && (
+        <RunDetailModal
+          run={viewRun}
+          isAdmin={isAdmin}
+          onClose={() => setViewRun(null)}
+          onVoid={() => openRunAction('void', viewRun)}
+          onRestore={() => openRunAction('restore', viewRun)}
+          onDelete={() => openRunAction('delete', viewRun)}
+        />
+      )}
+      {runAction && (
+        <Modal
+          isOpen
+          onClose={() => {
+            if (actionBusy) return;
+            setRunAction(null);
+            setConfirmText('');
+            setActionError(null);
+          }}
+          title={
+            runAction.kind === 'void'
+              ? `Void ${runAction.run.run_number}`
+              : runAction.kind === 'restore'
+                ? `Restore ${runAction.run.run_number}`
+                : `Delete ${runAction.run.run_number}`
+          }
+          size="sm"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              {runAction.kind === 'void'
+                ? 'This removes hub finished goods if they are still at the hub and puts consumed raw materials back. The run and lot stay on record so you can restore later. Blocked if the lot already left the hub.'
+                : runAction.kind === 'restore'
+                  ? 'This puts hub finished goods back and re-consumes the raw materials recorded on this run.'
+                  : 'This permanently deletes the draft run. Completed batches cannot be deleted this way.'}
+            </p>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">
+                Type {runAction.run.run_number}
+                {firstFgLot(runAction.run)?.product_batch_label
+                  ? ` or ${firstFgLot(runAction.run)?.product_batch_label}`
+                  : ''}{' '}
+                to confirm
+              </span>
+              <input
+                autoFocus
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"
+                placeholder={runAction.run.run_number}
+              />
+            </label>
+            {actionError && <p className="text-sm text-red-600">{actionError}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => {
+                  setRunAction(null);
+                  setConfirmText('');
+                  setActionError(null);
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={actionBusy || !confirmText.trim()}
+                onClick={() => void submitRunAction()}
+                className={`rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-60 ${
+                  runAction.kind === 'restore'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : runAction.kind === 'void'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-red-600 hover:bg-red-700'
+                }`}
+              >
+                {actionBusy
+                  ? 'Working…'
+                  : runAction.kind === 'void'
+                    ? 'Void run'
+                    : runAction.kind === 'restore'
+                      ? 'Restore run'
+                      : 'Delete draft'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {showRecipeModal && (
         <RecipeModal
           recipe={editRecipe}
