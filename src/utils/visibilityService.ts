@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { toPostableSalesLine } from './salesJournalLines';
 
 export interface SalesJournalLineInput {
   product_batch: string;
@@ -14,16 +15,7 @@ export async function postSalesJournal(params: {
   notes?: string;
   idempotencyKey?: string;
 }): Promise<{ success: boolean; salesJournalId?: string; error?: string; idempotentReplay?: boolean }> {
-  const lines = params.lines.map((l) => {
-    const base: Record<string, unknown> = {
-      product_batch: l.product_batch.trim(),
-      quantity_sold: l.quantity_sold,
-    };
-    if (l.outlet_inventory_id) {
-      base.outlet_inventory_id = l.outlet_inventory_id;
-    }
-    return base;
-  });
+  const lines = params.lines.map(toPostableSalesLine);
 
   const { data, error } = await supabase.rpc('post_sales_journal', {
     p_outlet_id: params.outletId,
@@ -130,10 +122,7 @@ export async function replaceSalesJournal(params: {
   notes?: string;
   idempotencyKey?: string;
 }): Promise<{ success: boolean; salesJournalId?: string; error?: string; idempotentReplay?: boolean }> {
-  const lines = params.lines.map((l) => ({
-    product_batch: l.product_batch.trim(),
-    quantity_sold: l.quantity_sold,
-  }));
+  const lines = params.lines.map(toPostableSalesLine);
 
   const { data, error } = await supabase.rpc('replace_sales_journal', {
     p_existing_sales_journal_id: params.existingSalesJournalId,

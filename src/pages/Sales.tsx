@@ -14,6 +14,7 @@ import {
   type SalesJournalLineInput,
 } from '../utils/visibilityService';
 import { displayLotFirst, formatLotWithSku, isLegacyBatchCode, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
+import { applyLotIdentifierEdit, toPostableSalesLine } from '../utils/salesJournalLines';
 import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
@@ -267,7 +268,7 @@ export function Sales() {
 
     const { data: jl, error: lErr } = await supabase
       .from('sales_journal_lines')
-      .select('product_batch,quantity_sold,lot:inventory_lots(product_batch_label)')
+      .select('product_batch,quantity_sold,outlet_inventory_id,lot:inventory_lots(product_batch_label)')
       .eq('sales_journal_id', journalId)
       .order('created_at');
 
@@ -286,6 +287,7 @@ export function Sales() {
         key: crypto.randomUUID(),
         product_batch: row.product_batch,
         quantity_sold: Number(row.quantity_sold),
+        outlet_inventory_id: row.outlet_inventory_id ?? undefined,
         lot_label: nestedLotLabel(
           (row as { lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null })
             .lot
@@ -530,11 +532,7 @@ export function Sales() {
       return;
     }
     const cleaned = lines
-      .map((l) => ({
-        product_batch: l.product_batch.trim(),
-        quantity_sold: Number(l.quantity_sold),
-        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
-      }))
+      .map((l) => toPostableSalesLine({ ...l, quantity_sold: Number(l.quantity_sold) }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
       setMessage({ tone: 'err', text: 'Add at least one line with batch and quantity.' });
@@ -603,10 +601,7 @@ export function Sales() {
   async function handleModalSave() {
     if (!modalJournalId) return;
     const cleaned = modalLines
-      .map((l) => ({
-        product_batch: l.product_batch.trim(),
-        quantity_sold: Number(l.quantity_sold),
-      }))
+      .map((l) => toPostableSalesLine({ ...l, quantity_sold: Number(l.quantity_sold) }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
       setModalMessage({ tone: 'err', text: 'Keep at least one line with batch and quantity.' });
@@ -835,7 +830,9 @@ export function Sales() {
                       const v = e.target.value;
                       setLines((prev) =>
                         prev.map((r, i) =>
-                          i === idx ? { ...r, product_batch: v, production_date_label: null } : r
+                          i === idx
+                            ? { ...applyLotIdentifierEdit(r, v), production_date_label: null }
+                            : r
                         )
                       );
                     }}
@@ -1109,7 +1106,7 @@ export function Sales() {
                           onChange={(e) => {
                             const v = e.target.value;
                             setModalLines((prev) =>
-                              prev.map((row, i) => (i === mi ? { ...row, product_batch: v } : row))
+                              prev.map((row, i) => (i === mi ? applyLotIdentifierEdit(row, v) : row))
                             );
                           }}
                           placeholder="Lot or SKU"
