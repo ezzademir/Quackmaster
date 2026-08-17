@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Scale, Download, AlertTriangle } from 'lucide-react';
+import { Download, AlertTriangle } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
+import { Button, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import type { Outlet } from '../types';
 import type { DateRange } from '../utils/dateRange';
@@ -139,32 +140,22 @@ export function Reconciliation() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900">
-            <Scale size={24} className="text-teal-600" />
-            Stock Reconciliation
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-gray-500">
-            Movement equation for one outlet over a period. Compare computed closing to live on-hand; use with physical stock takes.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link to="/audit" className="text-sm font-medium text-teal-600 hover:text-teal-700">
-            Stock audit dashboard →
-          </Link>
-          <button
-            type="button"
-            onClick={() => void exportMovementsCsv()}
-            disabled={!outletId || !dateRange}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <Download size={16} /> Export movements CSV
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Stock Reconciliation"
+        description="Movement equation for one outlet over a period. Compare computed closing to live on-hand; use with physical stock takes."
+        actions={
+          <>
+            <Link to="/audit" className="text-sm font-medium text-brand-800 hover:underline">
+              Stock audit dashboard →
+            </Link>
+            <Button variant="secondary" type="button" onClick={() => void exportMovementsCsv()} disabled={!outletId || !dateRange}>
+              <Download size={16} /> Export movements CSV
+            </Button>
+          </>
+        }
+      />
 
-      <div className="flex flex-wrap items-end gap-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-end gap-4 panel p-4">
         <div>
           <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
           <select

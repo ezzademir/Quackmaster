@@ -68,11 +68,11 @@ export function Login() {
         {/* Brand */}
         <div className="mb-8 text-center">
           <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="mx-auto mb-4 h-16 w-16" />
-          <h1 className="text-2xl font-bold text-gray-900">Quackmaster ERP</h1>
-          <p className="mt-1 text-sm text-gray-500">Sign in to your account</p>
+          <h1 className="text-2xl font-bold text-stone-900">Quackmaster ERP</h1>
+          <p className="mt-1 text-sm text-stone-500">Sign in to your account</p>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+        <div className="rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
           {resetSuccess && (
             <div className="mb-5 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
               Password updated successfully. Sign in with your new password.
@@ -126,7 +126,7 @@ export function Login() {
             <button
               type="submit"
               disabled={loading || !isSupabaseConfigured}
-              className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              className="btn-primary w-full py-2.5 text-sm font-semibold"
             >
               {loading ? 'Signing in…' : 'Sign In'}
             </button>
@@ -134,7 +134,7 @@ export function Login() {
 
           <p className="mt-5 text-center text-sm text-gray-500">
             No account?{' '}
-            <Link to="/register" className="font-medium text-blue-600 hover:text-blue-800">
+            <Link to="/register" className="font-medium text-brand-800 hover:text-brand-900">
               Register here
             </Link>
           </p>

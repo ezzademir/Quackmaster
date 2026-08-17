@@ -29,13 +29,13 @@ const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users
 
 function LoadingScreen({ subtitle }: { subtitle?: string }) {
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-gray-50 auth-safe-padding">
+    <div className="flex min-h-dvh items-center justify-center bg-stone-50 auth-safe-padding">
       <div className="text-center max-w-sm">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-xl font-bold text-white">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 text-xl font-bold text-white">
           Q
         </div>
-        <p className="text-sm text-gray-500">Loading…</p>
-        {subtitle && <p className="mt-3 text-xs text-gray-400 leading-relaxed">{subtitle}</p>}
+        <p className="text-sm text-stone-500">Loading…</p>
+        {subtitle && <p className="mt-3 text-xs text-stone-400 leading-relaxed">{subtitle}</p>}
       </div>
     </div>
   );
@@ -123,7 +123,8 @@ function ProtectedShell() {
 
   if (role === 'supervisor') {
     const path = location.pathname;
-    const allowed = path === '/stock-take' || path === '/required-password-reset';
+    const allowed =
+      path === '/stock-take' || path === '/sales' || path === '/waste' || path === '/required-password-reset';
     if (!allowed) {
       return <Navigate to="/stock-take" replace />;
     }

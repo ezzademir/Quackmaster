@@ -109,18 +109,18 @@ export function Register() {
         {/* Brand */}
         <div className="mb-8 text-center">
           <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="mx-auto mb-4 h-16 w-16" />
-          <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
-          <p className="mt-1 text-sm text-gray-500">Join Quackmaster ERP</p>
+          <h1 className="text-2xl font-bold text-stone-900">Create Account</h1>
+          <p className="mt-1 text-sm text-stone-500">Join Quackmaster ERP</p>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+        <div className="rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
           {submitted ? (
             <div className="space-y-4">
               <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">
                 <p className="font-medium mb-1">Registration submitted!</p>
                 <p>Your account is pending admin approval. You'll receive an email once your request is reviewed.</p>
               </div>
-              <Link to="/login" className="block text-center text-sm font-medium text-blue-600 hover:text-blue-800">
+              <Link to="/login" className="block text-center text-sm font-medium text-brand-800 hover:text-brand-900">
                 Return to login
               </Link>
             </div>
@@ -191,7 +191,7 @@ export function Register() {
             <button
               type="submit"
               disabled={loading || !isSupabaseConfigured}
-              className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              className="btn-primary w-full py-2.5 text-sm font-semibold"
             >
               {loading ? 'Creating account…' : 'Create Account'}
             </button>
@@ -199,7 +199,7 @@ export function Register() {
 
               <p className="mt-5 text-center text-sm text-gray-500">
                 Already have an account?{' '}
-                <Link to="/login" className="font-medium text-blue-600 hover:text-blue-800">
+                <Link to="/login" className="font-medium text-brand-800 hover:text-brand-900">
                   Sign in
                 </Link>
               </p>

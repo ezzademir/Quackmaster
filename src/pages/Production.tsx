@@ -3,6 +3,7 @@ import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCir
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { Button, PageHeader, Tabs } from '../components/ui';
 import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
 import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
@@ -1026,55 +1027,55 @@ export function Production() {
     setShowRecipeModal(true);
   }
 
-  const tabClass = (t: Tab) =>
-    `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
-      tab === t ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-    }`;
-
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Production</h1>
-          <p className="mt-1 text-sm text-gray-500">Manage recipes and production runs with yield tracking</p>
-          {isAdmin && (
-            <Link
-              to="/settings?section=qc"
-              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-50 transition-colors"
-            >
-              <Shield size={14} className="text-indigo-600" aria-hidden />
-              QC audit parameters
-            </Link>
-          )}
-        </div>
-        {tab === 'runs' && (
-          <button onClick={() => setShowNewRun(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
-            <Plus size={16} /> New Run
-          </button>
-        )}
-        {tab === 'recipes' && (
-          <button onClick={() => { setEditRecipe(null); setEditIngredients([]); setShowRecipeModal(true); }}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
-            <Plus size={16} /> New Recipe
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Production"
+        description="Manage recipes and production runs with yield tracking"
+        actions={
+          <>
+            {isAdmin && (
+              <Link to="/settings?section=qc" className="btn-secondary">
+                <Shield size={14} aria-hidden />
+                QC audit parameters
+              </Link>
+            )}
+            {tab === 'runs' && (
+              <Button onClick={() => setShowNewRun(true)}>
+                <Plus size={16} /> New Run
+              </Button>
+            )}
+            {tab === 'recipes' && (
+              <Button
+                onClick={() => {
+                  setEditRecipe(null);
+                  setEditIngredients([]);
+                  setShowRecipeModal(true);
+                }}
+              >
+                <Plus size={16} /> New Recipe
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      <div className="border-b border-gray-200">
-        <nav className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-          <div className="flex gap-6">
-            <button className={tabClass('runs')} onClick={() => setTab('runs')}>Production Runs</button>
-            <button className={tabClass('recipes')} onClick={() => setTab('recipes')}>Recipes</button>
-            <button className={tabClass('planning')} onClick={() => setTab('planning')}>Planning</button>
-          </div>
-          {tab === 'runs' && (
-            <DateFilter
-              onFilterChange={handleDateFilterChange}
-              hint="Filters production runs by production date."
-            />
-          )}
-        </nav>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: 'runs', label: 'Production Runs' },
+            { id: 'recipes', label: 'Recipes' },
+            { id: 'planning', label: 'Planning' },
+          ]}
+        />
+        {tab === 'runs' && (
+          <DateFilter
+            onFilterChange={handleDateFilterChange}
+            hint="Filters production runs by production date."
+          />
+        )}
       </div>
 
       {loading ? (

@@ -1,17 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Package,
-  TrendingUp,
   ShoppingCart,
-  AlertTriangle,
   Truck,
   FlaskConical,
-  ArrowRight,
-  Activity,
   CircleDollarSign,
   Trash2,
+  Plus,
+  ChevronDown,
 } from 'lucide-react';
+import { Button, EmptyState, PageHeader, StatCard } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import {
   aggregateFinishedGoodsHubTotals,
@@ -96,6 +95,16 @@ export function Overview() {
   const [stockLots, setStockLots] = useState<StockLotRow[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [newOpen, setNewOpen] = useState(false);
+  const newMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!newMenuRef.current?.contains(e.target as Node)) setNewOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
 
   const hubProductSub = hubProductStockMixedUom
     ? 'ATP total — recipes use different batch units (see By recipe below)'
@@ -589,11 +598,11 @@ export function Overview() {
   };
 
   const activityColor = {
-    purchase: 'bg-blue-100 text-blue-600',
-    production: 'bg-emerald-100 text-emerald-600',
-    supply: 'bg-teal-100 text-teal-600',
-    sales: 'bg-violet-100 text-violet-600',
-    waste: 'bg-orange-100 text-orange-600',
+    purchase: 'bg-brand-100 text-brand-800',
+    production: 'bg-stone-100 text-stone-600',
+    supply: 'bg-stone-100 text-stone-600',
+    sales: 'bg-brand-50 text-brand-700',
+    waste: 'bg-red-50 text-red-600',
   };
 
   function timeAgo(iso: string) {
@@ -610,127 +619,138 @@ export function Overview() {
 
   if (loading) {
     return (
-      <div className="flex h-96 items-center justify-center text-gray-400">
+      <div className="flex h-96 items-center justify-center text-stone-400">
         Loading dashboard…
       </div>
     );
   }
 
+  const newItems = [
+    { to: '/procurement', label: 'Purchase order', icon: ShoppingCart },
+    { to: '/production', label: 'Production run', icon: FlaskConical },
+    { to: '/distribution', label: 'Supply order', icon: Truck },
+    { to: '/sales', label: 'Sale', icon: CircleDollarSign },
+    { to: '/waste', label: 'Waste', icon: Trash2 },
+  ];
+
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Quackmaster Hub — live overview of operations
-        </p>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        description="What needs action today, then a short snapshot of hub and outlets."
+        actions={
+          <div className="relative" ref={newMenuRef}>
+            <Button type="button" onClick={() => setNewOpen((o) => !o)}>
+              <Plus size={16} />
+              New
+              <ChevronDown size={14} />
+            </Button>
+            {newOpen && (
+              <div className="absolute right-0 z-20 mt-1 w-56 overflow-hidden rounded-xl border border-stone-200 bg-white py-1 shadow-lg">
+                {newItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    onClick={() => setNewOpen(false)}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-stone-800 hover:bg-stone-50"
+                  >
+                    <item.icon size={16} className="text-stone-500" />
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        }
+      />
 
       <CloseDayChecklist />
-      <AlertsPanel alerts={alerts} />
 
-      {/* Quick Actions */}
-      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-4 font-semibold text-gray-900">Quick Actions</h2>
-        <div className="flex flex-wrap gap-3">
-          <Link
-            to="/procurement"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-          >
-            <ShoppingCart size={16} />
-            New Purchase Order
-          </Link>
-          <Link
-            to="/production"
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors"
-          >
-            <FlaskConical size={16} />
-            Start Production Run
-          </Link>
-          <Link
-            to="/distribution"
-            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors"
-          >
-            <Truck size={16} />
-            Create Supply Order
-          </Link>
-          <Link
-            to="/sales"
-            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 transition-colors"
-          >
-            <CircleDollarSign size={16} />
-            Record outlet sales
-          </Link>
-          <Link
-            to="/waste"
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 transition-colors"
-          >
-            <Trash2 size={16} />
-            Post waste
-          </Link>
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold text-stone-900">Needs attention</h2>
+        <AlertsPanel alerts={alerts} />
+        <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
+          <div className="panel">
+            <div className="flex items-center justify-between border-b border-stone-100 px-6 py-4">
+              <h3 className="font-semibold text-stone-900">Low stock</h3>
+              <Link to="/inventory" className="text-xs font-medium text-brand-800 hover:underline">
+                View all
+              </Link>
+            </div>
+            <div className="divide-y divide-stone-50">
+              {lowStock.length === 0 ? (
+                <EmptyState title="All materials are sufficiently stocked." />
+              ) : (
+                lowStock.slice(0, 6).map((item) => (
+                  <div key={item.id} className="flex items-center justify-between px-6 py-3.5">
+                    <div>
+                      <div className="text-sm font-medium text-stone-900">{item.name}</div>
+                      <div className="text-xs text-stone-400">
+                        Reorder at {item.reorder_level} {item.unit}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-sm font-semibold tabular-nums ${item.quantity === 0 ? 'text-red-600' : 'text-amber-700'}`}>
+                        {item.quantity} {item.unit}
+                      </div>
+                      <div className={`text-xs ${item.quantity === 0 ? 'text-red-400' : 'text-amber-500'}`}>
+                        {item.quantity === 0 ? 'Out of stock' : 'Low stock'}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="panel p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-semibold text-stone-900">Lots expiring soon</h3>
+              {isAdmin ? (
+                <Link to="/genealogy" className="text-xs font-medium text-brand-800 hover:underline">
+                  Open lot trace
+                </Link>
+              ) : (
+                <span className="text-xs text-stone-400">Full traceability in Lot trace</span>
+              )}
+            </div>
+            <p className="mb-4 text-xs text-stone-500">Expiry within the next 14 days.</p>
+            {expiringLots.length === 0 ? (
+              <EmptyState title="No lots with expiry in this window." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Batch</th>
+                      <th>Expiry</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {expiringLots.map((lot) => (
+                      <tr key={lot.id}>
+                        <td className="font-medium">{lot.product_batch_label}</td>
+                        <td className="tabular-nums">{lot.expiry_date}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      </section>
 
-      {/* KPIs */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         {[
           {
             icon: <Package size={20} />,
-            color: 'bg-blue-50 text-blue-600',
-            label: 'Quackmaster',
-            value: `MYR ${(kpis?.rawMaterialValue ?? 0).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`,
-            sub: 'Hub stock value',
-            to: '/inventory',
-          },
-          {
-            icon: <Activity size={20} />,
-            color: 'bg-emerald-50 text-emerald-600',
-            label: 'Hub Product Stock',
+            label: 'Hub finished goods',
             value: (kpis?.hubProductStock ?? 0).toLocaleString(),
             sub: hubProductSub,
             to: '/inventory',
           },
           {
-            icon: <ShoppingCart size={20} />,
-            color: 'bg-amber-50 text-amber-600',
-            label: 'Outstanding POs',
-            value: kpis?.outstandingPOs ?? 0,
-            sub: 'Awaiting delivery',
-            to: '/procurement',
-          },
-          {
-            icon: <TrendingUp size={20} />,
-            color: 'bg-teal-50 text-teal-600',
-            label: 'Avg Production Yield',
-            value:
-              kpis?.avgYield != null && Number.isFinite(kpis.avgYield)
-                ? `${kpis.avgYield.toFixed(1)}%`
-                : '—',
-            sub: 'Last 30 completed runs',
-            to: '/production',
-          },
-          {
-            icon: <AlertTriangle size={20} />,
-            color:
-              (kpis?.lowStockCount ?? 0) > 0
-                ? 'bg-red-50 text-red-600'
-                : 'bg-gray-50 text-gray-400',
-            label: 'Low Stock Alerts',
-            value: kpis?.lowStockCount ?? 0,
-            sub: 'Materials below reorder',
-            to: '/inventory',
-          },
-          {
-            icon: <Truck size={20} />,
-            color: 'bg-sky-50 text-sky-600',
-            label: 'Active Outlets',
-            value: kpis?.totalOutlets ?? 0,
-            sub: 'Quackteow locations',
-            to: '/distribution',
-          },
-          {
             icon: <CircleDollarSign size={20} />,
-            color: 'bg-violet-50 text-violet-600',
             label: 'Outlet sales (7d)',
             value: (kpis?.salesUnits7d ?? 0).toLocaleString(),
             sub: `${kpis?.salesJournals7d ?? 0} journals · units sold`,
@@ -738,30 +758,21 @@ export function Overview() {
           },
           {
             icon: <Trash2 size={20} />,
-            color: 'bg-orange-50 text-orange-600',
             label: 'Waste (7d)',
             value: (kpis?.wasteUnits7d ?? 0).toLocaleString(),
             sub: `${kpis?.wasteEvents7d ?? 0} events · units`,
             to: '/waste',
           },
+          {
+            icon: <ShoppingCart size={20} />,
+            label: 'Outstanding POs',
+            value: kpis?.outstandingPOs ?? 0,
+            sub: 'Awaiting delivery',
+            to: '/procurement',
+          },
         ].map((card) => (
-          <Link
-            key={card.label}
-            to={card.to}
-            className="group rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
-          >
-            <div className="flex items-start justify-between">
-              <div className={`rounded-lg p-2 ${card.color}`}>{card.icon}</div>
-              <ArrowRight
-                size={16}
-                className="text-gray-300 group-hover:text-blue-500 transition-colors mt-1"
-              />
-            </div>
-            <div className="mt-3">
-              <div className="text-2xl font-bold text-gray-900">{card.value}</div>
-              <div className="mt-0.5 text-sm font-medium text-gray-700">{card.label}</div>
-              <div className="text-xs text-gray-400">{card.sub}</div>
-            </div>
+          <Link key={card.label} to={card.to} className="group block">
+            <StatCard icon={card.icon} tone="brand" label={card.label} value={card.value} sub={card.sub} />
           </Link>
         ))}
       </div>
@@ -870,128 +881,33 @@ export function Overview() {
         )}
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold text-gray-900">Lots expiring soon</h2>
-          {isAdmin ? (
-            <Link to="/genealogy" className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline">
-              Open Lots
-            </Link>
+      <div className="panel">
+        <div className="border-b border-stone-100 px-6 py-4">
+          <h2 className="font-semibold text-stone-900">Recent activity</h2>
+        </div>
+        <div className="divide-y divide-stone-50">
+          {activity.length === 0 ? (
+            <EmptyState title="No activity yet" description="Create a PO, production run, supply order, or post outlet sales / waste." />
           ) : (
-            <span className="text-xs text-gray-400">Full traceability in Lots (admins)</span>
-          )}
-        </div>
-        <p className="mb-4 text-xs text-gray-500">Expiry within the next 14 days.</p>
-        {expiringLots.length === 0 ? (
-          <div className="py-6 text-center text-sm text-gray-400">No lots with expiry in this window.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50 text-left">
-                <tr>
-                  <th className="px-3 py-2 font-medium text-gray-700">Batch</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Expiry</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {expiringLots.map((lot) => (
-                  <tr key={lot.id}>
-                    <td className="px-3 py-2 font-medium text-gray-900">{lot.product_batch_label}</td>
-                    <td className="px-3 py-2 tabular-nums text-gray-700">{lot.expiry_date}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
-        {/* Recent Activity */}
-        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="border-b border-gray-100 px-6 py-4">
-            <h2 className="font-semibold text-gray-900">Recent Activity</h2>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {activity.length === 0 ? (
-              <div className="px-6 py-10 text-center text-sm text-gray-400">
-                No activity yet — create a PO, production run, supply order, or post outlet sales / waste.
-              </div>
-            ) : (
-              activity.map((item) => (
-                <div key={item.id} className="flex items-start gap-3 px-6 py-3.5">
-                  <div
-                    className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full ${
-                      activityColor[item.type]
-                    }`}
-                  >
-                    {activityIcon[item.type]}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-gray-900 truncate">
-                        {item.label}
-                      </span>
-                      <span className="text-xs text-gray-400 flex-shrink-0">
-                        {timeAgo(item.time)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 truncate">{item.detail}</p>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Low Stock Alerts */}
-        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
-            <h2 className="font-semibold text-gray-900">Low Stock Alerts</h2>
-            <Link
-              to="/inventory"
-              className="text-xs font-medium text-blue-600 hover:text-blue-800"
-            >
-              View all
-            </Link>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {lowStock.length === 0 ? (
-              <div className="px-6 py-10 text-center text-sm text-gray-400">
-                All materials are sufficiently stocked.
-              </div>
-            ) : (
-              lowStock.slice(0, 6).map((item) => (
+            activity.map((item) => (
+              <div key={item.id} className="flex items-start gap-3 px-6 py-3.5">
                 <div
-                  key={item.id}
-                  className="flex items-center justify-between px-6 py-3.5"
+                  className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full ${
+                    activityColor[item.type]
+                  }`}
                 >
-                  <div>
-                    <div className="text-sm font-medium text-gray-900">{item.name}</div>
-                    <div className="text-xs text-gray-400">
-                      Reorder at {item.reorder_level} {item.unit}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div
-                      className={`text-sm font-semibold ${
-                        item.quantity === 0 ? 'text-red-600' : 'text-amber-600'
-                      }`}
-                    >
-                      {item.quantity} {item.unit}
-                    </div>
-                    <div
-                      className={`text-xs ${
-                        item.quantity === 0 ? 'text-red-400' : 'text-amber-400'
-                      }`}
-                    >
-                      {item.quantity === 0 ? 'Out of stock' : 'Low stock'}
-                    </div>
-                  </div>
+                  {activityIcon[item.type]}
                 </div>
-              ))
-            )}
-          </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-stone-900 truncate">{item.label}</span>
+                    <span className="text-xs text-stone-400 flex-shrink-0">{timeAgo(item.time)}</span>
+                  </div>
+                  <p className="text-xs text-stone-500 truncate">{item.detail}</p>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

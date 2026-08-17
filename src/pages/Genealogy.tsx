@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { StockViewToggle } from '../components/StockViewToggle';
+import { PageHeader } from '../components/ui';
 import { filterByStockView, type StockView } from '../utils/stockView';
 import { skuForDisplay } from '../utils/lotLabel';
 import {
@@ -270,7 +271,7 @@ export function Genealogy() {
   }
 
   if (loading) {
-    return <div className="p-6 text-sm text-gray-500">Loading lots…</div>;
+    return <div className="text-sm text-stone-500">Loading lots…</div>;
   }
 
   const selected = lots.find((l) => l.id === selectedId) ?? null;
@@ -288,15 +289,10 @@ export function Genealogy() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900">
-          <GitBranch size={24} className="text-teal-600" />
-          Lot traceability
-        </h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Search an ink lot, leftover BATCH code, or SKU. The tree is genealogy; the table is where that lot still sits.
-        </p>
-      </div>
+      <PageHeader
+        title="Lot traceability"
+        description="Search an ink lot, leftover BATCH code, or SKU. The tree is genealogy; the table is where that lot still sits."
+      />
 
       <div className="relative max-w-lg">
         <input

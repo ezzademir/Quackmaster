@@ -2,6 +2,7 @@ import { Shield, RefreshCw, Download } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
+import { Button, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { fetchQCAuditCriteria, saveQCAuditCriteria } from '../utils/qcSettings';
@@ -173,22 +174,16 @@ export function Settings() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            System configuration, preferences, and data exports.
-          </p>
-        </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 rounded-lg bg-gray-600 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-          Refresh Profile
-        </button>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="System configuration, preferences, and data exports."
+        actions={
+          <Button variant="secondary" onClick={handleRefresh} disabled={refreshing}>
+            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+            Refresh Profile
+          </Button>
+        }
+      />
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="font-semibold text-gray-900">SKU vs lot</h2>

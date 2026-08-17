@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Ban, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
+import { Ban, ChevronDown, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
+import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
-import { formatDateForInput, type DateRange } from '../utils/dateRange';
+import { formatDateForInput, getLast7Days, type DateRange } from '../utils/dateRange';
 import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
 import {
@@ -21,6 +22,7 @@ interface LineRow extends SalesJournalLineInput {
   /** UI-only; from inventory_lots.manufactured_at when loaded */
   production_date_label: string | null;
   lot_label?: string | null;
+  available_qty?: number;
 }
 
 const blankLines = (): LineRow[] => [
@@ -64,7 +66,7 @@ function normalizeLot(lot: OutletInventoryRowForFifo['lot']): OutletInventoryLot
 function distinctSortedSkus(rows: OutletInventoryRowForSku[]): string[] {
   const set = new Set<string>();
   for (const row of rows) {
-    const lot = nestedLotLabel(row.lot);
+    const lot = nestedLotLabel(row.lot as never);
     const recipeSku = nestedRecipeSku(row.lot);
     const sku = skuForDisplay(lot, row.product_batch, recipeSku);
     if (sku) set.add(sku);
@@ -117,11 +119,12 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
     const avail = hubRowAvailableQuantity(qoh, res, row.available_quantity);
     return {
       key: crypto.randomUUID(),
-      product_batch: displayLotFirst(nestedLotLabel(lot), batch) || batch,
-      quantity_sold: avail,
+      product_batch: displayLotFirst(nestedLotLabel(lot as never), batch) || batch,
+      quantity_sold: 0,
       outlet_inventory_id: row.id,
       production_date_label: formatProductionDateLabel(lot?.manufactured_at),
-      lot_label: nestedLotLabel(lot),
+      lot_label: nestedLotLabel(lot as never),
+      available_qty: avail,
     };
   });
 }
@@ -219,7 +222,9 @@ function linesByJournalFromDb(
 }
 
 export function Sales() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isSupervisor, profile } = useAuth();
+  const [pageTab, setPageTab] = useState<'overview' | 'record'>('overview');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
   const [businessDate, setBusinessDate] = useState(() =>
@@ -259,7 +264,7 @@ export function Sales() {
   const [modalLines, setModalLines] = useState<ModalDraftLine[]>([]);
   const [modalStatus, setModalStatus] = useState('');
   const [modalMessage, setModalMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
-  const [journalDateRange, setJournalDateRange] = useState<DateRange | null>(null);
+  const [journalDateRange, setJournalDateRange] = useState<DateRange | null>(() => getLast7Days());
 
   /** Latest outlet id — compare after awaits so overlapping batch loads can't apply wrong outlet rows. */
   const outletIdRef = useRef(outletId);
@@ -385,11 +390,25 @@ export function Sales() {
   }, []);
 
   const loadOutlets = useCallback(async () => {
+    if (isSupervisor) {
+      const oid = profile?.assigned_outlet_id;
+      if (!oid) {
+        setOutlets([]);
+        setOutletId('');
+        setLoading(false);
+        return;
+      }
+      const { data } = await supabase.from('outlets').select('*').eq('id', oid).maybeSingle();
+      setOutlets(data ? [data as Outlet] : []);
+      setOutletId(oid);
+      setLoading(false);
+      return;
+    }
     const { data } = await supabase.from('outlets').select('*').order('name');
     setOutlets(data ?? []);
     if (data?.length && !outletId) setOutletId(data[0].id);
     setLoading(false);
-  }, [outletId]);
+  }, [outletId, isSupervisor, profile?.assigned_outlet_id]);
 
   const loadHistory = useCallback(
     async (opts?: { mode?: 'replace' | 'append'; beforeLength?: number }): Promise<boolean> => {
@@ -629,6 +648,7 @@ export function Sales() {
         const isEmpty = next.length === 1 && next[0].product_batch === '';
         setLines(next);
         setInventoryEmptyNotice(isEmpty);
+        setAdvancedOpen(true);
         return true;
       } catch (err) {
         const text = err instanceof Error ? err.message : 'Failed to load outlet inventory.';
@@ -679,8 +699,8 @@ export function Sales() {
       setMessage({
         tone: 'ok',
         text: res.idempotentReplay
-          ? 'FIFO sale already recorded (idempotent replay).'
-          : `Posted FIFO sale${res.salesJournalId ? ` ${res.salesJournalId.slice(0, 8)}…` : ''}.`,
+          ? 'Sale already recorded.'
+          : `Posted ${formatSoldQty(qty)} units`,
       });
       setFifoQtySold(0);
       void loadHistory();
@@ -723,11 +743,12 @@ export function Sales() {
         setMessage({ tone: 'err', text: res.error ?? 'Failed to post sales journal.' });
         return;
       }
+      const postedQty = cleaned.reduce((sum, l) => sum + l.quantity_sold, 0);
       setMessage({
         tone: 'ok',
         text: res.idempotentReplay
-          ? 'Journal already recorded (idempotent replay).'
-          : `Posted sales journal${res.salesJournalId ? ` ${res.salesJournalId.slice(0, 8)}…` : ''}.`,
+          ? 'Sale already recorded.'
+          : `Posted ${formatSoldQty(postedQty)} units`,
       });
       setNotes('');
       const reloaded = await loadBatchesFromInventory({ afterPost: true });
@@ -828,112 +849,126 @@ export function Sales() {
   }
 
   if (loading) {
-    return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+    return <div className="text-sm text-stone-500">Loading…</div>;
   }
 
-  return (
-    <div className="mx-auto max-w-4xl space-y-8 p-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Outlet sales</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Snapshot of posted sales, then FIFO or manual journals. Voiding restores outlet stock and keeps the old
-            lines on file as <span className="font-medium text-gray-700">voided</span> (admin only).
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 sm:items-end">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
-              <select
-                value={outletId}
-                onChange={(e) => setOutletId(e.target.value)}
-                className="min-w-[12rem] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
-              >
-                {outlets.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <DateFilter
-              onFilterChange={(range) => setJournalDateRange(range)}
-              hint="Business date for overview and recent journals."
-            />
-          </div>
-        </div>
+  if (isSupervisor && !profile?.assigned_outlet_id) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 sm:p-4">
+        No outlet is assigned to your account. Ask an admin to set your role and outlet under Users.
       </div>
+    );
+  }
 
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold text-gray-800">Overview</h2>
-          <p className="text-xs text-gray-500">
-            {outlets.find((o) => o.id === outletId)?.name ?? 'Outlet'} · {salesPeriodLabel(journalDateRange)}
-            {overview.lastBusinessDate ? ` · last posted ${overview.lastBusinessDate}` : ''}
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            {
-              icon: <CircleDollarSign size={18} />,
-              color: 'bg-violet-50 text-violet-600',
-              label: 'Units sold',
-              value: overviewLoading ? '…' : formatSoldQty(overview.unitsSold),
-              sub: 'Posted journals only',
-            },
-            {
-              icon: <FileText size={18} />,
-              color: 'bg-blue-50 text-blue-600',
-              label: 'Posted journals',
-              value: overviewLoading ? '…' : overview.postedJournals.toLocaleString(),
-              sub: 'Count in this period',
-            },
-            {
-              icon: <Package size={18} />,
-              color: 'bg-teal-50 text-teal-600',
-              label: 'SKUs sold',
-              value: overviewLoading ? '…' : overview.skuCount.toLocaleString(),
-              sub: 'Distinct SKUs / lots',
-            },
-            {
-              icon: <Ban size={18} />,
-              color: overview.voidedJournals > 0 ? 'bg-gray-100 text-gray-600' : 'bg-gray-50 text-gray-400',
-              label: 'Voided',
-              value: overviewLoading ? '…' : overview.voidedJournals.toLocaleString(),
-              sub: 'Reversed, not in units sold',
-            },
-          ].map((card) => (
-            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className={`mb-2 inline-flex rounded-lg p-2 ${card.color}`}>{card.icon}</div>
-              <p className="text-xl font-bold tabular-nums text-gray-900">{card.value}</p>
-              <p className="mt-0.5 text-xs font-medium text-gray-700">{card.label}</p>
-              <p className="text-[11px] text-gray-400">{card.sub}</p>
-            </div>
+  const outletPicker = (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-stone-600">Outlet</label>
+      {isSupervisor ? (
+        <p className="min-w-[12rem] rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-800">
+          {outlets.find((o) => o.id === outletId)?.name ?? 'Your outlet'}
+        </p>
+      ) : (
+        <select
+          value={outletId}
+          onChange={(e) => setOutletId(e.target.value)}
+          className="min-w-[12rem] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+        >
+          {outlets.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
           ))}
+        </select>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Outlet sales"
+        description={
+          pageTab === 'overview'
+            ? 'Posted sales for this outlet. Voided journals stay on file and are hidden unless included.'
+            : 'Record a FIFO sale first. Business date is the day the sale happened.'
+        }
+        filters={
+          <>
+            {outletPicker}
+            <div className={pageTab === 'overview' ? '' : 'hidden'}>
+              <DateFilter
+                defaultType="last7Days"
+                onFilterChange={(range) => setJournalDateRange(range)}
+                hint="Applies to overview totals and recent journals."
+              />
+            </div>
+          </>
+        }
+      />
+
+      <Tabs
+        value={pageTab}
+        onChange={setPageTab}
+        items={[
+          { id: 'overview', label: 'Overview' },
+          { id: 'record', label: 'Record sale' },
+        ]}
+      />
+
+      {pageTab === 'overview' && (
+      <div className="space-y-4">
+        <p className="text-xs text-stone-500">
+          {outlets.find((o) => o.id === outletId)?.name ?? 'Outlet'} · {salesPeriodLabel(journalDateRange)}
+          {overview.lastBusinessDate ? ` · last posted ${overview.lastBusinessDate}` : ''}
+        </p>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard
+            icon={<CircleDollarSign size={18} />}
+            tone="brand"
+            label="Units sold"
+            value={overviewLoading ? '…' : formatSoldQty(overview.unitsSold)}
+            sub="Posted journals only"
+          />
+          <StatCard
+            icon={<FileText size={18} />}
+            label="Posted journals"
+            value={overviewLoading ? '…' : overview.postedJournals.toLocaleString()}
+            sub="Count in this period"
+          />
+          <StatCard
+            icon={<Package size={18} />}
+            label="SKUs sold"
+            value={overviewLoading ? '…' : overview.skuCount.toLocaleString()}
+            sub="Distinct SKUs / lots"
+          />
+          <StatCard
+            icon={<Ban size={18} />}
+            tone="muted"
+            label="Voided"
+            value={overviewLoading ? '…' : overview.voidedJournals.toLocaleString()}
+            sub="Reversed, not in units sold"
+          />
         </div>
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-          <table className="w-full text-sm">
-            <thead className="border-b bg-gray-50">
+        <div className="panel overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Top SKUs</th>
-                <th className="px-4 py-2 text-right text-xs font-semibold text-gray-600">Units</th>
-                <th className="hidden w-28 px-4 py-2 text-right text-xs font-semibold text-gray-600 sm:table-cell">
-                  Share
-                </th>
+                <th>Top SKUs</th>
+                <th className="text-right">Units</th>
+                <th className="hidden w-28 text-right sm:table-cell">Share</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-stone-100">
               {overviewLoading ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={3} className="px-4 py-6 text-center text-stone-400">
                     Loading snapshot…
                   </td>
                 </tr>
               ) : overview.topSkus.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400">
-                    No posted sales in this period
+                  <td colSpan={3}>
+                    <EmptyState title="No posted sales in this period" />
                   </td>
                 </tr>
               ) : (
@@ -941,21 +976,21 @@ export function Sales() {
                   const share = overview.unitsSold > 0 ? (sku.qty / overview.unitsSold) * 100 : 0;
                   return (
                     <tr key={sku.label}>
-                      <td className="px-4 py-2 font-mono text-xs text-gray-800 sm:text-sm">
+                      <td className="font-mono text-xs sm:text-sm">
                         <span className="break-all">{sku.label}</span>
                       </td>
-                      <td className="px-4 py-2 text-right tabular-nums font-medium text-gray-900">
+                      <td className="text-right tabular-nums font-medium text-stone-900">
                         {formatSoldQty(sku.qty)}
                       </td>
-                      <td className="hidden px-4 py-2 sm:table-cell">
+                      <td className="hidden sm:table-cell">
                         <div className="flex items-center justify-end gap-2">
-                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
+                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-stone-100">
                             <div
-                              className="h-full rounded-full bg-violet-400"
+                              className="h-full rounded-full bg-brand-400"
                               style={{ width: `${Math.min(100, share)}%` }}
                             />
                           </div>
-                          <span className="w-10 text-right text-xs tabular-nums text-gray-500">
+                          <span className="w-10 text-right text-xs tabular-nums text-stone-500">
                             {share.toFixed(0)}%
                           </span>
                         </div>
@@ -968,8 +1003,9 @@ export function Sales() {
           </table>
         </div>
       </div>
+      )}
 
-      {message && (
+      {message && pageTab === 'record' && (
         <div
           className={`rounded-lg px-4 py-3 text-sm ${
             message.tone === 'ok' ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-800'
@@ -979,31 +1015,32 @@ export function Sales() {
         </div>
       )}
 
-      <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+      {pageTab === 'record' && (
+      <form onSubmit={(e) => void handleSubmit(e)} className="panel space-y-6 p-6">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Business date</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Business date</label>
           <input
             type="date"
             value={businessDate}
             onChange={(e) => setBusinessDate(e.target.value)}
-            className="w-full max-w-xs rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="w-full max-w-xs rounded-lg border border-stone-300 px-3 py-2 text-sm"
             required
           />
         </div>
 
-        <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
-          <h2 className="text-sm font-semibold text-gray-900">FIFO sale by SKU</h2>
-          <p className="mt-1 text-xs text-gray-600">
+        <div className="rounded-lg border border-brand-100 bg-brand-50/40 p-4">
+          <h2 className="text-sm font-semibold text-stone-900">FIFO sale by SKU</h2>
+          <p className="mt-1 text-xs text-stone-600">
             Pick the SKU (or a specific lot). Consumption follows FEFO; the journal shows which lot was sold.
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_auto_auto] sm:items-end">
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">SKU</label>
+              <label className="mb-1 block text-xs font-medium text-stone-700">SKU</label>
               <select
                 value={fifoSku}
                 onChange={(e) => setFifoSku(e.target.value)}
                 disabled={!outletId || fifoSkusLoading || fifoSkus.length === 0}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
+                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm disabled:bg-stone-100"
               >
                 <option value="">
                   {fifoSkusLoading
@@ -1020,7 +1057,7 @@ export function Sales() {
               </select>
             </div>
             <div className="w-full sm:w-32">
-              <label className="mb-1 block text-xs font-medium text-gray-700">Qty sold</label>
+              <label className="mb-1 block text-xs font-medium text-stone-700">Qty sold</label>
               <input
                 type="number"
                 min={0}
@@ -1031,11 +1068,11 @@ export function Sales() {
                   const v = parseFloat(e.target.value);
                   setFifoQtySold(Number.isFinite(v) ? v : 0);
                 }}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm tabular-nums"
               />
             </div>
             <div className="sm:pb-0.5">
-              <button
+              <Button
                 type="button"
                 onClick={() => void handleFifoPost()}
                 disabled={
@@ -1047,34 +1084,44 @@ export function Sales() {
                   !Number.isFinite(fifoQtySold) ||
                   fifoQtySold <= 0
                 }
-                className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 sm:w-auto"
+                className="w-full sm:w-auto"
               >
                 {fifoPosting ? 'Posting…' : 'Post FIFO sale'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
 
         <div>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((open) => !open)}
+            className="flex w-full items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-left text-sm font-medium text-stone-800 hover:bg-stone-100"
+          >
+            Advanced: manual lines
+            <ChevronDown size={16} className={`text-stone-500 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {advancedOpen && (
+            <div className="mt-3 space-y-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <label className="text-sm font-medium text-gray-700">Manual lines</label>
-              <p className="mt-0.5 text-xs text-gray-500">
-                Advanced: edit batches and quantities line by line—for splits, overrides, or when FIFO
-                by SKU is not what you need.
-              </p>
-            </div>
+            <p className="text-xs text-stone-500">
+              Edit batches line by line for splits or overrides. Qty sold starts at 0; available stock is shown as a
+              helper.
+            </p>
             <div className="flex flex-wrap items-center gap-2">
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
                 onClick={() => void loadBatchesFromInventory()}
                 disabled={!outletId || batchesLoading}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 {batchesLoading ? 'Loading…' : 'Load batches from inventory'}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
                 onClick={() => {
                   setInventoryEmptyNotice(false);
                   setLines((prev) => [
@@ -1087,31 +1134,25 @@ export function Sales() {
                     },
                   ]);
                 }}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
               >
                 <Plus size={14} /> Add line
-              </button>
+              </Button>
             </div>
           </div>
           {inventoryEmptyNotice && (
-            <p className="mb-2 text-sm text-gray-500">No stocked batches for this outlet.</p>
+            <p className="mb-2 text-sm text-stone-500">No stocked batches for this outlet.</p>
           )}
-          <p className="mb-2 text-sm text-gray-500">
-            Loading batches pulls outlet stock in FIFO order (earliest expiry and lot dates first) and prefills{' '}
-            <span className="font-medium text-gray-600">Qty sold</span> with available stock—change each row to units
-            actually sold before posting.
-          </p>
           <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
-            <div className="min-w-[140px] flex-1 text-xs font-medium text-gray-500">Lot</div>
-            <div className="w-28 min-w-[7rem] text-xs font-medium text-gray-500">Prod. date</div>
-            <div className="w-28 text-xs font-medium text-gray-500">Qty sold</div>
+            <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Lot</div>
+            <div className="w-28 min-w-[7rem] text-xs font-medium text-stone-500">Prod. date</div>
+            <div className="w-28 text-xs font-medium text-stone-500">Qty sold</div>
             <div className="w-10 shrink-0" aria-hidden />
           </div>
           <div className="space-y-3">
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-[140px] flex-1">
-                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Lot</span>
+                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Lot</span>
                   <input
                     placeholder="Lot or SKU"
                     value={line.product_batch}
@@ -1123,13 +1164,13 @@ export function Sales() {
                         )
                       );
                     }}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
                   />
                 </div>
                 <div className="w-full min-w-[7rem] sm:w-28">
-                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Prod. date</span>
+                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Prod. date</span>
                   <div
-                    className="flex min-h-[38px] items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm tabular-nums text-gray-800"
+                    className="flex min-h-[38px] items-center rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm tabular-nums text-stone-800"
                     title={
                       line.production_date_label
                         ? `Production date ${line.production_date_label}`
@@ -1140,7 +1181,7 @@ export function Sales() {
                   </div>
                 </div>
                 <div className="w-28">
-                  <span className="mb-1 block text-xs font-medium text-gray-500 sm:hidden">Qty sold</span>
+                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Qty sold</span>
                   <input
                     type="number"
                     min={0}
@@ -1153,14 +1194,19 @@ export function Sales() {
                         prev.map((r, i) => (i === idx ? { ...r, quantity_sold: Number.isFinite(v) ? v : 0 } : r))
                       );
                     }}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm tabular-nums"
                   />
+                  {line.available_qty != null ? (
+                    <p className="mt-0.5 text-[11px] tabular-nums text-stone-400">
+                      Available {formatSoldQty(line.available_qty)}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
                   onClick={() => setLines((prev) => prev.filter((_, i) => i !== idx))}
                   disabled={lines.length <= 1}
-                  className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-30"
+                  className="rounded-lg p-2 text-stone-400 hover:bg-stone-100 hover:text-red-600 disabled:opacity-30"
                   aria-label="Remove line"
                 >
                   <Trash2 size={18} />
@@ -1168,27 +1214,29 @@ export function Sales() {
               </div>
             ))}
           </div>
+            </div>
+          )}
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={submitting || batchesLoading || fifoPosting}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-        >
-          {submitting ? 'Posting…' : 'Post manual journal'}
-        </button>
+        {advancedOpen ? (
+          <Button type="submit" disabled={submitting || batchesLoading || fifoPosting}>
+            {submitting ? 'Posting…' : 'Post manual journal'}
+          </Button>
+        ) : null}
       </form>
+      )}
 
+      {pageTab === 'overview' && (
       <div>
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1221,17 +1269,16 @@ export function Sales() {
           <table className="w-full">
             <thead className="border-b bg-gray-50">
               <tr>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Date</th>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Outlet</th>
-                <th className="px-4 py-2 text-left font-medium text-gray-600 min-w-[12rem]">Qty sold</th>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Notes</th>
-                <th className="px-4 py-2 text-right font-medium text-gray-600">Actions</th>
+                <th className="px-4 py-2 text-left font-medium text-stone-600">Date</th>
+                <th className="px-4 py-2 text-left font-medium text-stone-600 min-w-[12rem]">Qty sold</th>
+                <th className="px-4 py-2 text-left font-medium text-stone-600">Notes</th>
+                <th className="px-4 py-2 text-right font-medium text-stone-600">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {history.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
+                  <td colSpan={4} className="px-4 py-6 text-center text-stone-400">
                     {includeVoided ? 'No sales in this period' : 'No posted sales for this outlet'}
                   </td>
                 </tr>
@@ -1249,9 +1296,6 @@ export function Sales() {
                           </span>
                         ) : null}
                       </div>
-                    </td>
-                    <td className="px-4 py-2 align-top whitespace-nowrap">
-                      {outlets.find((o) => o.id === h.outlet_id)?.name ?? h.outlet_id.slice(0, 8)}
                     </td>
                     <td className="px-4 py-2 align-top">
                       {h.lines.length === 0 ? (
@@ -1276,7 +1320,7 @@ export function Sales() {
                         type="button"
                         onClick={() => void loadJournalIntoModal(h.id)}
                         disabled={recentJournalBusy}
-                        className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-lg border border-stone-300 px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
                       >
                         <Eye size={14} aria-hidden /> View
                       </button>
@@ -1309,6 +1353,7 @@ export function Sales() {
           ) : null}
         </div>
       </div>
+      )}
 
       <Modal
         isOpen={journalModalOpen}
@@ -1479,7 +1524,7 @@ export function Sales() {
                         type="button"
                         onClick={() => setModalEditMode(true)}
                         disabled={recentJournalBusy}
-                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        className="btn-secondary"
                       >
                         Edit
                       </button>
@@ -1487,7 +1532,7 @@ export function Sales() {
                         type="button"
                         onClick={() => void handleModalDelete()}
                         disabled={recentJournalBusy}
-                        className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                        className="btn-danger"
                       >
                         {modalDeleting ? 'Voiding…' : 'Void sale'}
                       </button>
@@ -1496,7 +1541,7 @@ export function Sales() {
                   <button
                     type="button"
                     onClick={() => closeJournalModal()}
-                    className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200"
+                    className="btn-ghost"
                   >
                     Close
                   </button>
@@ -1507,7 +1552,7 @@ export function Sales() {
                     type="button"
                     onClick={() => void cancelModalEdit()}
                     disabled={modalSaving}
-                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    className="btn-secondary"
                   >
                     Cancel
                   </button>
@@ -1516,7 +1561,7 @@ export function Sales() {
                       type="button"
                       onClick={() => void handleModalSave()}
                       disabled={modalSaving}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                      className="btn-primary"
                     >
                       {modalSaving ? 'Saving…' : 'Save changes'}
                     </button>

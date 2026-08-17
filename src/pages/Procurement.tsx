@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, PackagePlus, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { Button, PageHeader, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, validatePoLinesAgainstSupplierCatalog, formatValidationErrors } from '../utils/validation';
@@ -1274,57 +1275,58 @@ export function Procurement() {
     return list;
   }, [orders, search, dateRange]);
 
-  const tabClass = (t: Tab) =>
-    `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
-      tab === t
-        ? 'border-blue-600 text-blue-600'
-        : 'border-transparent text-gray-500 hover:text-gray-700'
-    }`;
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Procurement</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage suppliers, raw materials and purchase orders
-          </p>
-        </div>
-        {tab === 'orders' && (
-          <button onClick={() => setShowNewPO(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-            <Plus size={16} /> New Order
-          </button>
-        )}
-        {tab === 'suppliers' && (
-          <button onClick={() => { setEditSupplier(null); setShowSupplierModal(true); }}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-            <Plus size={16} /> Add Supplier
-          </button>
-        )}
-        {tab === 'materials' && (
-          <button onClick={() => { setEditMaterial(null); setShowMaterialModal(true); }}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-            <Plus size={16} /> Add Material
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Procurement"
+        description="Manage suppliers, raw materials and purchase orders"
+        actions={
+          <>
+            {tab === 'orders' && (
+              <Button onClick={() => setShowNewPO(true)}>
+                <Plus size={16} /> New Order
+              </Button>
+            )}
+            {tab === 'suppliers' && (
+              <Button
+                onClick={() => {
+                  setEditSupplier(null);
+                  setShowSupplierModal(true);
+                }}
+              >
+                <Plus size={16} /> Add Supplier
+              </Button>
+            )}
+            {tab === 'materials' && (
+              <Button
+                onClick={() => {
+                  setEditMaterial(null);
+                  setShowMaterialModal(true);
+                }}
+              >
+                <Plus size={16} /> Add Material
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <div className="flex gap-6">
-            <button type="button" className={tabClass('orders')} onClick={() => selectTab('orders')}>Purchase Orders</button>
-            <button type="button" className={tabClass('suppliers')} onClick={() => selectTab('suppliers')}>Suppliers</button>
-            <button type="button" className={tabClass('materials')} onClick={() => selectTab('materials')}>Raw Materials</button>
-          </div>
-          {tab === 'orders' && (
-            <DateFilter
-              onFilterChange={(range) => setDateRange(range)}
-              hint="Filters purchase orders by order date."
-            />
-          )}
-        </nav>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <Tabs
+          value={tab}
+          onChange={selectTab}
+          items={[
+            { id: 'orders', label: 'Purchase Orders' },
+            { id: 'suppliers', label: 'Suppliers' },
+            { id: 'materials', label: 'Raw Materials' },
+          ]}
+        />
+        {tab === 'orders' && (
+          <DateFilter
+            onFilterChange={(range) => setDateRange(range)}
+            hint="Filters purchase orders by order date."
+          />
+        )}
       </div>
 
       {loading ? (
