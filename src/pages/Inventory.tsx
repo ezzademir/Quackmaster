@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2, ClipboardList } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { Button, PageHeader, StatCard, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
@@ -311,113 +312,97 @@ export function Inventory() {
     [hubRows]
   );
 
-  const tabClass = (t: Tab) =>
-    `border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
-      tab === t ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-    }`;
-
   const lowStockCount = hubRows.filter((r) => r.type === 'material' && r.quantity_on_hand <= (r.reorder_level ?? 10)).length;
   const totalOutletStock = outletRows.reduce((a, r) => a + r.quantity_on_hand, 0);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
-          <p className="mt-1 text-sm text-gray-500">Hub (Quackmaster) and Outlet (Quackteow) stock levels</p>
-        </div>
-        <button onClick={() => { void loadAll(); void loadOutletInventory(selectedOutlet || undefined); }}
-          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-          <RefreshCw size={16} /> Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Inventory"
+        description="Hub and outlet stock levels. Physical counts live under Stock take."
+        actions={
+          <Button
+            variant="secondary"
+            onClick={() => {
+              void loadAll();
+              void loadOutletInventory(selectedOutlet || undefined);
+            }}
+          >
+            <RefreshCw size={16} /> Refresh
+          </Button>
+        }
+      />
 
-      {/* Summary Stats */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-amber-50 p-2 text-amber-600"><PackageCheck size={20} /></div>
-            <div>
-              <p className="text-xs text-gray-500">Hub finished goods · available (ATP)</p>
-              <p className="text-xl font-bold text-gray-900">{hubFinishedAtpAll.available.toLocaleString()} units</p>
-              <p className="mt-0.5 text-xs text-gray-500">
-                On hand {hubFinishedAtpAll.onHand.toLocaleString()}
-                {hubFinishedAtpAll.reserved > 0 && <> · Reserved {hubFinishedAtpAll.reserved.toLocaleString()}</>}
-              </p>
-              <p className="mt-1 text-xs text-gray-400">Live snapshot — not affected by table filter.</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className={`rounded-lg p-2 ${lowStockCount > 0 ? 'bg-red-50 text-red-600' : 'bg-gray-50 text-gray-400'}`}><AlertTriangle size={20} /></div>
-            <div>
-              <p className="text-xs text-gray-500">Low Stock Alerts</p>
-              <p className="text-xl font-bold text-gray-900">{lowStockCount} material{lowStockCount !== 1 ? 's' : ''}</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-teal-50 p-2 text-teal-600"><PackageCheck size={20} /></div>
-            <div>
-              <p className="text-xs text-gray-500">Total Outlet Stock</p>
-              <p className="text-xl font-bold text-gray-900">{totalOutletStock.toLocaleString()} units</p>
-              <p className="mt-1 text-xs text-gray-400">Live snapshot — not affected by table filter.</p>
-            </div>
-          </div>
-        </div>
+        <StatCard
+          icon={<PackageCheck size={20} />}
+          tone="brand"
+          label="Hub finished goods · available (ATP)"
+          value={`${hubFinishedAtpAll.available.toLocaleString()} units`}
+          sub={`On hand ${hubFinishedAtpAll.onHand.toLocaleString()}${hubFinishedAtpAll.reserved > 0 ? ` · Reserved ${hubFinishedAtpAll.reserved.toLocaleString()}` : ''}. Live snapshot.`}
+        />
+        <StatCard
+          icon={<AlertTriangle size={20} />}
+          tone={lowStockCount > 0 ? 'danger' : 'muted'}
+          label="Low stock alerts"
+          value={`${lowStockCount} material${lowStockCount !== 1 ? 's' : ''}`}
+        />
+        <StatCard
+          icon={<PackageCheck size={20} />}
+          label="Total outlet stock"
+          value={`${totalOutletStock.toLocaleString()} units`}
+          sub="Live snapshot — not affected by table filter."
+        />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm">
-        <p className="text-gray-600">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-4 py-3 text-sm">
+        <p className="text-stone-600">
           Physical counts and stock take sessions live under{' '}
-          <Link to="/stock-take" className="font-medium text-teal-600 hover:underline">
+          <Link to="/stock-take" className="font-medium text-brand-800 hover:underline">
             Stock take
           </Link>
           . Use{' '}
-          <Link to="/reconciliation" className="font-medium text-teal-600 hover:underline">
+          <Link to="/reconciliation" className="font-medium text-brand-800 hover:underline">
             Reconciliation
           </Link>{' '}
           to investigate variances.
         </p>
-        <Link
-          to="/stock-take"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-800 hover:bg-teal-100"
-        >
+        <Link to="/stock-take" className="btn-secondary px-3 py-1.5 text-xs">
           <ClipboardList size={14} /> Open stock take
         </Link>
       </div>
 
-      <div className="border-b border-gray-200">
-        <nav className="flex flex-wrap items-center justify-between gap-6 mb-4">
-          <div className="flex gap-6">
-            <button className={tabClass('hub')} onClick={() => setTab('hub')}>Hub Inventory</button>
-            <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: 'hub', label: 'Hub Inventory' },
+            { id: 'outlets', label: 'Outlet Inventory' },
+          ]}
+        />
+        {(tab === 'hub' || tab === 'outlets') && (
+          <div className="flex flex-wrap items-center gap-4">
+            <StockViewToggle value={stockView} onChange={setStockView} />
+            <label className="flex items-center gap-2 text-xs text-stone-600">
+              <input
+                type="checkbox"
+                checked={showAdvancedFilter}
+                onChange={(e) => {
+                  setShowAdvancedFilter(e.target.checked);
+                  if (!e.target.checked) setDateRange(null);
+                }}
+              />
+              Filter rows by last updated
+            </label>
+            {showAdvancedFilter && (
+              <DateFilter
+                onFilterChange={handleDateFilterChange}
+                hint="Advanced: show only rows updated in this range. KPI totals stay live."
+              />
+            )}
           </div>
-          {(tab === 'hub' || tab === 'outlets') && (
-            <div className="flex flex-wrap items-center gap-4">
-              <StockViewToggle value={stockView} onChange={setStockView} />
-              <label className="flex items-center gap-2 text-xs text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={showAdvancedFilter}
-                  onChange={(e) => {
-                    setShowAdvancedFilter(e.target.checked);
-                    if (!e.target.checked) setDateRange(null);
-                  }}
-                />
-                Filter rows by last updated
-              </label>
-              {showAdvancedFilter && (
-                <DateFilter
-                  onFilterChange={handleDateFilterChange}
-                  hint="Advanced: show only rows updated in this range. KPI totals stay live."
-                />
-              )}
-            </div>
-          )}
-        </nav>
+        )}
       </div>
 
       {loading ? (

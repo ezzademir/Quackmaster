@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, AlertCircle } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { Button, PageHeader, Tabs } from '../components/ui';
 import { HubAtpCompact } from '../components/HubAtpCompact';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
@@ -33,7 +34,6 @@ import {
   normalizeSOStatus,
   supplyOrderAdminDeleteConfirmDetail,
   supplyOrderAllowsAdminHardDelete,
-  tabClass,
 } from './distribution/helpers';
 import { StatusBadge } from './distribution/StatusBadge';
 import { OrdersTab } from './distribution/OrdersTab';
@@ -1741,66 +1741,64 @@ export function Distribution() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Distribution</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage outlets, hub supply orders, lots at each outlet, and outlet-to-outlet transfers
-          </p>
-        </div>
-        {tab === 'orders' && (
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setShowNewRMSO(true)}
-              className="inline-flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50 transition-colors"
-            >
-              <Plus size={16} /> Ingredient supply
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowNewSO(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors"
-            >
-              <Plus size={16} /> New Supply Order
-            </button>
-          </div>
-        )}
-        {tab === 'outlets' && (
-          <button onClick={() => { setEditOutlet(null); setShowOutletModal(true); }}
-            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors">
-            <Plus size={16} /> Add Outlet
-          </button>
-        )}
-        {tab === 'transfers' && (
-          <button onClick={() => setShowNewTransfer(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 transition-colors">
-            <Plus size={16} /> New transfer
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Distribution"
+        description="Outlets, hub supply orders, lots at each outlet, and outlet-to-outlet transfers"
+        actions={
+          <>
+            {tab === 'orders' && (
+              <>
+                <Button variant="secondary" type="button" onClick={() => setShowNewRMSO(true)}>
+                  <Plus size={16} /> Ingredient supply
+                </Button>
+                <Button type="button" onClick={() => setShowNewSO(true)}>
+                  <Plus size={16} /> New Supply Order
+                </Button>
+              </>
+            )}
+            {tab === 'outlets' && (
+              <Button
+                onClick={() => {
+                  setEditOutlet(null);
+                  setShowOutletModal(true);
+                }}
+              >
+                <Plus size={16} /> Add Outlet
+              </Button>
+            )}
+            {tab === 'transfers' && (
+              <Button onClick={() => setShowNewTransfer(true)}>
+                <Plus size={16} /> New transfer
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      <div className="border-b border-gray-200">
-        <nav className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <div className="flex flex-wrap gap-6">
-            <button type="button" className={tabClass(tab, 'orders')} onClick={() => setTab('orders')}>Supply Orders</button>
-            <button type="button" className={tabClass(tab, 'transfers')} onClick={() => setTab('transfers')}>Outlet transfers</button>
-            <button type="button" className={tabClass(tab, 'outlets')} onClick={() => setTab('outlets')}>Outlets</button>
-            <button type="button" className={tabClass(tab, 'lots')} onClick={() => setTab('lots')}>Lots</button>
-          </div>
-          {tab !== 'outlets' && tab !== 'lots' && (
-            <DateFilter
-              onFilterChange={handleDateFilterChange}
-              hint="Supply orders: supply date. Transfers: dispatch date. Summary cards use production, supply, and receipt dates."
-            />
-          )}
-        </nav>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: 'orders', label: 'Supply Orders' },
+            { id: 'transfers', label: 'Outlet transfers' },
+            { id: 'outlets', label: 'Outlets' },
+            { id: 'lots', label: 'Lots' },
+          ]}
+        />
+        {tab !== 'outlets' && tab !== 'lots' && (
+          <DateFilter
+            label={tab === 'transfers' ? 'View period (dispatch date)' : 'View period (supply date)'}
+            onFilterChange={handleDateFilterChange}
+            hint="On-hand snapshots stay live and are not filtered by this period."
+          />
+        )}
       </div>
 
       {dateRange && (
-        <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
-          Order list uses <strong className="font-medium">supply date</strong>. &quot;Received (range)&quot; uses{' '}
-          <strong className="font-medium">receipt date</strong>. Hub available and outlet &quot;on hand now&quot; are live snapshots.
+        <p className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-700">
+          Order list uses <strong className="font-medium">supply date</strong>. Received totals use{' '}
+          <strong className="font-medium">receipt date</strong>. Hub available and outlet on hand now are live snapshots.
         </p>
       )}
 

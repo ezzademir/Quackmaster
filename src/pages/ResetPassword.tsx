@@ -116,13 +116,13 @@ export function ResetPassword() {
 
   return (
     <div className="mobile-auth-shell py-10">
-      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
         <img
           src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`}
           alt="Quackmaster"
           className="mx-auto mb-6 h-16 w-16"
         />
-        <h1 className="text-xl font-bold text-gray-900 text-center mb-1">Set new password</h1>
+        <h1 className="text-xl font-bold text-stone-900 text-center mb-1">Set new password</h1>
         <p className="text-sm text-gray-600 text-center mb-6">Enter a new password for your account.</p>
 
         {error && (
@@ -155,7 +155,7 @@ export function ResetPassword() {
           <button
             type="submit"
             disabled={loading || !isSupabaseConfigured}
-            className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+            className="btn-primary w-full py-2.5 text-sm font-semibold"
           >
             {loading ? 'Saving…' : 'Update password'}
           </button>

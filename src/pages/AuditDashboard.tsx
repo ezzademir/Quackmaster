@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardCheck, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import type { Outlet } from '../types';
 import {
@@ -10,6 +10,7 @@ import {
 } from '../utils/reconciliationService';
 import { formatDateForInput } from '../utils/dateRange';
 import { AlertsPanel, type AlertItem } from '../components/AlertsPanel';
+import { Button, PageHeader } from '../components/ui';
 
 const COUNT_DUE_DAYS = 30;
 
@@ -150,24 +151,15 @@ export function AuditDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900">
-            <ClipboardCheck size={24} className="text-teal-600" />
-            Outlet Audit Dashboard
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-gray-500">
-            Cross-outlet stock integrity: live on-hand, last stock take, in-transit units, and unexplained variance (last 30 days).
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Outlet Audit Dashboard"
+        description="Cross-outlet stock integrity: live on-hand, last stock take, in-transit units, and unexplained variance (last 30 days)."
+        actions={
+          <Button variant="secondary" type="button" onClick={() => void load()}>
+            Refresh
+          </Button>
+        }
+      />
 
       <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
         Period for variance: {formatDateForInput(range.start)} → {formatDateForInput(range.end)}.

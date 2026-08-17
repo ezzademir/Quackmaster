@@ -615,12 +615,12 @@ export function Users() {
   const drawerApproved = drawer.open && drawer.tab === 'approved' ? drawer.user : null;
 
   return (
-    <div className="min-h-dvh bg-gray-50 auth-safe-padding p-4 md:p-8">
-      <div className={`max-w-6xl mx-auto transition-[margin] ${drawer.open ? 'mr-[min(28rem,92vw)]' : ''}`}>
+    <div className="space-y-6">
+      <div className={`transition-[margin] ${drawer.open ? 'mr-[min(28rem,92vw)]' : ''}`}>
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">User Management</h1>
-            <p className="mt-2 text-sm text-gray-600 sm:text-base">
+            <h1 className="text-2xl font-bold text-stone-900 sm:text-3xl">User Management</h1>
+            <p className="mt-2 text-sm text-stone-600 sm:text-base">
               Approve registrations, roles, and passwords. See{' '}
               <span className="font-medium text-gray-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
             </p>
@@ -674,7 +674,7 @@ export function Users() {
             onClick={() => setActiveTab('approved')}
             className={`px-4 py-3 font-medium transition-colors ${
               activeTab === 'approved'
-                ? 'border-b-2 border-blue-600 text-blue-600'
+                ? 'border-b-2 border-brand-600 text-brand-800'
                 : 'text-gray-600 hover:text-gray-900'
             }`}
           >
@@ -686,7 +686,7 @@ export function Users() {
             onClick={() => setActiveTab('pending')}
             className={`px-4 py-3 font-medium transition-colors ${
               activeTab === 'pending'
-                ? 'border-b-2 border-blue-600 text-blue-600'
+                ? 'border-b-2 border-brand-600 text-brand-800'
                 : 'text-gray-600 hover:text-gray-900'
             }`}
           >
@@ -698,7 +698,7 @@ export function Users() {
             onClick={() => setActiveTab('rejected')}
             className={`px-4 py-3 font-medium transition-colors ${
               activeTab === 'rejected'
-                ? 'border-b-2 border-blue-600 text-blue-600'
+                ? 'border-b-2 border-brand-600 text-brand-800'
                 : 'text-gray-600 hover:text-gray-900'
             }`}
           >

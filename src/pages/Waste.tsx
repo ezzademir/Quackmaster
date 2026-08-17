@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
+import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
-import type { DateRange } from '../utils/dateRange';
+import { getLast7Days, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
+import { useAuth } from '../utils/auth';
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -56,7 +58,20 @@ interface LineOutlet {
 
 const REASONS = ['spoilage', 'damage', 'expiry', 'sampling', 'quality_issue', 'other'];
 
+interface WasteOverview {
+  postedEvents: number;
+  totalQty: number;
+  hubEvents: number;
+  outletEvents: number;
+}
+
+function emptyWasteOverview(): WasteOverview {
+  return { postedEvents: 0, totalQty: 0, hubEvents: 0, outletEvents: 0 };
+}
+
 export function Waste() {
+  const { isSupervisor, profile } = useAuth();
+  const [pageTab, setPageTab] = useState<'overview' | 'record'>('overview');
   const [kind, setKind] = useState<Kind>('outlet');
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
@@ -73,13 +88,33 @@ export function Waste() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
-  const [historyRange, setHistoryRange] = useState<DateRange | null>(null);
+  const [historyRange, setHistoryRange] = useState<DateRange | null>(() => getLast7Days());
   const [history, setHistory] = useState<WasteHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPage, setHistoryPage] = useState(0);
   const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [overview, setOverview] = useState<WasteOverview>(() => emptyWasteOverview());
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const overviewGenRef = useRef(0);
 
   const load = useCallback(async () => {
+    if (isSupervisor) {
+      const oid = profile?.assigned_outlet_id;
+      setKind('outlet');
+      if (!oid) {
+        setOutlets([]);
+        setOutletId('');
+        setHubRows([]);
+        setLoading(false);
+        return;
+      }
+      const { data: out } = await supabase.from('outlets').select('*').eq('id', oid).maybeSingle();
+      setOutlets(out ? [out as Outlet] : []);
+      setOutletId(oid);
+      setHubRows([]);
+      setLoading(false);
+      return;
+    }
     const [{ data: outs }, { data: hub }] = await Promise.all([
       supabase.from('outlets').select('*').order('name'),
       supabase
@@ -110,7 +145,7 @@ export function Waste() {
     });
     setHubRows(picks);
     setLoading(false);
-  }, [outletId]);
+  }, [outletId, isSupervisor, profile?.assigned_outlet_id]);
 
   useEffect(() => {
     void load();
@@ -166,6 +201,10 @@ export function Waste() {
           .order('waste_date', { ascending: false })
           .order('created_at', { ascending: false })
           .range(page * HISTORY_PAGE_SIZE, (page + 1) * HISTORY_PAGE_SIZE - 1);
+
+        if (isSupervisor && profile?.assigned_outlet_id) {
+          query = query.eq('location_kind', 'outlet').eq('outlet_id', profile.assigned_outlet_id);
+        }
 
         if (historyRange) {
           const from = historyRange.start.toISOString().slice(0, 10);
@@ -266,8 +305,51 @@ export function Waste() {
         setHistoryLoading(false);
       }
     },
-    [historyRange]
+    [historyRange, isSupervisor, profile?.assigned_outlet_id]
   );
+
+  const loadOverview = useCallback(async () => {
+    const gen = ++overviewGenRef.current;
+    setOverviewLoading(true);
+    try {
+      let q = supabase.from('waste_events').select('id, location_kind, outlet_id').eq('status', 'posted');
+      if (isSupervisor && profile?.assigned_outlet_id) {
+        q = q.eq('location_kind', 'outlet').eq('outlet_id', profile.assigned_outlet_id);
+      }
+      if (historyRange) {
+        const from = historyRange.start.toISOString().slice(0, 10);
+        const to = historyRange.end.toISOString().slice(0, 10);
+        q = q.gte('waste_date', from).lte('waste_date', to);
+      }
+      const { data: events, error } = await q;
+      if (error) throw error;
+      if (gen !== overviewGenRef.current) return;
+      const rows = events ?? [];
+      const ids = rows.map((e) => e.id as string);
+      let totalQty = 0;
+      for (let i = 0; i < ids.length; i += 80) {
+        const slice = ids.slice(i, i + 80);
+        const { data: lines, error: lErr } = await supabase
+          .from('waste_lines')
+          .select('quantity')
+          .in('waste_event_id', slice);
+        if (lErr) throw lErr;
+        if (gen !== overviewGenRef.current) return;
+        for (const ln of lines ?? []) totalQty += Number(ln.quantity ?? 0);
+      }
+      setOverview({
+        postedEvents: rows.length,
+        totalQty,
+        hubEvents: rows.filter((e) => e.location_kind === 'hub').length,
+        outletEvents: rows.filter((e) => e.location_kind === 'outlet').length,
+      });
+    } catch {
+      if (gen !== overviewGenRef.current) return;
+      setOverview(emptyWasteOverview());
+    } finally {
+      if (gen === overviewGenRef.current) setOverviewLoading(false);
+    }
+  }, [historyRange, isSupervisor, profile?.assigned_outlet_id]);
 
   useEffect(() => {
     setHistoryPage(0);
@@ -276,6 +358,10 @@ export function Waste() {
   useEffect(() => {
     void loadHistory(historyPage, historyPage > 0);
   }, [historyPage, loadHistory]);
+
+  useEffect(() => {
+    void loadOverview();
+  }, [loadOverview]);
 
   function syncHubBatch(idx: number, hubInvId: string) {
     const row = hubRows.find((h) => h.id === hubInvId);
@@ -292,7 +378,14 @@ export function Waste() {
     setMessage(null);
     setSubmitting(true);
     try {
+      if (isSupervisor) {
+        setKind('outlet');
+      }
       if (kind === 'hub') {
+        if (isSupervisor) {
+          setMessage({ tone: 'err', text: 'Supervisors can only record outlet waste.' });
+          return;
+        }
         const payload: WasteLineHubInput[] = linesHub
           .filter((l) => l.hub_inventory_id && l.quantity > 0 && l.waste_reason)
           .map((l) => ({
@@ -317,7 +410,7 @@ export function Waste() {
           setMessage({ tone: 'err', text: res.error ?? 'Failed to post waste.' });
           return;
         }
-        setMessage({ tone: 'ok', text: 'Hub waste recorded.' });
+        setMessage({ tone: 'ok', text: `Posted ${payload.reduce((s, l) => s + l.quantity, 0).toLocaleString()} units` });
       } else {
         if (!outletId) {
           setMessage({ tone: 'err', text: 'Select an outlet.' });
@@ -348,29 +441,138 @@ export function Waste() {
           setMessage({ tone: 'err', text: res.error ?? 'Failed to post waste.' });
           return;
         }
-        setMessage({ tone: 'ok', text: 'Outlet waste recorded.' });
+        setMessage({ tone: 'ok', text: `Posted ${payload.reduce((s, l) => s + l.quantity, 0).toLocaleString()} units` });
       }
       void load();
       setHistoryPage(0);
+      void loadOverview();
     } finally {
       setSubmitting(false);
     }
   }
 
   if (loading) {
-    return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+    return <div className="text-sm text-stone-500">Loading…</div>;
+  }
+
+  if (isSupervisor && !profile?.assigned_outlet_id) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 sm:p-4">
+        No outlet is assigned to your account. Ask an admin to set your role and outlet under Users.
+      </div>
+    );
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8 p-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Waste & spoilage</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Post hub or outlet waste; quantities respect reserved stock (available only).
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Waste & spoilage"
+        description={
+          pageTab === 'overview'
+            ? 'Posted waste for the selected view period. Quantities come from available stock only.'
+            : 'Record hub or outlet waste. Event date is when the waste happened.'
+        }
+        filters={
+          <div className={pageTab === 'overview' ? '' : 'hidden'}>
+            <DateFilter
+              defaultType="last7Days"
+              onFilterChange={(range) => setHistoryRange(range)}
+              hint="Applies to overview totals and posted events."
+            />
+          </div>
+        }
+      />
 
-      {message && (
+      <Tabs
+        value={pageTab}
+        onChange={setPageTab}
+        items={[
+          { id: 'overview', label: 'Overview' },
+          { id: 'record', label: 'Record waste' },
+        ]}
+      />
+
+      {pageTab === 'overview' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              tone="brand"
+              label="Units wasted"
+              value={overviewLoading ? '…' : overview.totalQty.toLocaleString()}
+              sub="Posted events only"
+            />
+            <StatCard
+              label="Posted events"
+              value={overviewLoading ? '…' : overview.postedEvents.toLocaleString()}
+              sub="Count in this period"
+            />
+            {!isSupervisor ? (
+              <StatCard
+                label="Hub events"
+                value={overviewLoading ? '…' : overview.hubEvents.toLocaleString()}
+                sub="Hub spoilage / write-off"
+              />
+            ) : null}
+            <StatCard
+              label="Outlet events"
+              value={overviewLoading ? '…' : overview.outletEvents.toLocaleString()}
+              sub={isSupervisor ? 'Your outlet' : 'Outlet spoilage / write-off'}
+            />
+          </div>
+
+          <section className="panel space-y-4 p-6">
+            <div>
+              <h2 className="text-sm font-semibold text-stone-900">Posted waste events</h2>
+              <p className="mt-1 text-xs text-stone-500">Newest first. Same view period as the totals above.</p>
+            </div>
+            {historyLoading && history.length === 0 ? (
+              <p className="text-sm text-stone-400">Loading history…</p>
+            ) : history.length === 0 ? (
+              <EmptyState title="No posted waste events in this period" />
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-stone-100">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Location</th>
+                      <th className="text-right">Lines</th>
+                      <th className="text-right">Total qty</th>
+                      <th>Lots</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {history.map((row) => {
+                      const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
+                      const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
+                      return (
+                        <tr key={row.id} className="hover:bg-stone-50/80">
+                          <td>{row.waste_date}</td>
+                          <td className="capitalize">{loc}</td>
+                          <td className="text-right tabular-nums">{row.line_count}</td>
+                          <td className="text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
+                          <td className="max-w-[220px] truncate font-mono text-xs" title={row.lot_summary}>
+                            {row.lot_summary}
+                          </td>
+                          <td className="max-w-[200px] truncate text-stone-500">{row.notes?.trim() || '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {historyHasMore && (
+              <Button variant="secondary" disabled={historyLoading} onClick={() => setHistoryPage((p) => p + 1)}>
+                {historyLoading ? 'Loading…' : 'Load more'}
+              </Button>
+            )}
+          </section>
+        </div>
+      )}
+
+      {message && pageTab === 'record' && (
         <div
           className={`rounded-lg px-4 py-3 text-sm ${
             message.tone === 'ok' ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-800'
@@ -380,7 +582,9 @@ export function Waste() {
         </div>
       )}
 
-      <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+      {pageTab === 'record' && (
+      <form onSubmit={(e) => void handleSubmit(e)} className="panel space-y-6 p-6">
+        {!isSupervisor && (
         <div className="flex flex-wrap gap-4">
           <label className="flex items-center gap-2 text-sm">
             <input type="radio" name="kind" checked={kind === 'outlet'} onChange={() => setKind('outlet')} />
@@ -391,31 +595,38 @@ export function Waste() {
             Hub
           </label>
         </div>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           {kind === 'outlet' && (
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Outlet</label>
-              <select
-                value={outletId}
-                onChange={(e) => setOutletId(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              >
-                {outlets.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
+              <label className="mb-1 block text-sm font-medium text-stone-700">Outlet</label>
+              {isSupervisor ? (
+                <p className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-800">
+                  {outlets.find((o) => o.id === outletId)?.name ?? 'Your outlet'}
+                </p>
+              ) : (
+                <select
+                  value={outletId}
+                  onChange={(e) => setOutletId(e.target.value)}
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                >
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Event date</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Event date</label>
             <input
               type="date"
               value={wasteDate}
               onChange={(e) => setWasteDate(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
           </div>
         </div>
@@ -438,7 +649,7 @@ export function Waste() {
                     },
                   ])
                 }
-                className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs"
+                className="btn-secondary px-2 py-1 text-xs"
               >
                 <Plus size={14} /> Add
               </button>
@@ -507,7 +718,7 @@ export function Waste() {
                     { key: crypto.randomUUID(), product_batch: '', outlet_inventory_id: '', quantity: 0, waste_reason: 'spoilage' },
                   ])
                 }
-                className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs"
+                className="btn-secondary px-2 py-1 text-xs"
               >
                 <Plus size={14} /> Add
               </button>
@@ -592,77 +803,11 @@ export function Waste() {
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
-        >
+        <Button type="submit" disabled={submitting}>
           {submitting ? 'Posting…' : 'Post waste event'}
-        </button>
+        </Button>
       </form>
-
-      <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Posted waste events</h2>
-            <p className="mt-1 text-xs text-gray-500">History of posted hub and outlet waste (newest first).</p>
-          </div>
-          <DateFilter onFilterChange={(range) => setHistoryRange(range)} />
-        </div>
-
-        {historyLoading && history.length === 0 ? (
-          <p className="text-sm text-gray-400">Loading history…</p>
-        ) : history.length === 0 ? (
-          <p className="text-sm text-gray-400">No posted waste events in this period.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-gray-100">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-gray-50 text-left">
-                <tr>
-                  <th className="px-3 py-2 font-medium text-gray-700">Date</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Location</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-700">Lines</th>
-                  <th className="px-3 py-2 text-right font-medium text-gray-700">Total qty</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Lots</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {history.map((row) => {
-                  const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
-                  const loc =
-                    row.location_kind === 'hub'
-                      ? 'Hub'
-                      : outlet?.name ?? 'Outlet';
-                  return (
-                    <tr key={row.id} className="hover:bg-gray-50/80">
-                      <td className="px-3 py-2 text-gray-900">{row.waste_date}</td>
-                      <td className="px-3 py-2 capitalize text-gray-700">{loc}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{row.line_count}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
-                      <td className="max-w-[220px] truncate px-3 py-2 font-mono text-xs text-gray-800" title={row.lot_summary}>
-                        {row.lot_summary}
-                      </td>
-                      <td className="max-w-[200px] truncate px-3 py-2 text-gray-500">{row.notes?.trim() || '—'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {historyHasMore && (
-          <button
-            type="button"
-            disabled={historyLoading}
-            onClick={() => setHistoryPage((p) => p + 1)}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {historyLoading ? 'Loading…' : 'Load more'}
-          </button>
-        )}
-      </section>
+      )}
     </div>
   );
 }

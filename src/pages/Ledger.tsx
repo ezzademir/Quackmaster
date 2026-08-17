@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Search, RefreshCw, Shield } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { Button, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import {
@@ -147,21 +148,15 @@ export function Ledger() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Change log</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Who changed what in the system — user actions, settings, and module edits (not stock movement math).
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void loadRows()}
-          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-        >
-          <RefreshCw size={16} /> Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Change log"
+        description="Who changed what in the system — user actions, settings, and module edits (not stock movement math)."
+        actions={
+          <Button variant="secondary" type="button" onClick={() => void loadRows()}>
+            <RefreshCw size={16} /> Refresh
+          </Button>
+        }
+      />
 
       <div className="flex flex-wrap gap-3">
         <div className="relative">
