@@ -22,3 +22,9 @@ dist-ssr
 *.sw?
 .env
 supabase/.temp/
+
+# Editor / agent copies — not part of the ERP or Pages deploy
+.agents/
+.bolt/
+.claude/
+skills-lock.json
