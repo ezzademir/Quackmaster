@@ -346,7 +346,10 @@ export function Sales() {
       }
       const offset = mode === 'replace' ? 0 : Math.max(0, opts!.beforeLength!);
 
-      let q = supabase.from('sales_journals').select('id, business_date, outlet_id, notes');
+      let q = supabase
+        .from('sales_journals')
+        .select('id, business_date, outlet_id, notes')
+        .eq('status', 'posted');
 
       if (journalDateRange) {
         q = q
