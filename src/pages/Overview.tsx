@@ -15,9 +15,12 @@ import {
 import { supabase } from '../utils/supabase';
 import {
   aggregateFinishedGoodsHubTotals,
-  sumAvailableByProductBatch,
 } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
+import { CloseDayChecklist } from '../components/CloseDayChecklist';
+import { AlertsPanel, type AlertItem } from '../components/AlertsPanel';
+import { STOCK_TAKE_OVERDUE_DAYS } from '../utils/closeDayChecks';
+import { reconcileOutletStock, defaultReconcileRange } from '../utils/reconciliationService';
 
 function localISODate(d: Date): string {
   const y = d.getFullYear();
@@ -53,6 +56,16 @@ interface ExpiringLotRow {
   expiry_date: string;
 }
 
+interface StockLotRow {
+  id: string;
+  product_batch_label: string;
+  run_number: string;
+  recipe_name: string;
+  manufactured_at: string | null;
+  hubQty: number;
+  outletQty: number;
+}
+
 interface LowStockItem {
   id: string;
   name: string;
@@ -80,6 +93,8 @@ export function Overview() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [expiringLots, setExpiringLots] = useState<ExpiringLotRow[]>([]);
+  const [stockLots, setStockLots] = useState<StockLotRow[]>([]);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const hubProductSub = hubProductStockMixedUom
@@ -116,6 +131,7 @@ export function Overview() {
           { data: salesActivityRows },
           { data: wasteActivityRows },
           { data: expiringLotsRows },
+          { data: fgLotRows },
         ] = await Promise.all([
           supabase
             .from('hub_inventory')
@@ -123,7 +139,7 @@ export function Overview() {
             .not('raw_material_id', 'is', null),
           supabase
             .from('hub_inventory')
-            .select('product_batch, available_quantity, quantity_on_hand, reserved_quantity')
+            .select('product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity')
             .is('raw_material_id', null),
           supabase
             .from('recipes')
@@ -131,7 +147,7 @@ export function Overview() {
             .order('name'),
           supabase
             .from('outlet_inventory')
-            .select('product_batch, quantity_on_hand, reserved_quantity, available_quantity')
+            .select('product_batch, lot_id, quantity_on_hand, reserved_quantity, available_quantity')
             .is('raw_material_id', null),
           supabase
             .from('production_runs')
@@ -157,7 +173,7 @@ export function Overview() {
             .limit(4),
           supabase
             .from('production_runs')
-            .select('id, run_number, status, yield_percentage, created_at, recipe:recipe_id(name), actual_output')
+            .select('id, run_number, status, yield_percentage, created_at, actual_output, recipe:recipe_id(name), fg_lot:inventory_lots!production_run_id(product_batch_label)')
             .eq('status', 'completed')
             .order('created_at', { ascending: false })
             .limit(4),
@@ -196,6 +212,13 @@ export function Overview() {
             .lte('expiry_date', expiryHorizonIso)
             .order('expiry_date', { ascending: true })
             .limit(8),
+          supabase
+            .from('inventory_lots')
+            .select(
+              'id, product_batch_label, manufactured_at, production_run_id, production_run:production_run_id(run_number, recipe_id, recipe:recipe_id(name))'
+            )
+            .not('production_run_id', 'is', null)
+            .order('manufactured_at', { ascending: false }),
         ]);
 
         const sjIds = (salesJournalsKpi ?? []).map((r) => r.id);
@@ -255,6 +278,83 @@ export function Overview() {
 
         setLowStock(lowItems);
 
+        const nextAlerts: AlertItem[] = [];
+        if (lowItems.length > 0) {
+          nextAlerts.push({
+            id: 'low-stock',
+            tone: 'amber',
+            title: `${lowItems.length} low stock alert${lowItems.length === 1 ? '' : 's'}`,
+            detail: 'Hub raw materials at or below reorder level.',
+            to: '/inventory',
+          });
+        }
+        if ((expiringLotsRows ?? []).length > 0) {
+          nextAlerts.push({
+            id: 'expiring-lots',
+            tone: 'amber',
+            title: `${(expiringLotsRows ?? []).length} lot(s) expiring within 14 days`,
+            detail: 'Review Lots / Genealogy and outlet FIFO.',
+            to: isAdmin ? '/genealogy' : '/inventory',
+          });
+        }
+
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - STOCK_TAKE_OVERDUE_DAYS);
+        const cutoffIso = cutoff.toISOString().slice(0, 10);
+        const { data: stSessions } = await supabase
+          .from('outlet_stock_take_sessions')
+          .select('outlet_id, count_date, posted_at')
+          .order('posted_at', { ascending: false })
+          .limit(400);
+        const lastSt = new Map<string, string>();
+        for (const s of stSessions ?? []) {
+          if (!lastSt.has(s.outlet_id)) lastSt.set(s.outlet_id, s.count_date);
+        }
+        let overdue = 0;
+        for (const o of outlets ?? []) {
+          const last = lastSt.get(o.id);
+          if (!last || last < cutoffIso) overdue += 1;
+        }
+        if (overdue > 0) {
+          nextAlerts.push({
+            id: 'stock-take-overdue',
+            tone: 'red',
+            title: `${overdue} outlet(s) overdue for stock take`,
+            detail: `No count in the last ${STOCK_TAKE_OVERDUE_DAYS} days.`,
+            to: '/stock-take',
+          });
+        }
+
+        if (isAdmin) {
+          const range = defaultReconcileRange();
+          const outletList = (outlets ?? []).slice(0, 12);
+          let badVar = 0;
+          await Promise.all(
+            outletList.map(async (o) => {
+              const recon = await reconcileOutletStock({
+                outletId: o.id,
+                from: range.start,
+                to: range.end,
+                includeRawMaterials: true,
+              });
+              if (recon.success && Math.abs(Number(recon.unexplained_variance ?? 0)) > 0.001) {
+                badVar += 1;
+              }
+            })
+          );
+          if (badVar > 0) {
+            nextAlerts.push({
+              id: 'recon-variance',
+              tone: 'red',
+              title: `${badVar} outlet(s) with unexplained variance`,
+              detail: 'Live on-hand differs from movement equation (last 30 days).',
+              to: '/reconciliation',
+            });
+          }
+        }
+
+        setAlerts(nextAlerts);
+
         // Average yield (Postgres numeric may arrive as string — coerce for math)
         const yieldVals = (runs || [])
           .map((r) => Number(r.yield_percentage))
@@ -277,8 +377,78 @@ export function Overview() {
           wasteEvents7d,
         });
 
-        const hubByBatch = sumAvailableByProductBatch(hubProducts ?? []);
-        const outletByBatch = sumAvailableByProductBatch(outletInvAll ?? []);
+        type FgLotEmbed = {
+          id: string;
+          product_batch_label: string;
+          manufactured_at: string | null;
+          production_run_id: string | null;
+          production_run?: {
+            run_number?: string;
+            recipe_id?: string;
+            recipe?: { name?: string } | null;
+          } | null;
+        };
+        const fgLots = (fgLotRows ?? []) as FgLotEmbed[];
+        const recipeOfLot = new Map<string, string>();
+        for (const lot of fgLots) {
+          const rid = lot.production_run?.recipe_id;
+          if (rid) recipeOfLot.set(lot.id, rid);
+        }
+
+        const sumAvailByRecipe = (
+          rows: Array<{
+            lot_id?: string | null;
+            product_batch?: string | null;
+            quantity_on_hand?: number | null;
+            reserved_quantity?: number | null;
+            available_quantity?: number | null;
+          }>,
+          recipeId: string,
+          sku: string
+        ) => {
+          let total = 0;
+          for (const row of rows) {
+            const rid = row.lot_id ? recipeOfLot.get(row.lot_id) : undefined;
+            const batch = row.product_batch?.trim() ?? '';
+            if (rid === recipeId || (!rid && sku && batch === sku)) {
+              total += Number(
+                row.available_quantity ??
+                  Math.max(0, Number(row.quantity_on_hand ?? 0) - Number(row.reserved_quantity ?? 0))
+              );
+            }
+          }
+          return total;
+        };
+
+        const hubQtyByLot = new Map<string, number>();
+        for (const row of hubProducts ?? []) {
+          const lid = (row as { lot_id?: string | null }).lot_id;
+          if (!lid) continue;
+          const avail = Number(
+            row.available_quantity ??
+              Math.max(0, Number(row.quantity_on_hand ?? 0) - Number(row.reserved_quantity ?? 0))
+          );
+          hubQtyByLot.set(lid, (hubQtyByLot.get(lid) ?? 0) + avail);
+        }
+        const outletQtyByLot = new Map<string, number>();
+        for (const row of outletInvAll ?? []) {
+          const lid = (row as { lot_id?: string | null }).lot_id;
+          if (!lid) continue;
+          const onHand = Number(row.quantity_on_hand ?? 0);
+          outletQtyByLot.set(lid, (outletQtyByLot.get(lid) ?? 0) + onHand);
+        }
+
+        setStockLots(
+          fgLots.slice(0, 12).map((lot) => ({
+            id: lot.id,
+            product_batch_label: lot.product_batch_label,
+            run_number: lot.production_run?.run_number ?? '—',
+            recipe_name: lot.production_run?.recipe?.name ?? '—',
+            manufactured_at: lot.manufactured_at,
+            hubQty: hubQtyByLot.get(lot.id) ?? 0,
+            outletQty: outletQtyByLot.get(lot.id) ?? 0,
+          }))
+        );
 
         const yieldMap = new Map<string, number[]>();
         for (const yr of yieldRuns ?? []) {
@@ -312,8 +482,8 @@ export function Overview() {
         setRecipeKpiRows(
           rlist.map((rec) => {
             const batchKey = rec.default_product_batch?.trim() ?? '';
-            const hubAvail = batchKey ? (hubByBatch.get(batchKey) ?? 0) : null;
-            const outletAvail = batchKey ? (outletByBatch.get(batchKey) ?? 0) : null;
+            const hubAvail = sumAvailByRecipe(hubProducts ?? [], rec.id, batchKey);
+            const outletAvail = sumAvailByRecipe(outletInvAll ?? [], rec.id, batchKey);
             const ys = yieldMap.get(rec.id) ?? [];
             const avgYieldRec = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null;
             const tgtRaw = rec.target_yield_percentage;
@@ -345,15 +515,20 @@ export function Overview() {
         }
         for (const run of prodRuns ?? []) {
           const recipe = run.recipe as unknown as { name: string } | null;
+          const lotRaw = (run as { fg_lot?: { product_batch_label?: string } | { product_batch_label?: string }[] | null }).fg_lot;
+          const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+          const lotLabel = lot?.product_batch_label?.trim();
           const yRaw = run.yield_percentage;
           const yNum =
             yRaw != null && yRaw !== '' ? Number(yRaw) : NaN;
           const yieldLabel = Number.isFinite(yNum) ? `${yNum.toFixed(1)}` : '—';
+          const qty = Number((run as { actual_output?: unknown }).actual_output);
+          const qtyLabel = Number.isFinite(qty) ? `${qty}` : '';
           items.push({
             id: `run-${run.id}`,
             type: 'production',
-            label: run.run_number,
-            detail: `Production run · ${recipe?.name ?? 'Unknown recipe'} · Yield ${yieldLabel}%`,
+            label: lotLabel || run.run_number,
+            detail: `Production · ${run.run_number}${qtyLabel ? ` · ${qtyLabel}` : ''} · ${recipe?.name ?? 'Unknown recipe'} · Yield ${yieldLabel}%`,
             time: run.created_at,
           });
         }
@@ -403,7 +578,7 @@ export function Overview() {
     }
 
     load();
-  }, []);
+  }, [isAdmin]);
 
   const activityIcon = {
     purchase: <ShoppingCart size={16} />,
@@ -450,6 +625,9 @@ export function Overview() {
           Quackmaster Hub — live overview of operations
         </p>
       </div>
+
+      <CloseDayChecklist />
+      <AlertsPanel alerts={alerts} />
 
       {/* Quick Actions */}
       <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -592,20 +770,19 @@ export function Overview() {
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="mb-1 font-semibold text-gray-900">By recipe</h2>
           <p className="mb-4 text-xs text-gray-500">
-            Hub and outlet columns use{' '}
-            <span className="font-medium text-gray-700">default product batch</span> when set on the recipe (
+            Hub and outlet ATP sum every printable lot for that recipe. SKU is the recipe default used on new
+            production labels (
             <Link to="/production" className="text-blue-600 hover:underline">
               Production
             </Link>
-            ). Yield is averaged over up to 30 latest completed runs per recipe. Cells use each recipe&apos;s batch
-            unit.
+            ). Yield is averaged over up to 30 latest completed runs. Cells use each recipe&apos;s batch unit.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-sm">
               <thead className="border-b bg-gray-50 text-left">
                 <tr>
                   <th className="px-3 py-2 font-medium text-gray-700">Recipe</th>
-                  <th className="px-3 py-2 font-medium text-gray-700">Default batch</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">SKU</th>
                   <th className="px-3 py-2 font-medium text-gray-700 text-right">Hub ATP</th>
                   <th className="px-3 py-2 font-medium text-gray-700 text-right">Outlet ATP</th>
                   <th className="px-3 py-2 font-medium text-gray-700 text-right">Avg yield</th>
@@ -621,10 +798,10 @@ export function Overview() {
                       <td className="px-3 py-2 font-medium text-gray-900">{row.name}</td>
                       <td className="px-3 py-2 text-gray-700">{batch || '—'}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-gray-800">
-                        {batch != null && batch !== '' ? (row.hubAvail ?? 0).toLocaleString() : '—'}
+                        {(row.hubAvail ?? 0).toLocaleString()}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-gray-800">
-                        {batch != null && batch !== '' ? (row.outletAvail ?? 0).toLocaleString() : '—'}
+                        {(row.outletAvail ?? 0).toLocaleString()}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-gray-800">
                         {row.avgYieldRec != null && Number.isFinite(row.avgYieldRec)
@@ -643,6 +820,55 @@ export function Overview() {
           </div>
         </div>
       )}
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold text-gray-900">Lots in stock</h2>
+          <div className="flex items-center gap-3">
+            <Link to="/production" className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline">
+              Print from Production
+            </Link>
+            {isAdmin && (
+              <Link to="/genealogy" className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline">
+                Lot trace
+              </Link>
+            )}
+          </div>
+        </div>
+        <p className="mb-4 text-xs text-gray-500">
+          Ink-label packs with the lot code. Outlets see the same code on inventory and supply receipts.
+        </p>
+        {stockLots.length === 0 ? (
+          <div className="py-6 text-center text-sm text-gray-400">No production lots yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="border-b bg-gray-50 text-left">
+                <tr>
+                  <th className="px-3 py-2 font-medium text-gray-700">Lot</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Run</th>
+                  <th className="hidden sm:table-cell px-3 py-2 font-medium text-gray-700">Made</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Hub</th>
+                  <th className="px-3 py-2 font-medium text-gray-700 text-right">Outlets</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {stockLots.map((lot) => (
+                  <tr key={lot.id} className="hover:bg-gray-50/80">
+                    <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-900">{lot.product_batch_label}</td>
+                    <td className="px-3 py-2 text-gray-700">{lot.run_number}</td>
+                    <td className="hidden sm:table-cell px-3 py-2 tabular-nums text-gray-600">
+                      {lot.manufactured_at ? new Date(lot.manufactured_at).toLocaleDateString() : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">{lot.hubQty.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">{lot.outletQty.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

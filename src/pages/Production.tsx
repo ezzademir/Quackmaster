@@ -1,16 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
+import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
-import { completeProductionRun, deleteProductionRun } from '../utils/productionService';
+import {
+  backfillLotExpiryForRecipe,
+  completeProductionRun,
+  deleteProductionRun,
+  restoreVoidedProductionRun,
+  voidProductionRun,
+} from '../utils/productionService';
+import { voidConfirmMatches } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
-type Tab = 'runs' | 'recipes';
+type Tab = 'runs' | 'recipes' | 'planning';
 
 /** Persisted QC yield, or derived from planned/actual when older rows never saved yield_percentage */
 function effectiveRunYieldPct(run: {
@@ -32,6 +41,7 @@ function StatusBadge({ status }: { status: string }) {
     in_progress: 'bg-blue-100 text-blue-700',
     completed: 'bg-emerald-100 text-emerald-700',
     cancelled: 'bg-red-100 text-red-700',
+    voided: 'bg-gray-200 text-gray-700',
   };
   return (
     <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${map[status] ?? 'bg-gray-100 text-gray-700'}`}>
@@ -92,6 +102,7 @@ function RecipeModal({
     batch_unit: recipe?.batch_unit ?? '',
     target_yield_percentage: recipe?.target_yield_percentage?.toString() ?? '100',
     default_product_batch: recipe?.default_product_batch ?? '',
+    shelf_life_days: recipe?.shelf_life_days?.toString() ?? '',
   });
   const [lines, setLines] = useState<IngredientLine[]>(
     ingredients.length > 0
@@ -113,8 +124,37 @@ function RecipeModal({
     }
     const validLines = lines.filter((l) => l.raw_material_id && parseFloat(l.quantity_required) > 0);
     if (validLines.length === 0) { setError('Add at least one ingredient'); return; }
-    setSaving(true);
     const batchCode = form.default_product_batch.trim();
+    const shelfRaw = form.shelf_life_days.trim();
+    const shelfDays = shelfRaw === '' ? null : parseInt(shelfRaw, 10);
+    if (shelfRaw !== '' && (!Number.isFinite(shelfDays) || (shelfDays ?? 0) < 0)) {
+      setError('Shelf life must be a non-negative number of days');
+      return;
+    }
+    const prevSku = (recipe?.default_product_batch ?? '').trim();
+    if (recipe && prevSku !== batchCode) {
+      const { data: runs } = await supabase.from('production_runs').select('id').eq('recipe_id', recipe.id);
+      const runIds = (runs ?? []).map((r) => r.id as string);
+      let hasLotsOrStock = false;
+      if (runIds.length > 0) {
+        const { count: lotCount } = await supabase
+          .from('inventory_lots')
+          .select('id', { count: 'exact', head: true })
+          .in('production_run_id', runIds);
+        hasLotsOrStock = (lotCount ?? 0) > 0;
+      }
+      if (hasLotsOrStock) {
+        const token = batchCode || 'CONFIRM';
+        const typed = window.prompt(
+          `This recipe has existing lots or stock.\n\nChanging the SKU only applies to NEW lots. Inked lot codes stay unchanged.\nLeftover stock will still sell under the old SKU and the new one after matching is updated.\n\nType ${token} to confirm.`
+        );
+        if ((typed ?? '').trim() !== token) {
+          setError('SKU change cancelled');
+          return;
+        }
+      }
+    }
+    setSaving(true);
     const payload = {
       name: form.name,
       description: form.description || null,
@@ -122,6 +162,7 @@ function RecipeModal({
       batch_unit: form.batch_unit,
       target_yield_percentage: parseFloat(form.target_yield_percentage) || 100,
       default_product_batch: batchCode ? batchCode : null,
+      shelf_life_days: shelfDays,
     };
     let recipeId = recipe?.id;
     if (recipe) {
@@ -135,6 +176,9 @@ function RecipeModal({
     await supabase.from('recipe_ingredients').insert(
       validLines.map((l) => ({ recipe_id: recipeId, raw_material_id: l.raw_material_id, quantity_required: parseFloat(l.quantity_required) }))
     );
+    if (recipeId && shelfDays != null && shelfDays > 0) {
+      await backfillLotExpiryForRecipe(recipeId, shelfDays);
+    }
     await logActivity({ action: recipe ? 'updated' : 'created', entityType: 'recipe', entityId: recipeId ?? '', entityLabel: form.name });
     onSave();
   }
@@ -170,14 +214,33 @@ function RecipeModal({
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Default product batch</label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Product SKU</label>
             <input
               value={form.default_product_batch}
               onChange={(e) => setForm({ ...form, default_product_batch: e.target.value })}
-              placeholder="Matches hub / outlet finished-goods product_batch (e.g. KT-BATCH-01)"
+              placeholder="Product SKU (e.g. QUACKTEOW)"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
-            <p className="mt-1 text-xs text-gray-500">Used for dashboard “By recipe” stock and supply chain alignment. Leave blank if not set up yet.</p>
+            <p className="mt-1 text-xs text-gray-500">
+              What you sell, PAR, and FIFO against. Each completed run gets a unique lot like SKU-YYMMDD-0007.
+              Changing SKU only affects <span className="font-medium">new</span> lots — already-inked codes stay as printed.
+            </p>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Shelf life (days)</label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={form.shelf_life_days}
+              onChange={(e) => setForm({ ...form, shelf_life_days: e.target.value })}
+              placeholder="e.g. 7"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Days from production date to EXP on the lot label. Also powers “Lots expiring soon” on Overview. Saving
+              fills expiry on lots that still have none.
+            </p>
           </div>
         </div>
 
@@ -264,20 +327,34 @@ function NewRunModal({
   onClose,
   onSave,
   profile,
+  initialRecipeId,
+  initialPlannedOutput,
+  plannedBatchId,
 }: {
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
   profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
+  initialRecipeId?: string;
+  initialPlannedOutput?: number;
+  plannedBatchId?: string | null;
 }) {
-  const [recipe_id, setRecipeId] = useState('');
+  const [recipe_id, setRecipeId] = useState(initialRecipeId ?? '');
   const [production_date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [planned_output, setPlanned] = useState('');
+  const [planned_output, setPlanned] = useState(
+    initialPlannedOutput != null ? String(initialPlannedOutput) : ''
+  );
   const [actual_output, setActual] = useState('');
   const [notes, setNotes] = useState('');
   const [runMaterials, setRunMaterials] = useState<RunMaterial[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [printLabel, setPrintLabel] = useState<FinishedGoodsLotLabelData | null>(null);
+
+  useEffect(() => {
+    if (initialRecipeId) void selectRecipe(initialRecipeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot prefill from planning
+  }, []);
 
   async function selectRecipe(id: string) {
     setRecipeId(id);
@@ -409,6 +486,7 @@ function NewRunModal({
             actual_output: actualOutputQty,
             status: 'in_progress',
             notes: notes || null,
+            ...(plannedBatchId ? { planned_batch_id: plannedBatchId } : {}),
           })
           .select()
           .single();
@@ -457,7 +535,7 @@ function NewRunModal({
         plannedOutput,
         actualOutput: actualOutputQty,
         targetYield,
-        productBatch: `BATCH-${run.id.slice(0, 8)}`,
+        productBatch: selectedRecipe?.default_product_batch?.trim() || undefined,
         isAdmin: profile?.role === 'admin',
       });
 
@@ -484,16 +562,31 @@ function NewRunModal({
         action: 'completed',
         entityType: 'production_run',
         entityId: run.id,
-        entityLabel: run_number,
+        entityLabel: result.lotLabel || run_number,
         details: {
           yield_percentage: result.qcReport?.qcResult.yieldPercentage,
           actual_output: actualOutputQty,
           qc_status: result.qcReport?.qcResult.status,
           inventory_posted: result.inventoryPosted,
+          lot_label: result.lotLabel,
+          sku: result.sku,
         },
       });
 
       setSaving(false);
+      if (result.inventoryPosted && result.lotLabel) {
+        setPrintLabel({
+          productName: selectedRecipe?.name ?? 'Finished goods',
+          lotLabel: result.lotLabel,
+          sku: result.sku || selectedRecipe?.default_product_batch || 'FG',
+          runNumber: result.runNumber || run_number,
+          manufacturedAt: result.manufacturedAt ?? production_date,
+          expiryDate: result.expiryDate ?? null,
+          quantity: result.finishedQuantity ?? actualOutputQty,
+          unit: selectedRecipe?.batch_unit ?? null,
+        });
+        return;
+      }
       onSave();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to complete production run');
@@ -502,6 +595,14 @@ function NewRunModal({
   }
 
   const selectedRecipe = recipes.find((r) => r.id === recipe_id);
+
+  if (printLabel) {
+    return (
+      <Modal isOpen onClose={() => onSave()} title="Print finished-goods label" size="md">
+        <FinishedGoodsLotLabel data={printLabel} onDone={() => onSave()} doneLabel="Close" />
+      </Modal>
+    );
+  }
 
   return (
     <Modal isOpen onClose={onClose} title="New Production Run" size="xl">
@@ -556,6 +657,20 @@ function NewRunModal({
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
         </div>
+
+        {selectedRecipe && (
+          <p className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900">
+            After complete, print this lot on packs:{' '}
+            <span className="font-mono font-semibold">
+              {(selectedRecipe.default_product_batch || selectedRecipe.name || 'FG')
+                .toUpperCase()
+                .replace(/[^A-Z0-9]+/g, '-')
+                .replace(/^-|-$/g, '')}
+              -{production_date.replace(/-/g, '').slice(2)}-####
+            </span>
+            <span className="text-emerald-800"> (#### is the run number, e.g. 0007)</span>
+          </p>
+        )}
 
         {planned_output && actual_output && (
           <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm">
@@ -638,21 +753,71 @@ function NewRunModal({
 }
 
 // ---- Run Detail Modal ----
+type FgLotEmbed = {
+  product_batch_label: string;
+  expiry_date: string | null;
+  manufactured_at: string | null;
+};
+
 type RunWithDetails = ProductionRun & {
   recipe?: Recipe;
   materials?: { raw_material_id: string; quantity_consumed: number; material?: RawMaterial }[];
+  fg_lot?: FgLotEmbed | FgLotEmbed[] | null;
 };
 
-function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => void }) {
+function firstFgLot(run: RunWithDetails): FgLotEmbed | null {
+  const lot = run.fg_lot;
+  if (!lot) return null;
+  return Array.isArray(lot) ? (lot[0] ?? null) : lot;
+}
+
+function RunDetailModal({
+  run,
+  isAdmin,
+  onClose,
+  onVoid,
+  onRestore,
+  onDelete,
+}: {
+  run: RunWithDetails;
+  isAdmin: boolean;
+  onClose: () => void;
+  onVoid: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+}) {
   const variants = run.planned_output - run.actual_output;
   const yieldPct = effectiveRunYieldPct(run);
+  const lot = firstFgLot(run);
+  const [showLabel, setShowLabel] = useState(false);
 
   return (
     <Modal isOpen onClose={onClose} title={`Production Run: ${run.run_number}`} size="lg">
+      {showLabel && lot ? (
+        <FinishedGoodsLotLabel
+          data={{
+            productName: run.recipe?.name ?? 'Finished goods',
+            lotLabel: lot.product_batch_label,
+            sku: run.recipe?.default_product_batch || lot.product_batch_label.split('-').slice(0, -2).join('-') || 'FG',
+            runNumber: run.run_number,
+            manufacturedAt: lot.manufactured_at ?? run.production_date,
+            expiryDate: lot.expiry_date,
+            quantity: run.actual_output,
+            unit: run.recipe?.batch_unit ?? null,
+          }}
+          onDone={() => setShowLabel(false)}
+          doneLabel="Back"
+        />
+      ) : (
       <div className="space-y-5">
         <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
           <div><p className="text-xs text-gray-500">Recipe</p><p className="font-semibold text-gray-900">{run.recipe?.name ?? '—'}</p></div>
           <div><p className="text-xs text-gray-500">Status</p><StatusBadge status={run.status} /></div>
+          {run.status === 'voided' && (
+            <div className="sm:col-span-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600">
+              This run is voided. Hub finished goods were reversed. Restore to put the lot back into hub stock.
+            </div>
+          )}
           <div><p className="text-xs text-gray-500">Date</p><p className="font-semibold text-gray-900">{new Date(run.production_date).toLocaleDateString()}</p></div>
           <div><p className="text-xs text-gray-500">Planned Output</p><p className="font-semibold text-gray-900">{run.planned_output} {run.recipe?.batch_unit}</p></div>
           <div><p className="text-xs text-gray-500">Actual Output</p><p className="font-semibold text-gray-900">{run.actual_output} {run.recipe?.batch_unit}</p></div>
@@ -665,6 +830,15 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
           </div>
           <div><p className="text-xs text-gray-500">Yield</p>{yieldPct != null ? <YieldBar value={yieldPct} /> : <p className="text-gray-400">—</p>}</div>
           {run.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{run.notes}</p></div>}
+          {lot && (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-gray-500">Printable lot</p>
+              <p className="font-mono text-sm font-semibold text-gray-900">{lot.product_batch_label}</p>
+              <p className="mt-0.5 text-xs text-gray-500">
+                EXP {lot.expiry_date ?? '—'} · ink-label packs with this code
+              </p>
+            </div>
+          )}
         </div>
         {(run.materials ?? []).length > 0 && (
           <div>
@@ -690,7 +864,44 @@ function RunDetailModal({ run, onClose }: { run: RunWithDetails; onClose: () => 
           </div>
         )}
       </div>
-      <div className="mt-6 flex justify-end">
+      )}
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+        {isAdmin && run.status === 'completed' && (
+          <button
+            type="button"
+            onClick={onVoid}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+          >
+            <Ban size={15} /> Void run
+          </button>
+        )}
+        {isAdmin && run.status === 'voided' && (
+          <button
+            type="button"
+            onClick={onRestore}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
+          >
+            <RotateCcw size={15} /> Restore run
+          </button>
+        )}
+        {isAdmin && (run.status === 'in_progress' || run.status === 'cancelled') && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+          >
+            <Trash2 size={15} /> Delete draft
+          </button>
+        )}
+        {lot && !showLabel && (
+          <button
+            type="button"
+            onClick={() => setShowLabel(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+          >
+            <Printer size={15} /> Print label
+          </button>
+        )}
         <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
       </div>
     </Modal>
@@ -712,6 +923,18 @@ export function Production() {
   const [editIngredients, setEditIngredients] = useState<RecipeIngredient[]>([]);
   const [showRecipeModal, setShowRecipeModal] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const [runAction, setRunAction] = useState<{
+    kind: 'void' | 'restore' | 'delete';
+    run: RunWithDetails;
+  } | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [planPrefill, setPlanPrefill] = useState<{
+    recipeId: string;
+    quantity: number;
+    plannedBatchId: string;
+  } | null>(null);
 
   const handleDateFilterChange = (range: DateRange | null) => {
     setDateRange(range);
@@ -726,7 +949,7 @@ export function Production() {
     const [{ data: r }, { data: rec }, { data: mats }] = await Promise.all([
       supabase
         .from('production_runs')
-        .select(`*, recipe:recipe_id(*), materials:production_run_materials(*, material:raw_material_id(*))`)
+        .select(`*, recipe:recipe_id(*), materials:production_run_materials(*, material:raw_material_id(*)), fg_lot:inventory_lots!production_run_id(product_batch_label, expiry_date, manufactured_at)`)
         .order('created_at', { ascending: false }),
       supabase
         .from('recipes')
@@ -750,30 +973,51 @@ export function Production() {
     loadAll();
   }
 
-  async function handleDeleteProductionRun(run: RunWithDetails) {
+  function openRunAction(kind: 'void' | 'restore' | 'delete', run: RunWithDetails) {
     if (!isAdmin) return;
-    const detail =
-      run.status === 'completed'
-        ? 'This will remove the hub finished-goods batch (if present), restore consumed raw materials to hub stock, and delete the run record.'
-        : 'This will delete the run and its material lines.';
-    if (
-      !confirm(
-        `Permanently delete production run ${run.run_number}?\n\n${detail}\n\nThis cannot be undone.`
-      )
-    ) {
+    setRunAction({ kind, run });
+    setConfirmText('');
+    setActionError(null);
+  }
+
+  async function submitRunAction() {
+    if (!isAdmin || !runAction) return;
+    const expected = runAction.run.run_number.trim();
+    const lotCode = firstFgLot(runAction.run)?.product_batch_label?.trim() ?? '';
+    const typed = confirmText.trim();
+    if (!voidConfirmMatches(typed, expected, lotCode || null)) {
+      setActionError(`Type ${expected}${lotCode ? ` or ${lotCode}` : ''} to confirm`);
       return;
     }
-    const result = await deleteProductionRun({
-      runId: run.id,
-      runNumber: run.run_number,
-      status: run.status,
-    });
+
+    setActionBusy(true);
+    setActionError(null);
+    const result =
+      runAction.kind === 'void'
+        ? await voidProductionRun({ runId: runAction.run.id, confirmText: typed })
+        : runAction.kind === 'restore'
+          ? await restoreVoidedProductionRun({ runId: runAction.run.id, confirmText: typed })
+          : await deleteProductionRun({ runId: runAction.run.id });
+    setActionBusy(false);
+
     if (!result.success) {
-      alert(result.error ?? 'Could not delete production run');
+      setActionError(result.error ?? 'Action failed');
       return;
     }
-    if (viewRun?.id === run.id) setViewRun(null);
-    loadAll();
+
+    if (viewRun?.id === runAction.run.id) {
+      if (runAction.kind === 'delete') {
+        setViewRun(null);
+      } else {
+        setViewRun({
+          ...viewRun,
+          status: runAction.kind === 'void' ? 'voided' : 'completed',
+        });
+      }
+    }
+    setRunAction(null);
+    setConfirmText('');
+    await loadAll();
   }
 
   function openEditRecipe(recipe: RecipeWithIngredients) {
@@ -822,6 +1066,7 @@ export function Production() {
           <div className="flex gap-6">
             <button className={tabClass('runs')} onClick={() => setTab('runs')}>Production Runs</button>
             <button className={tabClass('recipes')} onClick={() => setTab('recipes')}>Recipes</button>
+            <button className={tabClass('planning')} onClick={() => setTab('planning')}>Planning</button>
           </div>
           {tab === 'runs' && (
             <DateFilter
@@ -836,12 +1081,21 @@ export function Production() {
         <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>
       ) : (
         <>
+          {tab === 'planning' && (
+            <ProductionPlanningPanel
+              onStartRun={(opts) => {
+                setPlanPrefill(opts);
+                setShowNewRun(true);
+              }}
+            />
+          )}
           {tab === 'runs' && (
             <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
               <table className="w-full text-sm">
                 <thead className="border-b border-gray-200 bg-gray-50">
                   <tr>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Run #</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Recipe</th>
                     <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Date</th>
                     <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Planned</th>
@@ -855,14 +1109,14 @@ export function Production() {
                 <tbody className="divide-y divide-gray-100">
                   {runs.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-6 py-12 text-center">
+                      <td colSpan={10} className="px-6 py-12 text-center">
                         <FlaskConical className="mx-auto mb-3 text-gray-300" size={40} />
                         <p className="text-gray-400">No production runs yet</p>
                       </td>
                     </tr>
                   ) : filteredRuns.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-6 py-12 text-center">
+                      <td colSpan={10} className="px-6 py-12 text-center">
                         <p className="text-gray-500">No runs match this date range.</p>
                         <p className="mt-1 text-sm text-gray-400">Try All time or adjust the filter.</p>
                       </td>
@@ -873,6 +1127,9 @@ export function Production() {
                       return (
                       <tr key={run.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{run.run_number}</td>
+                        <td className="px-4 md:px-6 py-4 font-mono text-xs text-gray-800">
+                          {firstFgLot(run)?.product_batch_label ?? '—'}
+                        </td>
                         <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{run.recipe?.name ?? '—'}</td>
                         <td className="px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{new Date(run.production_date).toLocaleDateString()}</td>
                         <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-700 text-xs">{run.planned_output}</td>
@@ -891,17 +1148,6 @@ export function Production() {
                             >
                               Manage <ChevronRight size={14} />
                             </button>
-                            {isAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteProductionRun(run)}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
-                                title="Delete production run (admin)"
-                              >
-                                <Trash2 size={14} aria-hidden />
-                                Delete
-                              </button>
-                            )}
                           </div>
                         </td>
                       </tr>
@@ -958,12 +1204,111 @@ export function Production() {
       {showNewRun && (
         <NewRunModal
           recipes={recipes}
-          onClose={() => setShowNewRun(false)}
-          onSave={() => { setShowNewRun(false); loadAll(); }}
+          onClose={() => {
+            setShowNewRun(false);
+            setPlanPrefill(null);
+          }}
+          onSave={() => {
+            setShowNewRun(false);
+            setPlanPrefill(null);
+            loadAll();
+          }}
           profile={profile}
+          initialRecipeId={planPrefill?.recipeId}
+          initialPlannedOutput={planPrefill?.quantity}
+          plannedBatchId={planPrefill?.plannedBatchId}
         />
       )}
-      {viewRun && <RunDetailModal run={viewRun} onClose={() => setViewRun(null)} />}
+      {viewRun && (
+        <RunDetailModal
+          run={viewRun}
+          isAdmin={isAdmin}
+          onClose={() => setViewRun(null)}
+          onVoid={() => openRunAction('void', viewRun)}
+          onRestore={() => openRunAction('restore', viewRun)}
+          onDelete={() => openRunAction('delete', viewRun)}
+        />
+      )}
+      {runAction && (
+        <Modal
+          isOpen
+          onClose={() => {
+            if (actionBusy) return;
+            setRunAction(null);
+            setConfirmText('');
+            setActionError(null);
+          }}
+          title={
+            runAction.kind === 'void'
+              ? `Void ${runAction.run.run_number}`
+              : runAction.kind === 'restore'
+                ? `Restore ${runAction.run.run_number}`
+                : `Delete ${runAction.run.run_number}`
+          }
+          size="sm"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              {runAction.kind === 'void'
+                ? 'This removes hub finished goods if they are still at the hub and puts consumed raw materials back. The run and lot stay on record so you can restore later. Blocked if the lot already left the hub.'
+                : runAction.kind === 'restore'
+                  ? 'This puts hub finished goods back and re-consumes the raw materials recorded on this run.'
+                  : 'This permanently deletes the draft run. Completed batches cannot be deleted this way.'}
+            </p>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">
+                Type {runAction.run.run_number}
+                {firstFgLot(runAction.run)?.product_batch_label
+                  ? ` or ${firstFgLot(runAction.run)?.product_batch_label}`
+                  : ''}{' '}
+                to confirm
+              </span>
+              <input
+                autoFocus
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"
+                placeholder={runAction.run.run_number}
+              />
+            </label>
+            {actionError && <p className="text-sm text-red-600">{actionError}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => {
+                  setRunAction(null);
+                  setConfirmText('');
+                  setActionError(null);
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={actionBusy || !confirmText.trim()}
+                onClick={() => void submitRunAction()}
+                className={`rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-60 ${
+                  runAction.kind === 'restore'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : runAction.kind === 'void'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-red-600 hover:bg-red-700'
+                }`}
+              >
+                {actionBusy
+                  ? 'Working…'
+                  : runAction.kind === 'void'
+                    ? 'Void run'
+                    : runAction.kind === 'restore'
+                      ? 'Restore run'
+                      : 'Delete draft'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {showRecipeModal && (
         <RecipeModal
           recipe={editRecipe}

@@ -6,6 +6,10 @@ import { DateFilter } from '../components/DateFilter';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
+import { fetchOutletMovements, type OutletMovementRow } from '../utils/reconciliationService';
+import { nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
+import { filterByStockView, type StockView } from '../utils/stockView';
+import { StockViewToggle } from '../components/StockViewToggle';
 import type { RawMaterial, Outlet } from '../types';
 
 type Tab = 'hub' | 'outlets';
@@ -22,15 +26,21 @@ interface HubRow {
   last_updated: string;
   raw_material_id?: string;
   product_batch?: string;
+  lot_label?: string | null;
+  recipe_sku?: string | null;
+  expiry_date?: string | null;
 }
 
 interface OutletRow {
   id: string;
+  outlet_id: string;
   outlet_name: string;
   product_batch?: string | null;
   raw_material_id?: string | null;
   /** Finished-goods batch or raw material display */
   display_name: string;
+  lot_label?: string | null;
+  expiry_date?: string | null;
   quantity_on_hand: number;
   reserved_quantity: number;
   available_quantity: number;
@@ -142,21 +152,29 @@ export function Inventory() {
   const [adjustRow, setAdjustRow] = useState<HubRow | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [stockView, setStockView] = useState<StockView>('in_stock');
+  const [timelineRow, setTimelineRow] = useState<OutletRow | null>(null);
+  const [timelineMoves, setTimelineMoves] = useState<OutletMovementRow[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     const [{ data: hubInv }, { data: outs }] = await Promise.all([
-      supabase.from('hub_inventory').select(`*, material:raw_material_id(*)`).order('last_updated', { ascending: false }),
+      supabase.from('hub_inventory').select(`*, material:raw_material_id(*), lot:inventory_lots(product_batch_label, expiry_date, production_run:production_run_id(recipe:recipe_id(default_product_batch)))`).order('last_updated', { ascending: false }),
       supabase.from('outlets').select('*').order('name'),
     ]);
     setOutlets(outs ?? []);
 
     const rows: HubRow[] = (hubInv ?? []).map((inv) => {
       const mat = inv.material as RawMaterial | null;
+      const lotRaw = inv.lot as { product_batch_label?: string | null; expiry_date?: string | null } | { product_batch_label?: string | null; expiry_date?: string | null }[] | null;
+      const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+      const lotLabel = lot?.product_batch_label?.trim() || null;
+      const recipeSku = nestedRecipeSku(inv.lot);
       return {
         id: inv.id,
         type: inv.raw_material_id ? 'material' : 'product',
-        name: mat?.name ?? inv.product_batch ?? '—',
+        name: mat?.name ?? lotLabel ?? skuForDisplay(lotLabel, inv.product_batch, recipeSku) ?? '—',
         unit: mat?.unit_of_measure ?? 'units',
         quantity_on_hand: inv.quantity_on_hand,
         reserved_quantity: inv.reserved_quantity ?? 0,
@@ -169,6 +187,9 @@ export function Inventory() {
         last_updated: inv.last_updated,
         raw_material_id: inv.raw_material_id ?? undefined,
         product_batch: inv.product_batch ?? undefined,
+        lot_label: lotLabel,
+        recipe_sku: recipeSku,
+        expiry_date: lot?.expiry_date ?? null,
       };
     });
     setHubRows(rows);
@@ -178,22 +199,29 @@ export function Inventory() {
   const loadOutletInventory = useCallback(async (outletId?: string) => {
     const query = supabase
       .from('outlet_inventory')
-      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure)`)
+      .select(`*, outlet:outlet_id(*), material:raw_material_id(name, unit_of_measure), lot:inventory_lots(product_batch_label, expiry_date, production_run:production_run_id(recipe:recipe_id(default_product_batch)))`)
       .order('last_updated', { ascending: false });
     if (outletId) query.eq('outlet_id', outletId);
     const { data } = await query;
     const rows: OutletRow[] = (data ?? []).map((inv) => {
       const mat = inv.material as { name?: string; unit_of_measure?: string } | null;
+      const lotRaw = inv.lot as { product_batch_label?: string | null; expiry_date?: string | null } | { product_batch_label?: string | null; expiry_date?: string | null }[] | null;
+      const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+      const lotLabel = lot?.product_batch_label?.trim() || null;
+      const recipeSku = nestedRecipeSku(inv.lot);
       const isRm = !!inv.raw_material_id;
       const display_name = isRm
         ? [mat?.name?.trim() || 'Ingredient', mat?.unit_of_measure?.trim()].filter(Boolean).join(' · ') || 'Ingredient'
-        : inv.product_batch?.trim() || '—';
+        : lotLabel || skuForDisplay(lotLabel, inv.product_batch, recipeSku) || '—';
       return {
         id: inv.id,
+        outlet_id: inv.outlet_id,
         outlet_name: (inv.outlet as Outlet | null)?.name ?? '—',
         product_batch: inv.product_batch,
         raw_material_id: inv.raw_material_id ?? undefined,
         display_name,
+        lot_label: lotLabel,
+        expiry_date: lot?.expiry_date ?? null,
         quantity_on_hand: inv.quantity_on_hand,
         reserved_quantity: inv.reserved_quantity ?? 0,
         available_quantity: hubRowAvailableQuantity(
@@ -249,13 +277,34 @@ export function Inventory() {
     setDateRange(range);
   };
 
-  const filteredHubRows = dateRange
+  const datedHubRows = dateRange
     ? hubRows.filter((r) => isDateInRange(r.last_updated, dateRange))
     : hubRows;
 
-  const filteredOutletRows = dateRange
+  const datedOutletRows = dateRange
     ? outletRows.filter((r) => isDateInRange(r.last_updated, dateRange))
     : outletRows;
+
+  const filteredHubRows = filterByStockView(datedHubRows, stockView, (r) => r.quantity_on_hand);
+  const filteredOutletRows = filterByStockView(datedOutletRows, stockView, (r) => r.quantity_on_hand);
+
+  const hubMaterialRows = filteredHubRows.filter((r) => r.type === 'material');
+  const hubProductRows = filteredHubRows
+    .filter((r) => r.type === 'product')
+    .slice()
+    .sort((a, b) => {
+      const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+      const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+      if (ae !== be) return ae - be;
+      return (a.lot_label || a.name).localeCompare(b.lot_label || b.name);
+    });
+
+  const outletDisplayRows = filteredOutletRows.slice().sort((a, b) => {
+    const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
+    const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
+    if (ae !== be) return ae - be;
+    return (a.lot_label || a.display_name).localeCompare(b.lot_label || b.display_name);
+  });
 
   const hubFinishedAtpAll = useMemo(
     () => aggregateFinishedGoodsHubTotals(hubRows.filter((r) => r.type === 'product')),
@@ -347,7 +396,8 @@ export function Inventory() {
             <button className={tabClass('outlets')} onClick={() => setTab('outlets')}>Outlet Inventory</button>
           </div>
           {(tab === 'hub' || tab === 'outlets') && (
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-4">
+              <StockViewToggle value={stockView} onChange={setStockView} />
               <label className="flex items-center gap-2 text-xs text-gray-600">
                 <input
                   type="checkbox"
@@ -394,10 +444,14 @@ export function Inventory() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {filteredHubRows.filter((r) => r.type === 'material').length === 0 ? (
-                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">No raw material stock — receive a purchase order to add stock</td></tr>
+                      {hubMaterialRows.length === 0 ? (
+                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">
+                          {stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'material')
+                            ? 'No in-stock raw materials. Switch to All lots for empty / audit.'
+                            : 'No raw material stock — receive a purchase order to add stock'}
+                        </td></tr>
                       ) : (
-                        filteredHubRows.filter((r) => r.type === 'material').map((row) => (
+                        hubMaterialRows.map((row) => (
                           <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${row.quantity_on_hand === 0 ? 'bg-red-50/30' : row.quantity_on_hand <= (row.reorder_level ?? 10) ? 'bg-amber-50/30' : ''}`}>
                             <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.name}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
@@ -426,7 +480,9 @@ export function Inventory() {
                   <table className="w-full text-sm">
                     <thead className="border-b border-gray-200 bg-gray-50">
                       <tr>
-                        <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Batch</th>
+                        <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
+                        <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">SKU</th>
+                        <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Expiry</th>
                         <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
                         <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
                         <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
@@ -435,12 +491,18 @@ export function Inventory() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {filteredHubRows.filter((r) => r.type === 'product').length === 0 ? (
-                        <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-400">No product stock — complete a production run to add product</td></tr>
+                      {hubProductRows.length === 0 ? (
+                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">
+                          {stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'product')
+                            ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                            : 'No product stock — complete a production run to add product'}
+                        </td></tr>
                       ) : (
-                        filteredHubRows.filter((r) => r.type === 'product').map((row) => (
+                        hubProductRows.map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.name}</td>
+                            <td className="px-4 md:px-6 py-4 font-mono text-xs sm:text-sm font-medium text-gray-900">{row.lot_label || row.name}</td>
+                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">{skuForDisplay(row.lot_label, row.product_batch, row.recipe_sku) || '—'}</td>
+                            <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-500">{row.expiry_date || '—'}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
                             <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
                             <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
@@ -475,18 +537,23 @@ export function Inventory() {
                   <thead className="border-b border-gray-200 bg-gray-50">
                     <tr>
                       <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Batch / ingredient</th>
+                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot / ingredient</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
                       <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
                       <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
                       <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Updated</th>
+                      <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">History</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredOutletRows.length === 0 ? (
-                      <tr><td colSpan={6} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">No outlet stock yet</td></tr>
+                    {outletDisplayRows.length === 0 ? (
+                      <tr><td colSpan={7} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">
+                        {stockView === 'in_stock' && datedOutletRows.length > 0
+                          ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                          : 'No outlet stock yet'}
+                      </td></tr>
                     ) : (
-                      filteredOutletRows.map((row) => (
+                      outletDisplayRows.map((row) => (
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.outlet_name}</td>
                           <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{row.display_name}</td>
@@ -494,6 +561,30 @@ export function Inventory() {
                           <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
                           <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
                           <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-400 text-xs">{new Date(row.last_updated).toLocaleDateString()}</td>
+                          <td className="px-4 md:px-6 py-4 text-right">
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-teal-700 hover:underline"
+                              onClick={() => {
+                                setTimelineRow(row);
+                                setTimelineLoading(true);
+                                const end = new Date();
+                                const start = new Date();
+                                start.setDate(start.getDate() - 90);
+                                void fetchOutletMovements({
+                                  outletId: row.outlet_id,
+                                  from: start,
+                                  to: end,
+                                  outletInventoryId: row.id,
+                                })
+                                  .then(setTimelineMoves)
+                                  .catch(() => setTimelineMoves([]))
+                                  .finally(() => setTimelineLoading(false));
+                              }}
+                            >
+                              Timeline
+                            </button>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -511,6 +602,58 @@ export function Inventory() {
           onClose={() => setAdjustRow(null)}
           onSave={() => { setAdjustRow(null); void loadAll(); }}
         />
+      )}
+
+      {timelineRow && (
+        <Modal isOpen onClose={() => setTimelineRow(null)} title={`Movements · ${timelineRow.display_name}`} size="lg">
+          <p className="mb-3 text-xs text-gray-500">
+            {timelineRow.outlet_name} · last 90 days · on hand {timelineRow.quantity_on_hand} · newest first
+          </p>
+          {timelineLoading ? (
+            <p className="text-sm text-gray-400">Loading…</p>
+          ) : timelineMoves.length === 0 ? (
+            <p className="text-sm text-gray-400">No movements recorded for this line in the period.</p>
+          ) : (
+            <div className="max-h-[24rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 border-b bg-gray-50 text-left">
+                  <tr>
+                    <th className="px-2 py-1.5 font-medium text-gray-700">Date</th>
+                    <th className="px-2 py-1.5 font-medium text-gray-700">Type</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-gray-700">Qty</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-gray-700">QoH after</th>
+                    <th className="px-2 py-1.5 font-medium text-gray-700">Ref</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {[...timelineMoves]
+                    .sort(
+                      (a, b) =>
+                        Date.parse(b.created_at) - Date.parse(a.created_at) ||
+                        b.business_date.localeCompare(a.business_date) ||
+                        b.id.localeCompare(a.id)
+                    )
+                    .map((m) => (
+                    <tr key={m.id}>
+                      <td className="px-2 py-1.5 tabular-nums text-gray-700">{m.business_date}</td>
+                      <td className="px-2 py-1.5 text-gray-800">{m.movement_type}</td>
+                      <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${m.signed_qty < 0 ? 'text-red-700' : 'text-gray-900'}`}>
+                        {m.signed_qty >= 0 ? '+' : ''}
+                        {m.signed_qty}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-gray-600">
+                        {m.qoh_after != null ? m.qoh_after : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-[10px] text-gray-400">
+                        {m.reference_type}:{m.reference_id.slice(0, 8)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

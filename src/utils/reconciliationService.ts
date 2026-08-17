@@ -115,8 +115,9 @@ export async function fetchOutletMovements(options: {
   outletId: string;
   from: Date;
   to: Date;
+  outletInventoryId?: string;
 }): Promise<OutletMovementRow[]> {
-  const { data, error } = await supabase
+  let q = supabase
     .from('outlet_stock_movements')
     .select('*')
     .eq('outlet_id', options.outletId)
@@ -125,11 +126,61 @@ export async function fetchOutletMovements(options: {
     .order('business_date', { ascending: true })
     .order('created_at', { ascending: true });
 
+  if (options.outletInventoryId) {
+    q = q.eq('outlet_inventory_id', options.outletInventoryId);
+  }
+
+  const { data, error } = await q;
+
   if (error) {
     throw new Error(error.message);
   }
 
   return (data ?? []) as OutletMovementRow[];
+}
+
+export interface SkuReconcileRow {
+  sku_key: string;
+  kind: string;
+  label: string;
+  raw_material_id?: string | null;
+  product_batch?: string | null;
+  opening_qoh: number;
+  supply_in: number;
+  transfers_in: number;
+  transfers_out: number;
+  sales: number;
+  waste: number;
+  stock_take_adjustments: number;
+  reversals: number;
+  computed_closing: number;
+  live_on_hand: number;
+  unexplained_variance: number;
+}
+
+export async function reconcileOutletStockBySku(options: {
+  outletId: string;
+  from: Date;
+  to: Date;
+  includeRawMaterials?: boolean;
+}): Promise<{ success: boolean; error?: string; rows?: SkuReconcileRow[] }> {
+  const { data, error } = await supabase.rpc('reconcile_outlet_stock_by_sku', {
+    p_outlet_id: options.outletId,
+    p_from: formatDateForInput(options.from),
+    p_to: formatDateForInput(options.to),
+    p_include_raw_materials: options.includeRawMaterials ?? true,
+  });
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  const payload = data as { success?: boolean; error?: string; rows?: SkuReconcileRow[] } | null;
+  if (!payload || payload.success === false) {
+    return { success: false, error: payload?.error ?? 'reconcile_by_sku_failed' };
+  }
+
+  return { success: true, rows: payload.rows ?? [] };
 }
 
 export function movementsToCsv(rows: OutletMovementRow[], outletName: string): string {

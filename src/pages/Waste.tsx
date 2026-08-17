@@ -5,6 +5,7 @@ import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
 import type { DateRange } from '../utils/dateRange';
+import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -17,6 +18,7 @@ interface WasteHistoryRow {
   outlet?: { name: string } | { name: string }[] | null;
   line_count: number;
   total_qty: number;
+  lot_summary: string;
 }
 
 type Kind = 'hub' | 'outlet';
@@ -24,6 +26,15 @@ type Kind = 'hub' | 'outlet';
 interface HubPickRow {
   id: string;
   product_batch: string | null;
+  lot_label: string | null;
+  label: string;
+}
+
+interface OutletPickRow {
+  id: string;
+  product_batch: string;
+  lot_label: string | null;
+  recipe_sku: string | null;
   label: string;
 }
 
@@ -37,6 +48,7 @@ interface LineHub {
 
 interface LineOutlet {
   key: string;
+  outlet_inventory_id: string;
   product_batch: string;
   quantity: number;
   waste_reason: string;
@@ -49,13 +61,14 @@ export function Waste() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
   const [hubRows, setHubRows] = useState<HubPickRow[]>([]);
+  const [outletRows, setOutletRows] = useState<OutletPickRow[]>([]);
   const [wasteDate, setWasteDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState('');
   const [linesHub, setLinesHub] = useState<LineHub[]>([
     { key: crypto.randomUUID(), hub_inventory_id: '', product_batch: '', quantity: 0, waste_reason: 'spoilage' },
   ]);
   const [linesOutlet, setLinesOutlet] = useState<LineOutlet[]>([
-    { key: crypto.randomUUID(), product_batch: '', quantity: 0, waste_reason: 'spoilage' },
+    { key: crypto.randomUUID(), product_batch: '', outlet_inventory_id: '', quantity: 0, waste_reason: 'spoilage' },
   ]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -71,7 +84,7 @@ export function Waste() {
       supabase.from('outlets').select('*').order('name'),
       supabase
         .from('hub_inventory')
-        .select('id, product_batch, raw_material_id, material:raw_material_id(name)')
+        .select('id, product_batch, raw_material_id, material:raw_material_id(name), lot:inventory_lots(product_batch_label)')
         .order('last_updated', { ascending: false }),
     ]);
     setOutlets(outs ?? []);
@@ -82,14 +95,17 @@ export function Waste() {
         id: string;
         product_batch: string | null;
         material?: { name: string } | { name: string }[] | null;
+        lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
       };
       const mat = Array.isArray(r.material) ? r.material[0] : r.material;
+      const lotLabel = nestedLotLabel(r.lot);
       const pb = r.product_batch?.trim();
       const mn = mat?.name?.trim();
       return {
         id: r.id,
         product_batch: r.product_batch,
-        label: pb || mn || `Hub row ${r.id.slice(0, 8)}`,
+        lot_label: lotLabel,
+        label: mn || formatLotWithSku(lotLabel, pb) || `Hub row ${r.id.slice(0, 8)}`,
       };
     });
     setHubRows(picks);
@@ -99,6 +115,45 @@ export function Waste() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!outletId) {
+      setOutletRows([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from('outlet_inventory')
+        .select('id, product_batch, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))')
+        .eq('outlet_id', outletId)
+        .is('raw_material_id', null)
+        .gt('quantity_on_hand', 0);
+      if (cancelled) return;
+      const picks: OutletPickRow[] = (data ?? []).map((row) => {
+        const r = row as {
+          id: string;
+          product_batch: string | null;
+          lot?: unknown;
+        };
+        const pb = r.product_batch?.trim() || '';
+        const lotLabel = nestedLotLabel(r.lot as { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null);
+        const recipeSku = nestedRecipeSku(r.lot);
+        return {
+          id: r.id,
+          product_batch: pb,
+          lot_label: lotLabel,
+          recipe_sku: recipeSku,
+          label: formatLotWithSku(lotLabel, pb, recipeSku) || pb,
+        };
+      });
+      picks.sort((a, b) => a.label.localeCompare(b.label));
+      setOutletRows(picks);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [outletId]);
 
   const loadHistory = useCallback(
     async (page: number, append: boolean) => {
@@ -124,20 +179,74 @@ export function Waste() {
         const ids = (events ?? []).map((e) => e.id as string);
         const { data: lines } =
           ids.length > 0
-            ? await supabase.from('waste_lines').select('waste_event_id, quantity').in('waste_event_id', ids)
-            : { data: [] as { waste_event_id: string; quantity: number }[] };
+            ? await supabase
+                .from('waste_lines')
+                .select('waste_event_id, quantity, product_batch, hub_inventory_id')
+                .in('waste_event_id', ids)
+            : { data: [] as { waste_event_id: string; quantity: number; product_batch?: string; hub_inventory_id?: string | null }[] };
 
-        const qtyByEvent = new Map<string, { count: number; total: number }>();
+        const hubIds = [
+          ...new Set(
+            (lines ?? [])
+              .map((l) => l.hub_inventory_id as string | null | undefined)
+              .filter((id): id is string => !!id)
+          ),
+        ];
+        const lotByHub = new Map<string, string | null>();
+        if (hubIds.length > 0) {
+          const { data: hubLots } = await supabase
+            .from('hub_inventory')
+            .select('id, product_batch, lot:inventory_lots(product_batch_label)')
+            .in('id', hubIds);
+          for (const h of hubLots ?? []) {
+            const row = h as {
+              id: string;
+              product_batch?: string | null;
+              lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
+            };
+            lotByHub.set(row.id, nestedLotLabel(row.lot) ?? row.product_batch?.trim() ?? null);
+          }
+        }
+
+        const batches = [
+          ...new Set(
+            (lines ?? [])
+              .map((l) => String(l.product_batch ?? '').trim())
+              .filter(Boolean)
+          ),
+        ];
+        const lotByBatch = new Map<string, string | null>();
+        if (batches.length > 0) {
+          const { data: oiLots } = await supabase
+            .from('outlet_inventory')
+            .select('product_batch, lot:inventory_lots(product_batch_label)')
+            .in('product_batch', batches);
+          for (const row of oiLots ?? []) {
+            const r = row as {
+              product_batch?: string | null;
+              lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
+            };
+            const pb = r.product_batch?.trim();
+            if (pb && !lotByBatch.has(pb)) lotByBatch.set(pb, nestedLotLabel(r.lot));
+          }
+        }
+
+        const qtyByEvent = new Map<string, { count: number; total: number; lots: string[] }>();
         for (const line of lines ?? []) {
           const eid = line.waste_event_id as string;
-          const prev = qtyByEvent.get(eid) ?? { count: 0, total: 0 };
+          const prev = qtyByEvent.get(eid) ?? { count: 0, total: 0, lots: [] };
           prev.count += 1;
           prev.total += Number(line.quantity ?? 0);
+          const hubId = line.hub_inventory_id as string | null | undefined;
+          const pb = (line.product_batch as string | undefined) ?? null;
+          const fromHub = hubId ? lotByHub.get(hubId) : null;
+          const fromOutlet = pb ? lotByBatch.get(pb) : null;
+          prev.lots.push(formatLotWithSku(fromHub ?? fromOutlet ?? null, pb));
           qtyByEvent.set(eid, prev);
         }
 
         const mapped: WasteHistoryRow[] = (events ?? []).map((e) => {
-          const agg = qtyByEvent.get(e.id as string) ?? { count: 0, total: 0 };
+          const agg = qtyByEvent.get(e.id as string) ?? { count: 0, total: 0, lots: [] };
           return {
             id: e.id as string,
             location_kind: e.location_kind as 'hub' | 'outlet',
@@ -147,6 +256,7 @@ export function Waste() {
             outlet: e.outlet as WasteHistoryRow['outlet'],
             line_count: agg.count,
             total_qty: agg.total,
+            lot_summary: agg.lots.filter(Boolean).join(', ') || '—',
           };
         });
 
@@ -169,7 +279,7 @@ export function Waste() {
 
   function syncHubBatch(idx: number, hubInvId: string) {
     const row = hubRows.find((h) => h.id === hubInvId);
-    const batchText = row?.product_batch?.trim() || row?.label || 'HUB';
+    const batchText = row?.product_batch?.trim() || row?.lot_label || row?.label || 'HUB';
     setLinesHub((prev) =>
       prev.map((l, i) =>
         i === idx ? { ...l, hub_inventory_id: hubInvId, product_batch: batchText } : l
@@ -214,9 +324,10 @@ export function Waste() {
           return;
         }
         const payload: WasteLineOutletInput[] = linesOutlet
-          .filter((l) => l.product_batch.trim() && l.quantity > 0 && l.waste_reason)
+          .filter((l) => l.outlet_inventory_id && l.quantity > 0 && l.waste_reason)
           .map((l) => ({
             outlet_id: outletId,
+            outlet_inventory_id: l.outlet_inventory_id,
             product_batch: l.product_batch.trim(),
             quantity: l.quantity,
             waste_reason: l.waste_reason,
@@ -393,7 +504,7 @@ export function Waste() {
                 onClick={() =>
                   setLinesOutlet((p) => [
                     ...p,
-                    { key: crypto.randomUUID(), product_batch: '', quantity: 0, waste_reason: 'spoilage' },
+                    { key: crypto.randomUUID(), product_batch: '', outlet_inventory_id: '', quantity: 0, waste_reason: 'spoilage' },
                   ])
                 }
                 className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs"
@@ -403,14 +514,32 @@ export function Waste() {
             </div>
             {linesOutlet.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <input
-                  placeholder="Product batch"
-                  value={line.product_batch}
-                  onChange={(e) =>
-                    setLinesOutlet((p) => p.map((l, i) => (i === idx ? { ...l, product_batch: e.target.value } : l)))
-                  }
-                  className="min-w-[120px] flex-1 rounded border px-2 py-2 text-sm"
-                />
+                <select
+                  value={line.outlet_inventory_id}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const pick = outletRows.find((r) => r.id === id);
+                    setLinesOutlet((p) =>
+                      p.map((l, i) =>
+                        i === idx
+                          ? {
+                              ...l,
+                              outlet_inventory_id: id,
+                              product_batch: pick?.product_batch ?? '',
+                            }
+                          : l
+                      )
+                    );
+                  }}
+                  className="min-w-[200px] flex-1 rounded border px-2 py-2 text-sm"
+                >
+                  <option value="">Lot at outlet…</option>
+                  {outletRows.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="number"
                   min={0}
@@ -494,6 +623,7 @@ export function Waste() {
                   <th className="px-3 py-2 font-medium text-gray-700">Location</th>
                   <th className="px-3 py-2 text-right font-medium text-gray-700">Lines</th>
                   <th className="px-3 py-2 text-right font-medium text-gray-700">Total qty</th>
+                  <th className="px-3 py-2 font-medium text-gray-700">Lots</th>
                   <th className="px-3 py-2 font-medium text-gray-700">Notes</th>
                 </tr>
               </thead>
@@ -510,6 +640,9 @@ export function Waste() {
                       <td className="px-3 py-2 capitalize text-gray-700">{loc}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{row.line_count}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
+                      <td className="max-w-[220px] truncate px-3 py-2 font-mono text-xs text-gray-800" title={row.lot_summary}>
+                        {row.lot_summary}
+                      </td>
                       <td className="max-w-[200px] truncate px-3 py-2 text-gray-500">{row.notes?.trim() || '—'}</td>
                     </tr>
                   );

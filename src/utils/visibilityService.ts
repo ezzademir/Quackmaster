@@ -180,6 +180,7 @@ export interface WasteLineOutletInput {
   product_batch: string;
   quantity: number;
   waste_reason: string;
+  outlet_inventory_id?: string;
 }
 
 export async function postWasteEvent(params: {

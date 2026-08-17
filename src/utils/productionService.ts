@@ -31,6 +31,13 @@ export interface ProductionCompletionResult {
   message: string;
   error?: string;
   inventoryPosted?: boolean;
+  lotLabel?: string;
+  sku?: string;
+  lotId?: string;
+  expiryDate?: string | null;
+  manufacturedAt?: string | null;
+  runNumber?: string;
+  finishedQuantity?: number;
 }
 
 /**
@@ -115,11 +122,11 @@ export async function completeProductionRun(
       };
     }
 
-    const batchId = params.productBatch || `BATCH-${Date.now()}`;
+    const skuHint = params.productBatch?.trim() || '';
     const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
       supabase.rpc('post_production_completion_inventory', {
         p_production_run_id: params.productionRunId,
-        p_product_batch: batchId,
+        p_product_batch: skuHint,
         p_finished_quantity: params.actualOutput,
       })
     );
@@ -138,6 +145,13 @@ export async function completeProductionRun(
       success?: boolean;
       error?: string;
       hub_inventory_id?: string;
+      lot_id?: string;
+      lot_label?: string;
+      sku?: string;
+      expiry_date?: string | null;
+      manufactured_at?: string | null;
+      run_number?: string;
+      finished_quantity?: number;
     } | null;
 
     if (rpcPayload?.success === false) {
@@ -161,10 +175,15 @@ export async function completeProductionRun(
         yield_percentage: qcResult.yieldPercentage,
         qc_status: qcResult.status,
         output_quantity: params.actualOutput,
-        product_batch: batchId,
+        product_batch: rpcPayload?.sku ?? skuHint,
+        lot_id: rpcPayload?.lot_id ?? null,
+        lot_label: rpcPayload?.lot_label ?? null,
         hub_inventory_id: rpcPayload?.hub_inventory_id ?? null,
       },
-      metadata: { entity_label: `Production completed · ${batchId}`, summary: 'production_completed' },
+      metadata: {
+        entity_label: `Production completed · ${rpcPayload?.lot_label ?? rpcPayload?.sku ?? skuHint}`,
+        summary: 'production_completed',
+      },
     });
 
     return {
@@ -172,6 +191,13 @@ export async function completeProductionRun(
       qcReport,
       message: `Production completed successfully. ${qcResult.message}`,
       inventoryPosted: true,
+      lotLabel: rpcPayload?.lot_label,
+      sku: rpcPayload?.sku,
+      lotId: rpcPayload?.lot_id,
+      expiryDate: rpcPayload?.expiry_date ?? null,
+      manufacturedAt: rpcPayload?.manufactured_at ?? null,
+      runNumber: rpcPayload?.run_number,
+      finishedQuantity: rpcPayload?.finished_quantity ?? params.actualOutput,
     };
   } catch (err) {
     return {
@@ -183,14 +209,71 @@ export async function completeProductionRun(
   }
 }
 
-/**
- * Reject production run (manual override by QC inspector)
- */
-/** Permanently delete a production run (admin RPC). Reverses hub inventory when completed. */
+function rpcErrorMessage(error: { message?: string } | null): string {
+  return error?.message ?? 'Request failed';
+}
+
+/** Void a completed run (admin). Keeps the run/lot; reverses hub FG if still at hub. */
+export async function voidProductionRun(options: {
+  runId: string;
+  confirmText: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await supabase.rpc('admin_void_production_run', {
+      p_run_id: options.runId,
+      p_confirm_text: options.confirmText,
+    });
+
+    if (error) {
+      return { success: false, error: rpcErrorMessage(error) };
+    }
+
+    const payload = data as { ok?: boolean; error?: string } | null;
+    if (payload && payload.ok === false) {
+      return { success: false, error: payload.error ?? 'Could not void production run' };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to void production run',
+    };
+  }
+}
+
+/** Restore a voided run (admin). Puts hub FG back and re-consumes raw materials. */
+export async function restoreVoidedProductionRun(options: {
+  runId: string;
+  confirmText: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data, error } = await supabase.rpc('admin_restore_voided_production_run', {
+      p_run_id: options.runId,
+      p_confirm_text: options.confirmText,
+    });
+
+    if (error) {
+      return { success: false, error: rpcErrorMessage(error) };
+    }
+
+    const payload = data as { ok?: boolean; error?: string } | null;
+    if (payload && payload.ok === false) {
+      return { success: false, error: payload.error ?? 'Could not restore production run' };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to restore production run',
+    };
+  }
+}
+
+/** Permanently delete a draft/cancelled run (admin). Completed runs must be voided. */
 export async function deleteProductionRun(options: {
   runId: string;
-  runNumber: string;
-  status: string;
 }): Promise<{ success: boolean; error?: string }> {
   try {
     const { error } = await supabase.rpc('admin_delete_production_run', {
@@ -198,18 +281,8 @@ export async function deleteProductionRun(options: {
     });
 
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: rpcErrorMessage(error) };
     }
-
-    await writeLedgerEntry({
-      action: 'deleted',
-      entityType: 'production_run',
-      entityId: options.runId,
-      module: 'production',
-      operation: 'delete',
-      beforeData: { run_number: options.runNumber, status: options.status },
-      metadata: { entity_label: options.runNumber, prior_status: options.status },
-    });
 
     return { success: true };
   } catch (err) {
@@ -246,4 +319,36 @@ export async function rejectProductionRun(
       error: err instanceof Error ? err.message : 'Failed to reject production run',
     };
   }
+}
+
+/** Fill EXP on lots for this recipe that still have a null expiry (does not rewrite existing EXP). */
+export async function backfillLotExpiryForRecipe(
+  recipeId: string,
+  shelfLifeDays: number
+): Promise<{ updated: number; error?: string }> {
+  if (!Number.isFinite(shelfLifeDays) || shelfLifeDays <= 0) return { updated: 0 };
+  const { data: runs, error: runErr } = await supabase.from('production_runs').select('id').eq('recipe_id', recipeId);
+  if (runErr) return { updated: 0, error: runErr.message };
+  const runIds = (runs ?? []).map((r) => r.id as string);
+  if (runIds.length === 0) return { updated: 0 };
+
+  const { data: lots, error: lotErr } = await supabase
+    .from('inventory_lots')
+    .select('id, manufactured_at')
+    .in('production_run_id', runIds)
+    .is('expiry_date', null);
+  if (lotErr) return { updated: 0, error: lotErr.message };
+
+  let updated = 0;
+  for (const lot of lots ?? []) {
+    const mfg = typeof lot.manufactured_at === 'string' ? lot.manufactured_at.slice(0, 10) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(mfg)) continue;
+    const [y, mo, d] = mfg.split('-').map(Number);
+    const exp = new Date(y, mo - 1, d);
+    exp.setDate(exp.getDate() + shelfLifeDays);
+    const expiry = `${exp.getFullYear()}-${String(exp.getMonth() + 1).padStart(2, '0')}-${String(exp.getDate()).padStart(2, '0')}`;
+    const { error } = await supabase.from('inventory_lots').update({ expiry_date: expiry }).eq('id', lot.id);
+    if (!error) updated += 1;
+  }
+  return { updated };
 }

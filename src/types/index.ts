@@ -41,8 +41,10 @@ export interface Recipe {
   target_yield_percentage?: number;
   standard_batch_size: number;
   batch_unit: string;
-  /** Canonical FG batch code for hub/outlet KPIs & planning (matches product_batch on inventory). */
+  /** Canonical FG SKU for hub/outlet product_batch. */
   default_product_batch?: string | null;
+  /** Days from production date to lot expiry. */
+  shelf_life_days?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -92,7 +94,7 @@ export interface ProductionRun {
   planned_output: number;
   actual_output: number;
   yield_percentage?: number;
-  status: 'in_progress' | 'completed' | 'cancelled';
+  status: 'in_progress' | 'completed' | 'cancelled' | 'voided';
   notes?: string;
   planned_batch_id?: string | null;
   created_at: string;
