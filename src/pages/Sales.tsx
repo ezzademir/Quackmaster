@@ -136,7 +136,12 @@ interface SalesJournalHistoryRow {
   business_date: string;
   outlet_id: string;
   notes: string | null;
+  status: string;
   lines: { product_batch: string; quantity_sold: number; lot_label: string | null }[];
+}
+
+function isVoidedSalesStatus(status: string | null | undefined): boolean {
+  return status === 'voided' || status === 'cancelled';
 }
 
 /** Group fetched lines under each journal id, ordered by created_at per journal. */
@@ -191,6 +196,7 @@ export function Sales() {
   const [history, setHistory] = useState<SalesJournalHistoryRow[]>([]);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [includeVoided, setIncludeVoided] = useState(false);
 
   const [fifoSkus, setFifoSkus] = useState<string[]>([]);
   const [fifoSkusLoading, setFifoSkusLoading] = useState(false);
@@ -209,6 +215,7 @@ export function Sales() {
   const [modalBusinessDate, setModalBusinessDate] = useState('');
   const [modalNotes, setModalNotes] = useState('');
   const [modalLines, setModalLines] = useState<ModalDraftLine[]>([]);
+  const [modalStatus, setModalStatus] = useState('');
   const [modalMessage, setModalMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [journalDateRange, setJournalDateRange] = useState<DateRange | null>(null);
 
@@ -255,7 +262,7 @@ export function Sales() {
   const populateModalFromJournal = useCallback(async (journalId: string): Promise<boolean> => {
     const { data: header, error: hErr } = await supabase
       .from('sales_journals')
-      .select('id,business_date,outlet_id,notes')
+      .select('id,business_date,outlet_id,notes,status')
       .eq('id', journalId)
       .maybeSingle();
 
@@ -281,6 +288,10 @@ export function Sales() {
     setModalOutletId(header.outlet_id);
     setModalBusinessDate(header.business_date);
     setModalNotes(header.notes ?? '');
+    setModalStatus(header.status ?? 'posted');
+    if (isVoidedSalesStatus(header.status)) {
+      setModalEditMode(false);
+    }
     setModalLines(
       (jl ?? []).map((row) => ({
         key: crypto.randomUUID(),
@@ -305,6 +316,7 @@ export function Sales() {
       setModalOutletId('');
       setModalBusinessDate('');
       setModalNotes('');
+      setModalStatus('');
       setModalLines([]);
       try {
         await populateModalFromJournal(journalId);
@@ -327,6 +339,7 @@ export function Sales() {
     setModalBusinessDate('');
     setModalNotes('');
     setModalLines([]);
+    setModalStatus('');
   }, []);
 
   const loadOutlets = useCallback(async () => {
@@ -345,7 +358,24 @@ export function Sales() {
       }
       const offset = mode === 'replace' ? 0 : Math.max(0, opts!.beforeLength!);
 
-      let q = supabase.from('sales_journals').select('id, business_date, outlet_id, notes');
+      if (!outletId) {
+        if (mode === 'replace') {
+          setHistory([]);
+          setHistoryHasMore(false);
+        }
+        return true;
+      }
+
+      let q = supabase
+        .from('sales_journals')
+        .select('id, business_date, outlet_id, notes, status')
+        .eq('outlet_id', outletId);
+
+      if (includeVoided) {
+        q = q.in('status', ['posted', 'voided', 'cancelled']);
+      } else {
+        q = q.eq('status', 'posted');
+      }
 
       if (journalDateRange) {
         q = q
@@ -382,6 +412,7 @@ export function Sales() {
 
       const mapped = list.map((j) => ({
         ...j,
+        status: j.status ?? 'posted',
         lines: lineMap.get(j.id) ?? [],
       }));
 
@@ -394,7 +425,7 @@ export function Sales() {
       setHistoryHasMore(mapped.length === HISTORY_PAGE_SIZE);
       return true;
     },
-    [journalDateRange]
+    [journalDateRange, outletId, includeVoided]
   );
 
   async function handleLoadMoreHistory() {
@@ -417,7 +448,7 @@ export function Sales() {
 
   useEffect(() => {
     setHistoryLoadingMore(false);
-  }, [journalDateRange]);
+  }, [journalDateRange, outletId, includeVoided]);
 
   useEffect(() => {
     setInventoryEmptyNotice(false);
@@ -573,7 +604,7 @@ export function Sales() {
     const journalIdToDelete = modalJournalId;
     if (
       !window.confirm(
-        'Delete this journal? Outlet stock will be restored for each line.'
+        'Void this sale? Outlet stock will be restored. The sale stays on file as voided and leaves the posted list.'
       )
     )
       return;
@@ -582,18 +613,18 @@ export function Sales() {
     try {
       const res = await voidSalesJournal({ salesJournalId: journalIdToDelete });
       if (!res.success) {
-        setModalMessage({ tone: 'err', text: res.error ?? 'Failed to void journal.' });
+        setModalMessage({ tone: 'err', text: res.error ?? 'Failed to void sale.' });
         return;
       }
-      // Drop immediately so the list stays correct even if the refetch fails (previously stale state persisted).
       setHistory((prev) => prev.filter((h) => h.id !== journalIdToDelete));
       const refreshed = await loadHistory();
+      void refreshFifoSkus();
       closeJournalModal();
       setMessage({
         tone: 'ok',
         text: refreshed
-          ? 'Sales journal deleted and stock restored.'
-          : 'Sales journal deleted and stock restored. If the journal still appears, refresh the page.',
+          ? 'Sale voided. Outlet stock restored.'
+          : 'Sale voided and stock restored. If it still appears as posted, refresh the page.',
       });
     } finally {
       setModalDeleting(false);
@@ -624,16 +655,18 @@ export function Sales() {
         idempotencyKey: crypto.randomUUID(),
       });
       if (!res.success) {
-        setModalMessage({ tone: 'err', text: res.error ?? 'Failed to update journal.' });
+        setModalMessage({ tone: 'err', text: res.error ?? 'Failed to update sale.' });
         return;
       }
+      setHistory((prev) => prev.filter((h) => h.id !== modalJournalId));
       await loadHistory();
+      void refreshFifoSkus();
       closeJournalModal();
       setMessage({
         tone: 'ok',
         text: res.idempotentReplay
-          ? 'Journal update replayed (idempotent).'
-          : `Sales journal updated${res.salesJournalId ? ` (${res.salesJournalId.slice(0, 8)}…)` : ''}.`,
+          ? 'Sale update replayed (idempotent).'
+          : 'Sale updated. The previous version was voided and stock was re-posted with your changes.',
       });
     } finally {
       setModalSaving(false);
@@ -663,8 +696,9 @@ export function Sales() {
         <p className="mt-1 text-sm text-gray-500">
           Post a <span className="font-medium text-gray-700">FIFO sale by SKU</span> for quick outlet
           depletion. Manual batch lines allocate <span className="font-medium text-gray-700">FIFO across lot rows</span> by
-          expiry; lines loaded from inventory include a row id for exact traceability. Void or replace journals is{' '}
-          <span className="font-medium text-gray-700">admin only</span>.
+          expiry; lines loaded from inventory include a row id for exact traceability. Voiding a sale restores
+          outlet stock and keeps the old lines on file as <span className="font-medium text-gray-700">voided</span> (admin
+          only)—they no longer count as posted sales.
         </p>
       </div>
 
@@ -907,8 +941,26 @@ export function Sales() {
 
       <div>
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">Recent journals</h2>
-          <div className="flex flex-col items-start gap-1 sm:items-end">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700">Recent journals</h2>
+            <p className="mt-0.5 max-w-md text-xs text-gray-500">
+              Posted sales for{' '}
+              <span className="font-medium text-gray-600">
+                {outlets.find((o) => o.id === outletId)?.name ?? 'this outlet'}
+              </span>
+              . Voided sales are hidden unless you include them.
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <label className="inline-flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={includeVoided}
+                onChange={(e) => setIncludeVoided(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Include voided
+            </label>
             <DateFilter onFilterChange={(range) => setJournalDateRange(range)} />
             <p className="max-w-xs text-xs text-gray-500 sm:text-right">
               Filters the list by each journal&apos;s <strong className="font-medium text-gray-600">business date</strong>.
@@ -933,13 +985,24 @@ export function Sales() {
               {history.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
-                    No journals yet
+                    {includeVoided ? 'No sales in this period' : 'No posted sales for this outlet'}
                   </td>
                 </tr>
               ) : (
-                history.map((h) => (
-                  <tr key={h.id}>
-                    <td className="whitespace-nowrap px-4 py-2 align-top">{h.business_date}</td>
+                history.map((h) => {
+                  const voided = isVoidedSalesStatus(h.status);
+                  return (
+                  <tr key={h.id} className={voided ? 'bg-gray-50 text-gray-500' : undefined}>
+                    <td className="whitespace-nowrap px-4 py-2 align-top">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>{h.business_date}</span>
+                        {voided ? (
+                          <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                            Voided
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-4 py-2 align-top whitespace-nowrap">
                       {outlets.find((o) => o.id === h.outlet_id)?.name ?? h.outlet_id.slice(0, 8)}
                     </td>
@@ -947,7 +1010,7 @@ export function Sales() {
                       {h.lines.length === 0 ? (
                         <span className="text-gray-400">—</span>
                       ) : (
-                        <ul className="space-y-1 font-mono text-xs text-gray-800 sm:text-sm">
+                        <ul className={`space-y-1 font-mono text-xs sm:text-sm ${voided ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
                           {h.lines.map((ln, i) => (
                             <li key={`${h.id}-${i}-${ln.product_batch}`}>
                               <span className="font-semibold">{ln.quantity_sold}</span>
@@ -972,7 +1035,8 @@ export function Sales() {
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -1002,7 +1066,11 @@ export function Sales() {
       <Modal
         isOpen={journalModalOpen}
         onClose={() => closeJournalModal()}
-        title={modalJournalId ? `Journal ${modalJournalId.slice(0, 8)}…` : 'Journal'}
+        title={
+          modalJournalId
+            ? `${isVoidedSalesStatus(modalStatus) ? 'Voided sale' : 'Sale'} ${modalJournalId.slice(0, 8)}…`
+            : 'Sale'
+        }
         size="lg"
       >
         {modalLoading && modalLines.length === 0 ? (
@@ -1017,6 +1085,12 @@ export function Sales() {
               >
                 {modalMessage.text}
               </div>
+            )}
+            {isVoidedSalesStatus(modalStatus) && (
+              <p className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-700">
+                This sale is voided. Outlet stock was restored. The original lines are kept for history and cannot be
+                edited.
+              </p>
             )}
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
@@ -1152,7 +1226,7 @@ export function Sales() {
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-4">
               {!modalEditMode ? (
                 <>
-                  {isAdmin && (
+                  {isAdmin && !isVoidedSalesStatus(modalStatus) && (
                     <>
                       <button
                         type="button"
@@ -1168,7 +1242,7 @@ export function Sales() {
                         disabled={recentJournalBusy}
                         className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
                       >
-                        {modalDeleting ? 'Deleting…' : 'Delete'}
+                        {modalDeleting ? 'Voiding…' : 'Void sale'}
                       </button>
                     </>
                   )}
