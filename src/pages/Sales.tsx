@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, Plus, Trash2 } from 'lucide-react';
+import { Ban, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
@@ -144,6 +144,45 @@ function isVoidedSalesStatus(status: string | null | undefined): boolean {
   return status === 'voided' || status === 'cancelled';
 }
 
+const OVERVIEW_TOP_SKUS = 6;
+const OVERVIEW_LINE_CHUNK = 80;
+
+interface SalesSkuTotal {
+  label: string;
+  qty: number;
+}
+
+interface SalesOverview {
+  postedJournals: number;
+  voidedJournals: number;
+  unitsSold: number;
+  skuCount: number;
+  lastBusinessDate: string | null;
+  topSkus: SalesSkuTotal[];
+}
+
+function emptySalesOverview(): SalesOverview {
+  return {
+    postedJournals: 0,
+    voidedJournals: 0,
+    unitsSold: 0,
+    skuCount: 0,
+    lastBusinessDate: null,
+    topSkus: [],
+  };
+}
+
+function formatSoldQty(n: number): string {
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function salesPeriodLabel(range: DateRange | null): string {
+  if (!range) return 'All time';
+  const a = formatDateForInput(range.start);
+  const b = formatDateForInput(range.end);
+  return a === b ? a : `${a} → ${b}`;
+}
+
 /** Group fetched lines under each journal id, ordered by created_at per journal. */
 function linesByJournalFromDb(
   rows: {
@@ -197,6 +236,8 @@ export function Sales() {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [includeVoided, setIncludeVoided] = useState(false);
+  const [overview, setOverview] = useState<SalesOverview>(() => emptySalesOverview());
+  const [overviewLoading, setOverviewLoading] = useState(false);
 
   const [fifoSkus, setFifoSkus] = useState<string[]>([]);
   const [fifoSkusLoading, setFifoSkusLoading] = useState(false);
@@ -204,6 +245,7 @@ export function Sales() {
   const [fifoQtySold, setFifoQtySold] = useState(0);
   const [fifoPosting, setFifoPosting] = useState(false);
   const fifoSkusGenRef = useRef(0);
+  const overviewGenRef = useRef(0);
 
   const [journalModalOpen, setJournalModalOpen] = useState(false);
   const [modalJournalId, setModalJournalId] = useState<string | null>(null);
@@ -428,6 +470,98 @@ export function Sales() {
     [journalDateRange, outletId, includeVoided]
   );
 
+  const loadOverview = useCallback(async () => {
+    const oid = outletId;
+    const gen = ++overviewGenRef.current;
+    if (!oid) {
+      setOverview(emptySalesOverview());
+      setOverviewLoading(false);
+      return;
+    }
+
+    setOverviewLoading(true);
+    try {
+      let jq = supabase
+        .from('sales_journals')
+        .select('id, status, business_date')
+        .eq('outlet_id', oid);
+      if (journalDateRange) {
+        jq = jq
+          .gte('business_date', formatDateForInput(journalDateRange.start))
+          .lte('business_date', formatDateForInput(journalDateRange.end));
+      }
+      const { data: journals, error: jErr } = await jq;
+      if (jErr) throw jErr;
+      if (gen !== overviewGenRef.current) return;
+
+      const rows = journals ?? [];
+      const posted = rows.filter((j) => j.status === 'posted');
+      const voidedJournals = rows.filter((j) => isVoidedSalesStatus(j.status)).length;
+      const postedIds = posted.map((j) => j.id);
+
+      const lineRows: {
+        product_batch: string;
+        quantity_sold: string | number;
+        lot?: { product_batch_label?: string | null; production_run?: unknown } | { product_batch_label?: string | null; production_run?: unknown }[] | null;
+      }[] = [];
+
+      for (let i = 0; i < postedIds.length; i += OVERVIEW_LINE_CHUNK) {
+        const slice = postedIds.slice(i, i + OVERVIEW_LINE_CHUNK);
+        const { data: jl, error: lErr } = await supabase
+          .from('sales_journal_lines')
+          .select(
+            'product_batch,quantity_sold,lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+          )
+          .in('sales_journal_id', slice);
+        if (lErr) throw lErr;
+        if (gen !== overviewGenRef.current) return;
+        lineRows.push(...(jl ?? []));
+      }
+
+      const bySku = new Map<string, number>();
+      let unitsSold = 0;
+      for (const ln of lineRows) {
+        const qty = Number(ln.quantity_sold);
+        if (!Number.isFinite(qty) || qty === 0) continue;
+        unitsSold += qty;
+        const lotLabel = nestedLotLabel(ln.lot as never);
+        const recipeSku = nestedRecipeSku(ln.lot);
+        const label =
+          skuForDisplay(lotLabel, ln.product_batch, recipeSku) ||
+          displayLotFirst(lotLabel, ln.product_batch) ||
+          String(ln.product_batch ?? '').trim() ||
+          '—';
+        bySku.set(label, (bySku.get(label) ?? 0) + qty);
+      }
+
+      const topSkus = [...bySku.entries()]
+        .map(([label, qty]) => ({ label, qty }))
+        .sort((a, b) => b.qty - a.qty || a.label.localeCompare(b.label))
+        .slice(0, OVERVIEW_TOP_SKUS);
+
+      let lastBusinessDate: string | null = null;
+      for (const j of posted) {
+        if (!lastBusinessDate || j.business_date > lastBusinessDate) lastBusinessDate = j.business_date;
+      }
+
+      if (gen !== overviewGenRef.current) return;
+      setOverview({
+        postedJournals: posted.length,
+        voidedJournals,
+        unitsSold,
+        skuCount: bySku.size,
+        lastBusinessDate,
+        topSkus,
+      });
+    } catch (err) {
+      console.error('[Sales] Failed to load overview:', err);
+      if (gen !== overviewGenRef.current) return;
+      setOverview(emptySalesOverview());
+    } finally {
+      if (gen === overviewGenRef.current) setOverviewLoading(false);
+    }
+  }, [outletId, journalDateRange]);
+
   async function handleLoadMoreHistory() {
     const start = history.length;
     setHistoryLoadingMore(true);
@@ -445,6 +579,10 @@ export function Sales() {
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    void loadOverview();
+  }, [loadOverview]);
 
   useEffect(() => {
     setHistoryLoadingMore(false);
@@ -546,6 +684,7 @@ export function Sales() {
       });
       setFifoQtySold(0);
       void loadHistory();
+      void loadOverview();
       await loadBatchesFromInventory({ afterPost: true });
       await refreshFifoSkus();
     } finally {
@@ -594,6 +733,7 @@ export function Sales() {
       const reloaded = await loadBatchesFromInventory({ afterPost: true });
       if (!reloaded) setLines(blankLines());
       void loadHistory();
+      void loadOverview();
     } finally {
       setSubmitting(false);
     }
@@ -618,6 +758,7 @@ export function Sales() {
       }
       setHistory((prev) => prev.filter((h) => h.id !== journalIdToDelete));
       const refreshed = await loadHistory();
+      void loadOverview();
       void refreshFifoSkus();
       closeJournalModal();
       setMessage({
@@ -660,6 +801,7 @@ export function Sales() {
       }
       setHistory((prev) => prev.filter((h) => h.id !== modalJournalId));
       await loadHistory();
+      void loadOverview();
       void refreshFifoSkus();
       closeJournalModal();
       setMessage({
@@ -690,16 +832,141 @@ export function Sales() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 p-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Outlet sales journal</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Post a <span className="font-medium text-gray-700">FIFO sale by SKU</span> for quick outlet
-          depletion. Manual batch lines allocate <span className="font-medium text-gray-700">FIFO across lot rows</span> by
-          expiry; lines loaded from inventory include a row id for exact traceability. Voiding a sale restores
-          outlet stock and keeps the old lines on file as <span className="font-medium text-gray-700">voided</span> (admin
-          only)—they no longer count as posted sales.
-        </p>
+    <div className="mx-auto max-w-4xl space-y-8 p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Outlet sales</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Snapshot of posted sales, then FIFO or manual journals. Voiding restores outlet stock and keeps the old
+            lines on file as <span className="font-medium text-gray-700">voided</span> (admin only).
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:items-end">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
+              <select
+                value={outletId}
+                onChange={(e) => setOutletId(e.target.value)}
+                className="min-w-[12rem] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+              >
+                {outlets.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <DateFilter
+              onFilterChange={(range) => setJournalDateRange(range)}
+              hint="Business date for overview and recent journals."
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold text-gray-800">Overview</h2>
+          <p className="text-xs text-gray-500">
+            {outlets.find((o) => o.id === outletId)?.name ?? 'Outlet'} · {salesPeriodLabel(journalDateRange)}
+            {overview.lastBusinessDate ? ` · last posted ${overview.lastBusinessDate}` : ''}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            {
+              icon: <CircleDollarSign size={18} />,
+              color: 'bg-violet-50 text-violet-600',
+              label: 'Units sold',
+              value: overviewLoading ? '…' : formatSoldQty(overview.unitsSold),
+              sub: 'Posted journals only',
+            },
+            {
+              icon: <FileText size={18} />,
+              color: 'bg-blue-50 text-blue-600',
+              label: 'Posted journals',
+              value: overviewLoading ? '…' : overview.postedJournals.toLocaleString(),
+              sub: 'Count in this period',
+            },
+            {
+              icon: <Package size={18} />,
+              color: 'bg-teal-50 text-teal-600',
+              label: 'SKUs sold',
+              value: overviewLoading ? '…' : overview.skuCount.toLocaleString(),
+              sub: 'Distinct SKUs / lots',
+            },
+            {
+              icon: <Ban size={18} />,
+              color: overview.voidedJournals > 0 ? 'bg-gray-100 text-gray-600' : 'bg-gray-50 text-gray-400',
+              label: 'Voided',
+              value: overviewLoading ? '…' : overview.voidedJournals.toLocaleString(),
+              sub: 'Reversed, not in units sold',
+            },
+          ].map((card) => (
+            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className={`mb-2 inline-flex rounded-lg p-2 ${card.color}`}>{card.icon}</div>
+              <p className="text-xl font-bold tabular-nums text-gray-900">{card.value}</p>
+              <p className="mt-0.5 text-xs font-medium text-gray-700">{card.label}</p>
+              <p className="text-[11px] text-gray-400">{card.sub}</p>
+            </div>
+          ))}
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+          <table className="w-full text-sm">
+            <thead className="border-b bg-gray-50">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Top SKUs</th>
+                <th className="px-4 py-2 text-right text-xs font-semibold text-gray-600">Units</th>
+                <th className="hidden w-28 px-4 py-2 text-right text-xs font-semibold text-gray-600 sm:table-cell">
+                  Share
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {overviewLoading ? (
+                <tr>
+                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400">
+                    Loading snapshot…
+                  </td>
+                </tr>
+              ) : overview.topSkus.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-4 py-6 text-center text-gray-400">
+                    No posted sales in this period
+                  </td>
+                </tr>
+              ) : (
+                overview.topSkus.map((sku) => {
+                  const share = overview.unitsSold > 0 ? (sku.qty / overview.unitsSold) * 100 : 0;
+                  return (
+                    <tr key={sku.label}>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-800 sm:text-sm">
+                        <span className="break-all">{sku.label}</span>
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums font-medium text-gray-900">
+                        {formatSoldQty(sku.qty)}
+                      </td>
+                      <td className="hidden px-4 py-2 sm:table-cell">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
+                            <div
+                              className="h-full rounded-full bg-violet-400"
+                              style={{ width: `${Math.min(100, share)}%` }}
+                            />
+                          </div>
+                          <span className="w-10 text-right text-xs tabular-nums text-gray-500">
+                            {share.toFixed(0)}%
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {message && (
@@ -713,32 +980,15 @@ export function Sales() {
       )}
 
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Outlet</label>
-            <select
-              value={outletId}
-              onChange={(e) => setOutletId(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              required
-            >
-              {outlets.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Business date</label>
-            <input
-              type="date"
-              value={businessDate}
-              onChange={(e) => setBusinessDate(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              required
-            />
-          </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Business date</label>
+          <input
+            type="date"
+            value={businessDate}
+            onChange={(e) => setBusinessDate(e.target.value)}
+            className="w-full max-w-xs rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            required
+          />
         </div>
 
         <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-4">
@@ -961,12 +1211,9 @@ export function Sales() {
               />
               Include voided
             </label>
-            <DateFilter onFilterChange={(range) => setJournalDateRange(range)} />
             <p className="max-w-xs text-xs text-gray-500 sm:text-right">
-              Filters the list by each journal&apos;s <strong className="font-medium text-gray-600">business date</strong>.
-              {' '}
-              Loads {HISTORY_PAGE_SIZE} at a time; use <strong className="font-medium text-gray-600">Next</strong> below
-              for older journals.
+              Same outlet and business-date filter as the overview. Loads {HISTORY_PAGE_SIZE} at a time; use{' '}
+              <strong className="font-medium text-gray-600">Next</strong> below for older journals.
             </p>
           </div>
         </div>
