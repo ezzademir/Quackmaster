@@ -232,13 +232,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function signOut() {
-    await supabase.auth.signOut();
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Sign out failed:', error);
+      }
+    } catch (e) {
+      console.error('Sign out failed:', e);
+    } finally {
+      setSession(null);
+      setProfile(null);
+      setProfileLoading(false);
+      setLoading(false);
+    }
   }
 
   async function refetchProfile() {
     if (session?.user) {
-      await defer(0);
-      await fetchProfile(session.user.id);
+      setProfileLoading(true);
+      try {
+        await defer(0);
+        await fetchProfile(session.user.id);
+      } finally {
+        setProfileLoading(false);
+      }
     }
   }
 
