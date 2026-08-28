@@ -7,6 +7,8 @@ import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } fro
 import type { Outlet } from '../types';
 import { getLast7Days, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
+import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
+import { firstOverAllocatedInventory, sumRequestedQtyById } from '../utils/wasteLineTotals';
 import { useAuth } from '../utils/auth';
 
 const HISTORY_PAGE_SIZE = 25;
@@ -30,6 +32,7 @@ interface HubPickRow {
   product_batch: string | null;
   lot_label: string | null;
   label: string;
+  available: number;
 }
 
 interface OutletPickRow {
@@ -38,6 +41,7 @@ interface OutletPickRow {
   lot_label: string | null;
   recipe_sku: string | null;
   label: string;
+  available: number;
 }
 
 interface LineHub {
@@ -119,7 +123,9 @@ export function Waste() {
       supabase.from('outlets').select('*').order('name'),
       supabase
         .from('hub_inventory')
-        .select('id, product_batch, raw_material_id, material:raw_material_id(name), lot:inventory_lots(product_batch_label)')
+        .select(
+          'id, product_batch, raw_material_id, quantity_on_hand, reserved_quantity, available_quantity, material:raw_material_id(name), lot:inventory_lots(product_batch_label)'
+        )
         .order('last_updated', { ascending: false }),
     ]);
     setOutlets(outs ?? []);
@@ -129,6 +135,9 @@ export function Waste() {
       const r = row as {
         id: string;
         product_batch: string | null;
+        quantity_on_hand?: number | null;
+        reserved_quantity?: number | null;
+        available_quantity?: number | null;
         material?: { name: string } | { name: string }[] | null;
         lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
       };
@@ -141,6 +150,11 @@ export function Waste() {
         product_batch: r.product_batch,
         lot_label: lotLabel,
         label: mn || formatLotWithSku(lotLabel, pb) || `Hub row ${r.id.slice(0, 8)}`,
+        available: hubRowAvailableQuantity(
+          Number(r.quantity_on_hand ?? 0),
+          Number(r.reserved_quantity ?? 0),
+          r.available_quantity
+        ),
       };
     });
     setHubRows(picks);
@@ -160,7 +174,9 @@ export function Waste() {
     void (async () => {
       const { data } = await supabase
         .from('outlet_inventory')
-        .select('id, product_batch, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))')
+        .select(
+          'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+        )
         .eq('outlet_id', outletId)
         .is('raw_material_id', null)
         .gt('quantity_on_hand', 0);
@@ -169,6 +185,9 @@ export function Waste() {
         const r = row as {
           id: string;
           product_batch: string | null;
+          quantity_on_hand?: number | null;
+          reserved_quantity?: number | null;
+          available_quantity?: number | null;
           lot?: unknown;
         };
         const pb = r.product_batch?.trim() || '';
@@ -180,6 +199,11 @@ export function Waste() {
           lot_label: lotLabel,
           recipe_sku: recipeSku,
           label: formatLotWithSku(lotLabel, pb, recipeSku) || pb,
+          available: hubRowAvailableQuantity(
+            Number(r.quantity_on_hand ?? 0),
+            Number(r.reserved_quantity ?? 0),
+            r.available_quantity
+          ),
         };
       });
       picks.sort((a, b) => a.label.localeCompare(b.label));
@@ -398,6 +422,18 @@ export function Waste() {
           setMessage({ tone: 'err', text: 'Add valid hub waste lines.' });
           return;
         }
+        const overHub = firstOverAllocatedInventory(
+          sumRequestedQtyById(payload.map((l) => ({ inventoryId: l.hub_inventory_id, quantity: l.quantity }))),
+          new Map(hubRows.map((r) => [r.id, r.available]))
+        );
+        if (overHub) {
+          const label = hubRows.find((r) => r.id === overHub.inventoryId)?.label ?? 'that lot';
+          setMessage({
+            tone: 'err',
+            text: `Combined waste on ${label} is ${overHub.requested} but only ${overHub.available} is available.`,
+          });
+          return;
+        }
         const res = await postWasteEvent({
           locationKind: 'hub',
           outletId: null,
@@ -427,6 +463,20 @@ export function Waste() {
           }));
         if (!payload.length) {
           setMessage({ tone: 'err', text: 'Add valid outlet waste lines.' });
+          return;
+        }
+        const overOutlet = firstOverAllocatedInventory(
+          sumRequestedQtyById(
+            payload.map((l) => ({ inventoryId: l.outlet_inventory_id ?? '', quantity: l.quantity }))
+          ),
+          new Map(outletRows.map((r) => [r.id, r.available]))
+        );
+        if (overOutlet) {
+          const label = outletRows.find((r) => r.id === overOutlet.inventoryId)?.label ?? 'that lot';
+          setMessage({
+            tone: 'err',
+            text: `Combined waste on ${label} is ${overOutlet.requested} but only ${overOutlet.available} is available.`,
+          });
           return;
         }
         const res = await postWasteEvent({
