@@ -15,6 +15,7 @@ import {
   type SalesJournalLineInput,
 } from '../utils/visibilityService';
 import { displayLotFirst, formatLotWithSku, isLegacyBatchCode, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
+import { firstSalesOverAllocation } from '../utils/salesLineAllocation';
 import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
@@ -23,6 +24,8 @@ interface LineRow extends SalesJournalLineInput {
   production_date_label: string | null;
   lot_label?: string | null;
   available_qty?: number;
+  recipe_sku?: string | null;
+  inventory_product_batch?: string | null;
 }
 
 const blankLines = (): LineRow[] => [
@@ -124,6 +127,8 @@ function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[
       outlet_inventory_id: row.id,
       production_date_label: formatProductionDateLabel(lot?.manufactured_at),
       lot_label: nestedLotLabel(lot as never),
+      recipe_sku: nestedRecipeSku(lot),
+      inventory_product_batch: batch,
       available_qty: avail,
     };
   });
@@ -719,15 +724,35 @@ export function Sales() {
       setMessage({ tone: 'err', text: 'Select an outlet.' });
       return;
     }
-    const cleaned = lines
-      .map((l) => ({
-        product_batch: l.product_batch.trim(),
-        quantity_sold: Number(l.quantity_sold),
-        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
-      }))
-      .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
+    const ready = lines.filter((l) => {
+      const qty = Number(l.quantity_sold);
+      return l.product_batch.trim() && Number.isFinite(qty) && qty > 0;
+    });
+    const cleaned = ready.map((l) => ({
+      product_batch: l.product_batch.trim(),
+      quantity_sold: Number(l.quantity_sold),
+      ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
+    }));
     if (!cleaned.length) {
       setMessage({ tone: 'err', text: 'Add at least one line with batch and quantity.' });
+      return;
+    }
+    const over = firstSalesOverAllocation(
+      ready.map((l) => ({
+        product_batch: l.product_batch.trim(),
+        quantity_sold: Number(l.quantity_sold),
+        outlet_inventory_id: l.outlet_inventory_id,
+        available_qty: l.available_qty,
+        lot_label: l.lot_label,
+        recipe_sku: l.recipe_sku,
+        inventory_product_batch: l.inventory_product_batch,
+      }))
+    );
+    if (over) {
+      setMessage({
+        tone: 'err',
+        text: `Not enough stock for ${over.identifier}: requested ${formatSoldQty(over.requested)}, available ${formatSoldQty(over.available)}. Combined lines on the same lot cannot exceed on-hand.`,
+      });
       return;
     }
     setSubmitting(true);
