@@ -18,6 +18,7 @@ const Production = lazy(() => import('./pages/Production').then((m) => ({ defaul
 const Inventory = lazy(() => import('./pages/Inventory').then((m) => ({ default: m.Inventory })));
 const Distribution = lazy(() => import('./pages/Distribution').then((m) => ({ default: m.Distribution })));
 const Sales = lazy(() => import('./pages/Sales').then((m) => ({ default: m.Sales })));
+const PosCompare = lazy(() => import('./pages/PosCompare').then((m) => ({ default: m.PosCompare })));
 const Waste = lazy(() => import('./pages/Waste').then((m) => ({ default: m.Waste })));
 const Genealogy = lazy(() => import('./pages/Genealogy').then((m) => ({ default: m.Genealogy })));
 const Ledger = lazy(() => import('./pages/Ledger').then((m) => ({ default: m.Ledger })));
@@ -70,6 +71,11 @@ function UsersGate() {
 function LedgerGate() {
   const { isAdmin } = useAuth();
   return isAdmin ? <Ledger /> : <Navigate to="/" replace />;
+}
+
+function PosCompareGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <PosCompare /> : <Navigate to="/" replace />;
 }
 
 function SettingsGate() {
@@ -152,6 +158,7 @@ function App() {
                 <Route path="/inventory/*" element={<Inventory />} />
                 <Route path="/distribution/*" element={<Distribution />} />
                 <Route path="/sales" element={<Sales />} />
+                <Route path="/pos-compare" element={<PosCompareGate />} />
                 <Route path="/waste" element={<Waste />} />
                 <Route path="/users" element={<UsersGate />} />
                 <Route path="/ledger" element={<LedgerGate />} />
