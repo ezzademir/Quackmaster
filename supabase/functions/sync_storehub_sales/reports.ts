@@ -2,6 +2,7 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import type {
   DiffStatus,
   ReportId,
+  ReportLot,
   ReportResult,
   ReportRow,
   ShEmployee,
@@ -15,6 +16,7 @@ const TZ = "Asia/Kuala_Lumpur";
 const QTY_EPS = 0.0001;
 
 const AVAILABLE: ReportId[] = [
+  "sold_vs_supplied",
   "sales_over_time",
   "sales_by_product",
   "sales_by_category",
@@ -123,8 +125,11 @@ function recipeSkuFromLotRow(lot: {
   return skuFromLabel(String(lot.product_batch_label ?? ""));
 }
 
-async function loadLotSkus(admin: SupabaseClient, lotIds: string[]): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+async function loadLotInfo(
+  admin: SupabaseClient,
+  lotIds: string[],
+): Promise<Map<string, { sku: string; label: string }>> {
+  const map = new Map<string, { sku: string; label: string }>();
   const ids = [...new Set(lotIds.filter(Boolean))];
   for (let i = 0; i < ids.length; i += 200) {
     const slice = ids.slice(i, i + 200);
@@ -135,10 +140,38 @@ async function loadLotSkus(admin: SupabaseClient, lotIds: string[]): Promise<Map
     if (error) throw new Error(error.message);
     for (const row of data ?? []) {
       const sku = recipeSkuFromLotRow(row as { product_batch_label?: string | null; production_run?: unknown });
-      if (sku) map.set(row.id as string, sku);
+      if (!sku) continue;
+      const raw = String(row.product_batch_label ?? "").trim();
+      const label = raw && !isLegacyBatch(raw) ? raw : sku;
+      map.set(row.id as string, { sku, label });
     }
   }
   return map;
+}
+
+async function loadLotSkus(admin: SupabaseClient, lotIds: string[]): Promise<Map<string, string>> {
+  const info = await loadLotInfo(admin, lotIds);
+  const map = new Map<string, string>();
+  for (const [id, v] of info) map.set(id, v.sku);
+  return map;
+}
+
+function lotDisplayLabel(
+  lotId: string | null,
+  productBatch: string,
+  info: Map<string, { sku: string; label: string }>,
+): string {
+  if (lotId) {
+    const m = info.get(lotId);
+    if (m?.label && !isLegacyBatch(m.label)) return m.label;
+  }
+  const pb = productBatch.trim();
+  if (pb && !isLegacyBatch(pb)) return pb;
+  if (lotId) {
+    const sku = info.get(lotId)?.sku;
+    if (sku) return sku;
+  }
+  return skuFromLabel(pb) ?? "Unidentified lot";
 }
 
 function resolveLineSku(line: { lot_id: string | null; product_batch: string }, lotSkus: Map<string, string>): string {
@@ -212,6 +245,8 @@ function emptyTotals() {
     posQty: 0,
     posRm: 0,
     dashQty: 0,
+    suppliedQty: 0,
+    leftoverQty: 0,
     match: 0,
     qty_mismatch: 0,
     missing_in_dashboard: 0,
@@ -226,6 +261,8 @@ function finish(rows: ReportRow[], extra: Partial<ReportResult> & Pick<ReportRes
     totals.posQty += r.posQty ?? 0;
     totals.posRm += r.posRm ?? 0;
     totals.dashQty += r.dashQty ?? 0;
+    totals.suppliedQty += r.suppliedQty ?? 0;
+    totals.leftoverQty += r.leftoverQty ?? 0;
     totals[r.status] += 1;
   }
   return {
@@ -361,6 +398,190 @@ function channelFromNotes(notes: string | null): string {
   return "unknown";
 }
 
+function skuLabel(sku: string, productMeta: Map<string, { sku: string; name: string }>): string {
+  for (const meta of productMeta.values()) {
+    if (meta.sku === sku) return `${sku} · ${meta.name}`;
+  }
+  return sku;
+}
+
+async function loadSupplyMovements(
+  admin: SupabaseClient,
+  outletIds: string[],
+  from: string,
+  to: string,
+): Promise<Array<{ signed_qty: number; lot_id: string | null; product_batch: string }>> {
+  const out: Array<{ signed_qty: number; lot_id: string | null; product_batch: string }> = [];
+  const page = 1000;
+  let offset = 0;
+  while (true) {
+    let q = admin
+      .from("outlet_stock_movements")
+      .select("signed_qty, outlet_inventory:outlet_inventory_id(lot_id, product_batch)")
+      .in("movement_type", ["supply_in", "transfer_in"])
+      .gte("business_date", from)
+      .lte("business_date", to)
+      .range(offset, offset + page - 1);
+    if (outletIds.length === 1) q = q.eq("outlet_id", outletIds[0]);
+    else if (outletIds.length > 1) q = q.in("outlet_id", outletIds);
+    else break;
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const rows = data ?? [];
+    for (const row of rows) {
+      const inv = firstEmbed(
+        row.outlet_inventory as
+          | { lot_id?: string | null; product_batch?: string | null }
+          | Array<{ lot_id?: string | null; product_batch?: string | null }>
+          | null,
+      );
+      out.push({
+        signed_qty: num(row.signed_qty),
+        lot_id: (inv?.lot_id as string | null) ?? null,
+        product_batch: String(inv?.product_batch ?? ""),
+      });
+    }
+    if (rows.length < page) break;
+    offset += page;
+  }
+  return out;
+}
+
+function soldVsSuppliedStatus(posQty: number, soldQty: number): DiffStatus {
+  if (qtyEq(posQty, soldQty)) return "match";
+  if (posQty > 0 && soldQty === 0) return "missing_in_dashboard";
+  if (posQty === 0 && soldQty > 0) return "extra_in_dashboard";
+  return "qty_mismatch";
+}
+
+async function soldVsSuppliedReport(opts: {
+  admin: SupabaseClient;
+  selectedSkus: string[];
+  from: string;
+  to: string;
+  txns: ShTxn[];
+  journals: JournalLine[];
+  outletIds: string[];
+  productToSku: Map<string, string>;
+  productMeta: Map<string, { sku: string; name: string }>;
+  productsById: Map<string, ShProduct>;
+}): Promise<ReportResult> {
+  const selected = [...new Set(opts.selectedSkus.map((s) => s.trim()).filter(Boolean))].slice(0, 150);
+  if (selected.length === 0) {
+    return finish([], {
+      report: "sold_vs_supplied",
+      from: opts.from,
+      to: opts.to,
+      error: "Pick at least one product.",
+      posOnly: false,
+    });
+  }
+
+  const pos = new Map<string, { qty: number; rm: number }>();
+  for (const txn of opts.txns) {
+    if (!isSale(txn)) continue;
+    for (const item of txn.items ?? []) {
+      if (String(item.itemType ?? "Item") !== "Item") continue;
+      const pid = String(item.productId ?? "").trim();
+      if (!pid) continue;
+      const mapped = posItemSku(pid, opts.productToSku, opts.productsById.get(pid), opts.productMeta);
+      if (!selected.includes(mapped.key)) continue;
+      const cur = pos.get(mapped.key) ?? { qty: 0, rm: 0 };
+      cur.qty += num(item.quantity);
+      cur.rm += num(item.total ?? item.subTotal);
+      pos.set(mapped.key, cur);
+    }
+  }
+
+  const sold = new Map<string, number>();
+  const lotSold = new Map<string, Map<string, { label: string; sold: number; supplied: number }>>();
+  const journalLotIds = opts.journals.map((l) => l.lot_id).filter((id): id is string => Boolean(id));
+
+  const supplyRows = opts.outletIds.length
+    ? await loadSupplyMovements(opts.admin, opts.outletIds, opts.from, opts.to)
+    : [];
+  const supplyLotIds = supplyRows.map((r) => r.lot_id).filter((id): id is string => Boolean(id));
+  const lotInfo = await loadLotInfo(opts.admin, [...journalLotIds, ...supplyLotIds]);
+
+  function lotBucket(sku: string, lotId: string | null, productBatch: string) {
+    let byLot = lotSold.get(sku);
+    if (!byLot) {
+      byLot = new Map();
+      lotSold.set(sku, byLot);
+    }
+    const label = lotDisplayLabel(lotId, productBatch, lotInfo);
+    const key = lotId || label;
+    const cur = byLot.get(key) ?? { label, sold: 0, supplied: 0 };
+    byLot.set(key, cur);
+    return cur;
+  }
+
+  for (const line of opts.journals) {
+    if (line.quantity_sold <= 0) continue;
+    const sku = line.recipe_sku;
+    if (!selected.includes(sku)) continue;
+    sold.set(sku, (sold.get(sku) ?? 0) + line.quantity_sold);
+    lotBucket(sku, line.lot_id, line.product_batch).sold += line.quantity_sold;
+  }
+
+  const supplied = new Map<string, number>();
+  const skuByLot = new Map<string, string>();
+  for (const [id, v] of lotInfo) skuByLot.set(id, v.sku);
+  for (const row of supplyRows) {
+    const sku = resolveLineSku(
+      { lot_id: row.lot_id, product_batch: row.product_batch },
+      skuByLot,
+    );
+    if (!selected.includes(sku)) continue;
+    const qty = Math.abs(row.signed_qty);
+    if (qty <= 0) continue;
+    supplied.set(sku, (supplied.get(sku) ?? 0) + qty);
+    lotBucket(sku, row.lot_id, row.product_batch).supplied += qty;
+  }
+
+  const rows: ReportRow[] = selected.map((sku) => {
+    const posQty = pos.get(sku)?.qty ?? 0;
+    const posRm = pos.get(sku)?.rm ?? 0;
+    const dashQty = sold.get(sku) ?? 0;
+    const suppliedQty = supplied.get(sku) ?? 0;
+    const leftoverQty = suppliedQty - dashQty;
+    const lots: ReportLot[] = [...(lotSold.get(sku)?.values() ?? [])]
+      .filter((l) => l.sold > 0 || l.supplied > 0)
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((l) => ({ label: l.label, supplied: l.supplied, sold: l.sold }));
+    return {
+      key: sku,
+      label: skuLabel(sku, opts.productMeta),
+      posQty,
+      posRm,
+      dashQty,
+      suppliedQty,
+      leftoverQty,
+      posVsSold: posQty - dashQty,
+      lots,
+      status: soldVsSuppliedStatus(posQty, dashQty),
+    };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+
+  return finish(rows, {
+    report: "sold_vs_supplied",
+    from: opts.from,
+    to: opts.to,
+    posOnly: false,
+    notice:
+      "Leftover is supplied minus posted Outlet sales (ignores opening stock and waste). Full stock equation is on Reconciliation. Lots are ERP-only; StoreHub tickets have no batch numbers.",
+    columns: [
+      { key: "label", label: "Product" },
+      { key: "posQty", label: "SHPOS sold" },
+      { key: "dashQty", label: "QMERP sold" },
+      { key: "suppliedQty", label: "QMERP supplied" },
+      { key: "leftoverQty", label: "Leftover" },
+      { key: "posVsSold", label: "POS vs sold" },
+      { key: "status", label: "Status" },
+    ],
+  });
+}
+
 export async function handleReport(opts: {
   admin: SupabaseClient;
   get: ShGet;
@@ -370,6 +591,7 @@ export async function handleReport(opts: {
   to?: string;
   storeId?: string;
   viewBy?: string;
+  skus?: string[];
 }): Promise<ReportResult> {
   const report = opts.report as ReportId;
   if (!AVAILABLE.includes(report)) {
@@ -448,6 +670,7 @@ export async function handleReport(opts: {
     report === "sales_by_product" ||
     report === "sales_by_category" ||
     report === "sales_by_sku" ||
+    report === "sold_vs_supplied" ||
     report === "stock_value"
   ) {
     const products = await opts.get<ShProduct[]>("/products");
@@ -494,6 +717,21 @@ export async function handleReport(opts: {
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
         : "SHPOS qty is units on completed tickets (cancels excluded). QMERP qty is posted outlet sales units.",
+    });
+  }
+
+  if (report === "sold_vs_supplied") {
+    return soldVsSuppliedReport({
+      admin: opts.admin,
+      selectedSkus: opts.skus ?? [],
+      from,
+      to,
+      txns,
+      journals,
+      outletIds,
+      productToSku,
+      productMeta,
+      productsById,
     });
   }
 

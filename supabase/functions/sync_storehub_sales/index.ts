@@ -561,6 +561,7 @@ Deno.serve(async (req: Request) => {
       report?: string;
       storeId?: string;
       viewBy?: string;
+      skus?: string[];
     };
     const action = body.action ?? "status";
 
@@ -629,6 +630,7 @@ Deno.serve(async (req: Request) => {
         to: body.to,
         storeId: body.storeId,
         viewBy: body.viewBy,
+        skus: Array.isArray(body.skus) ? body.skus.map((s) => String(s)) : undefined,
       });
       return jsonResponse(result, req);
     }

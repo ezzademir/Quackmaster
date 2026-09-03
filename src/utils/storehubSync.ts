@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 export type StorehubAction = 'status' | 'catalog' | 'sync' | 'report';
 
 export type StorehubReportId =
+  | 'sold_vs_supplied'
   | 'sales_over_time'
   | 'sales_by_product'
   | 'sales_by_category'
@@ -36,6 +37,7 @@ export interface StorehubReportOption {
 
 /** Full StoreHub BackOffice report map. Unavailable items stay visible but cannot be run. */
 export const STOREHUB_REPORTS: StorehubReportOption[] = [
+  { id: 'sold_vs_supplied', group: 'Sales & Transaction', label: 'Sold vs supplied', available: true },
   { id: 'sales_by_sku', group: 'Sales & Transaction', label: 'Sales by Variant / SKU', available: true },
   { id: 'sales_over_time', group: 'Sales & Transaction', label: 'Sales Over Time', available: true },
   { id: 'sales_by_product', group: 'Sales & Transaction', label: 'Sales by Product', available: true },
@@ -92,12 +94,22 @@ export const STOREHUB_REPORTS: StorehubReportOption[] = [
   },
 ];
 
+export interface StorehubReportLot {
+  label: string;
+  supplied: number;
+  sold: number;
+}
+
 export interface StorehubReportRow {
   key: string;
   label: string;
   posQty: number | null;
   posRm: number | null;
   dashQty: number | null;
+  suppliedQty?: number | null;
+  leftoverQty?: number | null;
+  posVsSold?: number | null;
+  lots?: StorehubReportLot[];
   status: StorehubDiffStatus;
   detail?: string;
 }
@@ -116,6 +128,8 @@ export interface StorehubReportResult {
     posQty: number;
     posRm: number;
     dashQty: number;
+    suppliedQty?: number;
+    leftoverQty?: number;
     match: number;
     qty_mismatch: number;
     missing_in_dashboard: number;
@@ -182,7 +196,7 @@ async function functionErrorMessage(
 
 export async function invokeStorehub<T>(
   action: StorehubAction,
-  extra?: { from?: string; to?: string; report?: string; storeId?: string; viewBy?: string }
+  extra?: { from?: string; to?: string; report?: string; storeId?: string; viewBy?: string; skus?: string[] }
 ): Promise<{ data: T | null; error: string | null }> {
   const { data, error } = await supabase.functions.invoke<T & { error?: string }>(
     'sync_storehub_sales',

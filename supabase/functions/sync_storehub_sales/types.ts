@@ -71,6 +71,7 @@ export interface ShStock {
 }
 
 export type ReportId =
+  | "sold_vs_supplied"
   | "sales_over_time"
   | "sales_by_product"
   | "sales_by_category"
@@ -94,12 +95,22 @@ export type DiffStatus =
   | "extra_in_dashboard"
   | "pos_only";
 
+export interface ReportLot {
+  label: string;
+  supplied: number;
+  sold: number;
+}
+
 export interface ReportRow {
   key: string;
   label: string;
   posQty: number | null;
   posRm: number | null;
   dashQty: number | null;
+  suppliedQty?: number | null;
+  leftoverQty?: number | null;
+  posVsSold?: number | null;
+  lots?: ReportLot[];
   status: DiffStatus;
   detail?: string;
 }
@@ -119,6 +130,8 @@ export interface ReportResult {
     posQty: number;
     posRm: number;
     dashQty: number;
+    suppliedQty: number;
+    leftoverQty: number;
     match: number;
     qty_mismatch: number;
     missing_in_dashboard: number;
