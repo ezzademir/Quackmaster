@@ -115,7 +115,7 @@ export function PosCompare() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="POS vs dashboard"
+        title="SHPOS vs QMERP"
         description="Rebuild a StoreHub BackOffice report from the POS API and flag rows that are missing or different in Quackmaster journals."
       />
 
