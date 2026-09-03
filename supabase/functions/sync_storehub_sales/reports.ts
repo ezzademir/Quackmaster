@@ -398,11 +398,38 @@ function channelFromNotes(notes: string | null): string {
   return "unknown";
 }
 
-function skuLabel(sku: string, productMeta: Map<string, { sku: string; name: string }>): string {
-  for (const meta of productMeta.values()) {
-    if (meta.sku === sku) return `${sku} · ${meta.name}`;
+function skuLabel(
+  sku: string,
+  productMeta: Map<string, { sku: string; name: string }>,
+  productsById?: Map<string, ShProduct>,
+  recipeNames?: Map<string, string>,
+): string {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string | undefined) => {
+    const name = (raw ?? "").trim();
+    if (!name || name.toLowerCase() === sku.toLowerCase() || seen.has(name.toLowerCase())) return;
+    seen.add(name.toLowerCase());
+    names.push(name);
+  };
+
+  if (sku.startsWith("unmapped:") && productsById) {
+    add(productsById.get(sku.slice("unmapped:".length))?.name);
+    if (names.length) return names[0];
   }
-  return sku;
+  for (const meta of productMeta.values()) {
+    if (meta.sku === sku || meta.sku.toLowerCase() === sku.toLowerCase()) add(meta.name);
+  }
+  if (productsById) {
+    const matches = [...productsById.values()].filter((p) =>
+      (p.sku ?? "").trim().toLowerCase() === sku.toLowerCase()
+    );
+    matches.sort((a, b) => Number(Boolean(b.isParentProduct)) - Number(Boolean(a.isParentProduct)));
+    for (const p of matches) add(p.name);
+  }
+  add(recipeNames?.get(sku));
+  if (names.length === 0) return sku;
+  return `${sku} · ${names.join(", ")}`;
 }
 
 async function loadSupplyMovements(
@@ -477,7 +504,16 @@ async function soldVsSuppliedReport(opts: {
     });
   }
 
+  const { data: recipes } = await opts.admin.from("recipes").select("name, default_product_batch");
+  const recipeNames = new Map<string, string>();
+  for (const r of recipes ?? []) {
+    const sku = String(r.default_product_batch ?? "").trim();
+    const name = String(r.name ?? "").trim();
+    if (sku && name) recipeNames.set(sku, name);
+  }
+
   const pos = new Map<string, { qty: number; rm: number }>();
+  const posLabels = new Map<string, string>();
   for (const txn of opts.txns) {
     if (!isSale(txn)) continue;
     for (const item of txn.items ?? []) {
@@ -486,6 +522,7 @@ async function soldVsSuppliedReport(opts: {
       if (!pid) continue;
       const mapped = posItemSku(pid, opts.productToSku, opts.productsById.get(pid), opts.productMeta);
       if (!selected.includes(mapped.key)) continue;
+      if (mapped.label && mapped.label !== mapped.key) posLabels.set(mapped.key, mapped.label);
       const cur = pos.get(mapped.key) ?? { qty: 0, rm: 0 };
       cur.qty += num(item.quantity);
       cur.rm += num(item.total ?? item.subTotal);
@@ -551,7 +588,7 @@ async function soldVsSuppliedReport(opts: {
       .map((l) => ({ label: l.label, supplied: l.supplied, sold: l.sold }));
     return {
       key: sku,
-      label: skuLabel(sku, opts.productMeta),
+      label: posLabels.get(sku) ?? skuLabel(sku, opts.productMeta, opts.productsById, recipeNames),
       posQty,
       posRm,
       dashQty,
