@@ -466,7 +466,7 @@ async function soldVsSuppliedReport(opts: {
   productMeta: Map<string, { sku: string; name: string }>;
   productsById: Map<string, ShProduct>;
 }): Promise<ReportResult> {
-  const selected = [...new Set(opts.selectedSkus.map((s) => s.trim()).filter(Boolean))].slice(0, 150);
+  const selected = [...new Set(opts.selectedSkus.map((s) => s.trim()).filter(Boolean))].slice(0, 400);
   if (selected.length === 0) {
     return finish([], {
       report: "sold_vs_supplied",
