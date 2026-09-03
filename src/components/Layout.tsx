@@ -19,6 +19,7 @@ import {
   ClipboardList,
   ClipboardCheck,
   GitBranch,
+  BarChart3,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 
@@ -36,6 +37,8 @@ const outletNav = [
   { path: '/waste', label: 'Waste', icon: Trash2, exact: true },
   { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
 ];
+
+const posCompareNav = [{ path: '/pos-compare', label: 'POS vs dashboard', icon: BarChart3, exact: true }];
 
 const findNav = [{ path: '/genealogy', label: 'Lot trace', icon: GitBranch, exact: true }];
 
@@ -178,7 +181,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <>
               <NavSection title="Overview" collapsed={collapsed} items={mainNav} />
               <NavSection title="Hub" collapsed={collapsed} items={hubNav} />
-              <NavSection title="Outlets" collapsed={collapsed} items={outletNav} />
+              <NavSection title="Outlets" collapsed={collapsed} items={[...outletNav, ...(isAdmin ? posCompareNav : [])]} />
               <NavSection title="Find" collapsed={collapsed} items={findNav} />
               {isAdmin && (
                 <>

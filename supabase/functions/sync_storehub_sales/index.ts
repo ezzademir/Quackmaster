@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { handleReport } from "./reports.ts";
+import type { ShProduct, ShStore, ShTxn } from "./types.ts";
 
 const STOREHUB_HOST = "https://api.storehubhq.com";
 const MIN_INTERVAL_MS = 350;
@@ -49,35 +51,6 @@ function addDays(isoDate: string, days: number): string {
 
 function todayMy(): string {
   return malaysiaDate(new Date());
-}
-
-interface ShStore {
-  id: string;
-  name?: string;
-}
-
-interface ShProduct {
-  id: string;
-  name?: string;
-  sku?: string;
-  isParentProduct?: boolean;
-}
-
-interface ShItem {
-  productId?: string;
-  quantity?: number;
-  itemType?: string;
-}
-
-interface ShTxn {
-  refId?: string;
-  invoiceNumber?: string;
-  storeId?: string;
-  transactionType?: string;
-  transactionTime?: string;
-  isCancelled?: boolean;
-  channel?: string;
-  items?: ShItem[];
 }
 
 class StoreHubClient {
@@ -248,6 +221,42 @@ async function fetchTransactions(
   });
   const rows = await sh.get<ShTxn[]>(`/transactions?${qs.toString()}`);
   return Array.isArray(rows) ? rows : [];
+}
+
+async function fetchTransactionsWindowed(
+  sh: StoreHubClient,
+  storeId: string,
+  from: string,
+  to: string,
+): Promise<ShTxn[]> {
+  const out: ShTxn[] = [];
+  let windowFrom = from;
+  const windowTo = to;
+  let safety = 0;
+  while (windowFrom <= windowTo && safety < 40) {
+    safety += 1;
+    const txns = await fetchTransactions(sh, storeId, windowFrom, windowTo);
+    if (txns.length >= MAX_TXNS && windowFrom < windowTo) {
+      const mid = addDays(
+        windowFrom,
+        Math.max(
+          0,
+          Math.floor(
+            (Date.parse(`${windowTo}T00:00:00Z`) - Date.parse(`${windowFrom}T00:00:00Z`)) /
+              86400000 /
+              2,
+          ),
+        ),
+      );
+      const leftTo = mid < windowTo ? mid : windowFrom;
+      out.push(...await fetchTransactions(sh, storeId, windowFrom, leftTo));
+      windowFrom = addDays(leftTo, 1);
+      continue;
+    }
+    out.push(...txns);
+    break;
+  }
+  return out;
 }
 
 async function processTxn(
@@ -549,6 +558,9 @@ Deno.serve(async (req: Request) => {
       action?: string;
       from?: string;
       to?: string;
+      report?: string;
+      storeId?: string;
+      viewBy?: string;
     };
     const action = body.action ?? "status";
 
@@ -598,7 +610,27 @@ Deno.serve(async (req: Request) => {
         fromCron: auth.fromCron,
         userId: auth.userId,
       });
-      return jsonResponse(result, req, result.error ? 500 : 200);
+      // Always 2xx once the run row is written so the browser shows result.error
+      // instead of supabase-js's generic "non-2xx status code" message.
+      return jsonResponse(result, req);
+    }
+
+    if (action === "report") {
+      if (auth.fromCron) {
+        return jsonResponse({ error: "Report compare is admin-only" }, req, 403);
+      }
+      const admin = makeAdminClient();
+      const result = await handleReport({
+        admin,
+        get: (path) => sh.get(path),
+        fetchTxns: (storeId, from, to) => fetchTransactionsWindowed(sh, storeId, from, to),
+        report: body.report ?? "",
+        from: body.from,
+        to: body.to,
+        storeId: body.storeId,
+        viewBy: body.viewBy,
+      });
+      return jsonResponse(result, req);
     }
 
     return jsonResponse({ error: "Unknown action" }, req, 400);

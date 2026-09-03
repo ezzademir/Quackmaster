@@ -150,14 +150,16 @@ export function StorehubSettings() {
           storehub_name: p.name || null,
           updated_at: new Date().toISOString(),
         }));
-      if (storeRows.length) {
-        const { error } = await supabase.from('storehub_store_map').upsert(storeRows);
-        if (error) throw error;
+      if (storeRows.length === 0) {
+        throw new Error('Pick an outlet for at least one StoreHub store, then Save maps.');
       }
-      if (productRows.length) {
-        const { error } = await supabase.from('storehub_product_map').upsert(productRows);
-        if (error) throw error;
+      const { error: storeErr } = await supabase.from('storehub_store_map').upsert(storeRows);
+      if (storeErr) throw storeErr;
+      if (productRows.length === 0) {
+        throw new Error('Enter a Quackmaster SKU for at least one product (e.g. QUACKTEOW), then Save maps.');
       }
+      const { error: productErr } = await supabase.from('storehub_product_map').upsert(productRows);
+      if (productErr) throw productErr;
       setNotice({
         tone: 'ok',
         text: `Saved ${storeRows.length} store map(s) and ${productRows.length} product map(s).`,
@@ -170,7 +172,17 @@ export function StorehubSettings() {
     }
   }
 
+  const mappedStoreCount = Object.values(storeOutlet).filter(Boolean).length;
+  const mappedProductCount = Object.values(productSku).filter((v) => v.trim()).length;
+
   async function runSync() {
+    if (mappedStoreCount === 0 || mappedProductCount === 0) {
+      setNotice({
+        tone: 'err',
+        text: 'Map stores to outlets and products to SKUs, click Save maps, then Sync now.',
+      });
+      return;
+    }
     setBusy('sync');
     setNotice(null);
     const { data, error } = await invokeStorehub<{
@@ -183,16 +195,15 @@ export function StorehubSettings() {
       error?: string;
     }>('sync', { from, to });
     setBusy(null);
-    if (error && !data) {
+    if (error) {
       setNotice({ tone: 'err', text: error });
+      await loadStatus();
+      await loadLocal();
       return;
     }
-    const failMsg = data?.error;
     setNotice({
-      tone: failMsg ? 'err' : 'ok',
-      text: failMsg
-        ? failMsg
-        : `Sync ${data?.from} → ${data?.to}: ${data?.sales_ingested ?? 0} sales, ${data?.cancelled ?? 0} cancelled, ${data?.returns_flagged ?? 0} returns to review, ${data?.failed ?? 0} failed.`,
+      tone: 'ok',
+      text: `Sync ${data?.from} → ${data?.to}: ${data?.sales_ingested ?? 0} sales, ${data?.cancelled ?? 0} cancelled, ${data?.returns_flagged ?? 0} returns to review, ${data?.failed ?? 0} failed.`,
     });
     await loadStatus();
     await loadLocal();
@@ -343,6 +354,10 @@ export function StorehubSettings() {
         >
           {busy === 'sync' ? 'Syncing…' : 'Sync now'}
         </button>
+        <p className="text-xs text-gray-500">
+          {mappedStoreCount} store{mappedStoreCount === 1 ? '' : 's'} and {mappedProductCount} product
+          {mappedProductCount === 1 ? '' : 's'} mapped — save before syncing.
+        </p>
       </div>
 
       <div>
