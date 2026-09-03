@@ -91,10 +91,84 @@ function qtyEq(a: number | null, b: number | null): boolean {
   return Math.abs(a - b) < QTY_EPS;
 }
 
-function skuFromLot(batch: string): string {
-  const t = batch.trim();
+function isLegacyBatch(value: string): boolean {
+  return /^BATCH-[0-9a-f-]+$/i.test(value.trim());
+}
+
+function skuFromLabel(value: string): string | null {
+  const t = value.trim();
+  if (!t || isLegacyBatch(t)) return null;
   const m = t.match(/^(.+)-\d{6}-\d+$/);
   return m ? m[1] : t;
+}
+
+function firstEmbed<T>(v: T | T[] | null | undefined): T | null {
+  if (v == null) return null;
+  return Array.isArray(v) ? (v[0] ?? null) : v;
+}
+
+function recipeSkuFromLotRow(lot: {
+  product_batch_label?: string | null;
+  production_run?: unknown;
+}): string | null {
+  const run = firstEmbed(
+    lot.production_run as
+      | { recipe?: { default_product_batch?: string | null } | Array<{ default_product_batch?: string | null }> }
+      | Array<{ recipe?: { default_product_batch?: string | null } | Array<{ default_product_batch?: string | null }> }>
+      | null,
+  );
+  const rec = firstEmbed(run?.recipe);
+  const fromRecipe = (rec?.default_product_batch ?? "").trim();
+  if (fromRecipe && !isLegacyBatch(fromRecipe)) return fromRecipe;
+  return skuFromLabel(String(lot.product_batch_label ?? ""));
+}
+
+async function loadLotSkus(admin: SupabaseClient, lotIds: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const ids = [...new Set(lotIds.filter(Boolean))];
+  for (let i = 0; i < ids.length; i += 200) {
+    const slice = ids.slice(i, i + 200);
+    const { data, error } = await admin
+      .from("inventory_lots")
+      .select("id, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch))")
+      .in("id", slice);
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      const sku = recipeSkuFromLotRow(row as { product_batch_label?: string | null; production_run?: unknown });
+      if (sku) map.set(row.id as string, sku);
+    }
+  }
+  return map;
+}
+
+function resolveLineSku(line: { lot_id: string | null; product_batch: string }, lotSkus: Map<string, string>): string {
+  if (line.lot_id) {
+    const fromLot = lotSkus.get(line.lot_id);
+    if (fromLot) return fromLot;
+  }
+  return skuFromLabel(line.product_batch) ?? "Unidentified lot";
+}
+
+function posItemSku(
+  pid: string,
+  productToSku: Map<string, string>,
+  prod: ShProduct | undefined,
+  productMeta: Map<string, { sku: string; name: string }>,
+): { key: string; label: string } {
+  const mapped = (productToSku.get(pid) ?? "").trim();
+  const name = prod?.name || productMeta.get(pid)?.name || pid;
+  if (mapped && !isLegacyBatch(mapped)) return { key: mapped, label: `${mapped} · ${name}` };
+  const shSku = (prod?.sku ?? "").trim();
+  if (shSku && !isLegacyBatch(shSku)) return { key: shSku, label: `${shSku} · ${name}` };
+  return { key: `unmapped:${pid}`, label: name };
+}
+
+function grainView(viewBy: ViewBy): ViewBy {
+  return viewBy === "hour" ? "day" : viewBy;
+}
+
+function skuBucketKey(isoDate: string, sku: string, viewBy: ViewBy): string {
+  return `${bucketKey(isoDate, "00", grainView(viewBy))} · ${sku}`;
 }
 
 function itemQty(txn: ShTxn): number {
@@ -166,7 +240,7 @@ function finish(rows: ReportRow[], extra: Partial<ReportResult> & Pick<ReportRes
       { key: "label", label: "Row" },
       { key: "posQty", label: "POS qty" },
       { key: "posRm", label: "POS RM" },
-      { key: "dashQty", label: "Dashboard qty" },
+      { key: "dashQty", label: "QMERP qty" },
       { key: "status", label: "Status" },
     ],
     rows,
@@ -214,6 +288,7 @@ interface JournalLine {
   quantity_sold: number;
   product_batch: string;
   lot_id: string | null;
+  recipe_sku: string;
 }
 
 async function loadJournals(
@@ -234,7 +309,7 @@ async function loadJournals(
   const { data, error } = await q;
   if (error) throw new Error(error.message);
 
-  const out: JournalLine[] = [];
+  const raw: Omit<JournalLine, "recipe_sku">[] = [];
   for (const j of data ?? []) {
     const lines = (j.sales_journal_lines ?? []) as {
       quantity_sold?: number;
@@ -242,7 +317,7 @@ async function loadJournals(
       lot_id?: string | null;
     }[];
     if (!lines.length) {
-      out.push({
+      raw.push({
         id: j.id as string,
         business_date: j.business_date as string,
         outlet_id: j.outlet_id as string,
@@ -257,7 +332,7 @@ async function loadJournals(
       continue;
     }
     for (const line of lines) {
-      out.push({
+      raw.push({
         id: j.id as string,
         business_date: j.business_date as string,
         outlet_id: j.outlet_id as string,
@@ -271,7 +346,12 @@ async function loadJournals(
       });
     }
   }
-  return out;
+
+  const lotSkus = await loadLotSkus(
+    admin,
+    raw.map((l) => l.lot_id).filter((id): id is string => Boolean(id)),
+  );
+  return raw.map((line) => ({ ...line, recipe_sku: resolveLineSku(line, lotSkus) }));
 }
 
 function channelFromNotes(notes: string | null): string {
@@ -412,33 +492,37 @@ export async function handleReport(opts: {
       viewBy,
       posOnly,
       notice: posOnly
-        ? "Dashboard journals are dated by business day, not hour. POS hours are shown only."
-        : "POS qty is units on completed sales (cancels excluded). Dashboard qty is posted journal units.",
+        ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
+        : "SHPOS qty is units on completed tickets (cancels excluded). QMERP qty is posted outlet sales units.",
     });
   }
 
   if (report === "sales_by_product" || report === "sales_by_sku" || report === "sales_by_category") {
     const pos = new Map<string, { qty: number; rm: number; label: string }>();
     for (const txn of txns) {
-      if (!isSale(txn)) continue;
+      if (!isSale(txn) || !txn.transactionTime) continue;
+      const day = malaysiaDate(new Date(txn.transactionTime));
       for (const item of txn.items ?? []) {
         if (String(item.itemType ?? "Item") !== "Item") continue;
         const pid = String(item.productId ?? "").trim();
         if (!pid) continue;
         const prod = productsById.get(pid);
-        let key: string;
-        let label: string;
+        const mapped = posItemSku(pid, productToSku, prod, productMeta);
+        let dimKey: string;
+        let dimLabel: string;
         if (report === "sales_by_category") {
-          key = (prod?.category || "Uncategorised").trim() || "Uncategorised";
-          label = key;
-        } else if (report === "sales_by_sku") {
-          const sku = productToSku.get(pid) || prod?.sku || pid;
-          key = sku;
-          label = `${sku}${prod?.name ? ` · ${prod.name}` : ""}`;
+          dimKey = (prod?.category || "Uncategorised").trim() || "Uncategorised";
+          dimLabel = dimKey;
+        } else if (report === "sales_by_product") {
+          dimKey = mapped.key;
+          dimLabel = prod?.name || productMeta.get(pid)?.name || mapped.label;
         } else {
-          key = pid;
-          label = prod?.name || productMeta.get(pid)?.name || pid;
+          dimKey = mapped.key;
+          dimLabel = mapped.key.startsWith("unmapped:") ? mapped.label : mapped.key;
         }
+        const key = skuBucketKey(day, dimKey, viewBy);
+        const period = bucketKey(day, "00", grainView(viewBy));
+        const label = `${period} · ${dimLabel}`;
         const cur = pos.get(key) ?? { qty: 0, rm: 0, label };
         cur.qty += num(item.quantity);
         cur.rm += num(item.total ?? item.subTotal);
@@ -447,58 +531,33 @@ export async function handleReport(opts: {
     }
 
     const dash = new Map<string, number>();
+    const skuToCat = new Map<string, string>();
     if (report === "sales_by_category") {
-      const skuToCat = new Map<string, string>();
       for (const [pid, prod] of productsById) {
-        const sku = productToSku.get(pid) || (prod.sku ?? "").trim();
+        const sku = productToSku.get(pid) || skuFromLabel(prod.sku ?? "") || "";
         if (sku) skuToCat.set(sku, (prod.category || "Uncategorised").trim() || "Uncategorised");
       }
-      for (const line of journals) {
-        const sku = skuFromLot(line.product_batch);
-        const cat = skuToCat.get(sku) || "Uncategorised";
-        dash.set(cat, (dash.get(cat) ?? 0) + line.quantity_sold);
-      }
-    } else {
-      for (const line of journals) {
-        const sku = skuFromLot(line.product_batch);
-        if (report === "sales_by_product") {
-          // Dashboard has SKU not product id; put qty on every mapped product of that SKU only via sku key compare below.
-          dash.set(sku, (dash.get(sku) ?? 0) + line.quantity_sold);
-        } else {
-          dash.set(sku, (dash.get(sku) ?? 0) + line.quantity_sold);
-        }
-      }
-      if (report === "sales_by_product") {
-        const mappedDash = new Map<string, number>();
-        for (const [pid] of pos) {
-          const sku = productToSku.get(pid) || productsById.get(pid)?.sku?.trim() || "";
-          if (sku && dash.has(sku)) mappedDash.set(pid, dash.get(sku)!);
-        }
-        for (const [sku, qty] of dash) {
-          const mappedPids = [...productToSku.entries()].filter(([, s]) => s === sku).map(([id]) => id);
-          if (mappedPids.length === 0 && !pos.has(sku)) {
-            mappedDash.set(sku, qty);
-          }
-        }
-        return finish(mergeKeys(pos, mappedDash, false), {
-          report,
-          from,
-          to,
-          posOnly: false,
-          notice:
-            "Dashboard groups by recipe SKU (e.g. QUACKTEOW), not StoreHub product id. Map products in Settings so rows can match.",
-        });
-      }
+    }
+    for (const line of journals) {
+      if (line.quantity_sold <= 0) continue;
+      const sku = line.recipe_sku;
+      const dimKey = report === "sales_by_category"
+        ? (skuToCat.get(sku) || "Uncategorised")
+        : sku;
+      const key = skuBucketKey(line.business_date, dimKey, viewBy);
+      dash.set(key, (dash.get(key) ?? 0) + line.quantity_sold);
     }
 
     return finish(mergeKeys(pos, dash, false), {
       report,
       from,
       to,
+      viewBy: grainView(viewBy),
       posOnly: false,
-      notice: report === "sales_by_sku"
-        ? "POS uses mapped Quackmaster SKU when saved; otherwise the StoreHub SKU."
-        : "Category comes from the StoreHub product catalog. Unmapped SKUs land in Uncategorised on the dashboard side.",
+      notice:
+        report === "sales_by_category"
+          ? "Category comes from the StoreHub catalog. QMERP qty is posted outlet sales rolled up by recipe SKU."
+          : "Both sides are recipe SKU (e.g. QUACKTEOW). Map StoreHub products in Settings. Add-ons stay missing until they are sold as an Outlet sales SKU.",
     });
   }
 
@@ -659,7 +718,7 @@ export async function handleReport(opts: {
         rows.length > 500
           ? `Showing first 500 of ${rows.length} rows. Narrow the date range.`
           : report === "returns"
-          ? "Dashboard column is whether a return was flagged for review (qty stays 0 until FIFO reverse exists)."
+          ? "QMERP column is whether a return was flagged for review (qty stays 0 until FIFO reverse exists)."
           : "Match is on StoreHub refId = sales journal idempotency key. Qty is units on the ticket vs journal lines.",
     });
   }
@@ -706,11 +765,10 @@ async function stockValueReport(
     for (const s of Array.isArray(stocks) ? stocks : []) {
       const pid = String(s.productId ?? "").trim();
       if (!pid) continue;
-      const sku = productToSku.get(pid) || productsById.get(pid)?.sku || pid;
-      const name = productsById.get(pid)?.name || productMeta.get(pid)?.name || sku;
-      const cur = pos.get(sku) ?? { qty: 0, rm: 0, label: name };
+      const mapped = posItemSku(pid, productToSku, productsById.get(pid), productMeta);
+      const cur = pos.get(mapped.key) ?? { qty: 0, rm: 0, label: mapped.label };
       cur.qty += num(s.quantityOnHand);
-      pos.set(sku, cur);
+      pos.set(mapped.key, cur);
     }
   }
 
@@ -721,11 +779,18 @@ async function stockValueReport(
   if (outletIds.length) {
     const { data, error } = await opts.admin
       .from("outlet_inventory")
-      .select("product_batch, quantity_on_hand")
+      .select("product_batch, quantity_on_hand, lot_id")
       .in("outlet_id", outletIds);
     if (error) throw new Error(error.message);
+    const lotSkus = await loadLotSkus(
+      opts.admin,
+      (data ?? []).map((r) => r.lot_id as string | null).filter((id): id is string => Boolean(id)),
+    );
     for (const row of data ?? []) {
-      const sku = skuFromLot(String(row.product_batch ?? ""));
+      const sku = resolveLineSku(
+        { lot_id: (row.lot_id as string | null) ?? null, product_batch: String(row.product_batch ?? "") },
+        lotSkus,
+      );
       dash.set(sku, (dash.get(sku) ?? 0) + num(row.quantity_on_hand));
     }
   }

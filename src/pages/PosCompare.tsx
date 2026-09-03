@@ -55,9 +55,11 @@ const groups = [...new Set(STOREHUB_REPORTS.map((r) => r.group))];
 
 const fieldClass = 'min-w-[9rem] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm';
 
+const PERIOD_BUCKET_REPORTS = new Set(['sales_over_time', 'sales_by_product', 'sales_by_sku', 'sales_by_category']);
+
 export function PosCompare() {
   const [stores, setStores] = useState<StoreOpt[]>([]);
-  const [reportId, setReportId] = useState(STOREHUB_REPORTS.find((r) => r.available)?.id ?? 'sales_over_time');
+  const [reportId, setReportId] = useState('sales_by_sku');
   const [storeId, setStoreId] = useState('');
   const [dateRange, setDateRange] = useState<DateRange | null>(() => getLast7Days());
   const [viewBy, setViewBy] = useState<'day' | 'week' | 'month' | 'hour'>('day');
@@ -69,6 +71,9 @@ export function PosCompare() {
   const selected = STOREHUB_REPORTS.find((r) => r.id === reportId);
   const snapshot = Boolean(selected?.snapshot);
   const canRun = Boolean(selected?.available);
+  const showViewBy = PERIOD_BUCKET_REPORTS.has(reportId);
+  const showHour = reportId === 'sales_over_time';
+  const effectiveViewBy = reportId !== 'sales_over_time' && viewBy === 'hour' ? 'day' : viewBy;
 
   useEffect(() => {
     void (async () => {
@@ -95,7 +100,7 @@ export function PosCompare() {
       report: reportId,
       ...period,
       storeId: storeId || undefined,
-      viewBy: reportId === 'sales_over_time' ? viewBy : undefined,
+      viewBy: showViewBy ? effectiveViewBy : undefined,
     });
     setBusy(false);
     if (err && !data) {
@@ -132,7 +137,9 @@ export function PosCompare() {
               <select
                 value={reportId}
                 onChange={(e) => {
-                  setReportId(e.target.value);
+                  const next = e.target.value;
+                  setReportId(next);
+                  if (next !== 'sales_over_time' && viewBy === 'hour') setViewBy('day');
                   setResult(null);
                   setError(null);
                 }}
@@ -169,18 +176,18 @@ export function PosCompare() {
                 hint="Applies to POS tickets and QMERP journals. All time is the last 2 years."
               />
             </div>
-            {reportId === 'sales_over_time' && (
+            {showViewBy && (
               <label className="text-sm">
                 <span className="mb-1 block text-xs text-stone-500">View by</span>
                 <select
-                  value={viewBy}
+                  value={effectiveViewBy}
                   onChange={(e) => setViewBy(e.target.value as typeof viewBy)}
                   className={fieldClass}
                 >
                   <option value="day">Day</option>
                   <option value="week">Week</option>
                   <option value="month">Month</option>
-                  <option value="hour">Hour</option>
+                  {showHour && <option value="hour">Hour</option>}
                 </select>
               </label>
             )}
@@ -242,7 +249,7 @@ export function PosCompare() {
               icon={<Scale size={18} />}
               label="QMERP qty"
               value={result.posOnly ? '—' : fmtQty(result.totals.dashQty)}
-              sub={result.posOnly ? 'Not stored in journals' : 'Posted journal units'}
+              sub={result.posOnly ? 'Not stored in journals' : 'Posted outlet sales units'}
             />
             <StatCard
               icon={<AlertTriangle size={18} />}
