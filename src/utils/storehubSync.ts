@@ -36,10 +36,10 @@ export interface StorehubReportOption {
 
 /** Full StoreHub BackOffice report map. Unavailable items stay visible but cannot be run. */
 export const STOREHUB_REPORTS: StorehubReportOption[] = [
+  { id: 'sales_by_sku', group: 'Sales & Transaction', label: 'Sales by Variant / SKU', available: true },
   { id: 'sales_over_time', group: 'Sales & Transaction', label: 'Sales Over Time', available: true },
   { id: 'sales_by_product', group: 'Sales & Transaction', label: 'Sales by Product', available: true },
   { id: 'sales_by_category', group: 'Sales & Transaction', label: 'Sales by Product Category', available: true },
-  { id: 'sales_by_sku', group: 'Sales & Transaction', label: 'Sales by Variant / SKU', available: true },
   { id: 'sales_by_payment', group: 'Sales & Transaction', label: 'Sales by Payment Method', available: true, posOnly: true },
   { id: 'sales_by_channel', group: 'Sales & Transaction', label: 'Sales by Transaction Channel', available: true },
   { id: 'promotions', group: 'Sales & Transaction', label: 'Promotions', available: true, posOnly: true },
