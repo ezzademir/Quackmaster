@@ -17,6 +17,7 @@ import {
   upsertOutletPar,
   type OutletParRow,
 } from '../utils/parService';
+import { StorehubSettings } from '../components/StorehubSettings';
 
 export function Settings() {
   const { refetchProfile, isAdmin } = useAuth();
@@ -434,6 +435,8 @@ export function Settings() {
         </div>
       )}
 
+      {isAdmin && <StorehubSettings />}
+
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -470,7 +473,7 @@ export function Settings() {
             <div className="space-y-2 text-xs text-gray-500">
               <div className="flex justify-between"><span>Version</span><span className="font-medium text-gray-700">1.0.0</span></div>
               <div className="flex justify-between"><span>Database</span><span className="font-medium text-gray-700">Supabase</span></div>
-              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">056–060</span></div>
+              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">061 StoreHub sync</span></div>
             </div>
           </div>
         </div>
