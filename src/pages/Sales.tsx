@@ -140,6 +140,7 @@ interface SalesJournalHistoryRow {
   outlet_id: string;
   notes: string | null;
   status: string;
+  source?: string | null;
   lines: { product_batch: string; quantity_sold: number; lot_label: string | null }[];
 }
 
@@ -309,7 +310,7 @@ export function Sales() {
   const populateModalFromJournal = useCallback(async (journalId: string): Promise<boolean> => {
     const { data: header, error: hErr } = await supabase
       .from('sales_journals')
-      .select('id,business_date,outlet_id,notes,status')
+      .select('id,business_date,outlet_id,notes,status,source')
       .eq('id', journalId)
       .maybeSingle();
 
@@ -429,7 +430,7 @@ export function Sales() {
 
       let q = supabase
         .from('sales_journals')
-        .select('id, business_date, outlet_id, notes, status')
+        .select('id, business_date, outlet_id, notes, status, source')
         .eq('outlet_id', outletId);
 
       if (includeVoided) {
@@ -1290,6 +1291,11 @@ export function Sales() {
                     <td className="whitespace-nowrap px-4 py-2 align-top">
                       <div className="flex flex-wrap items-center gap-2">
                         <span>{h.business_date}</span>
+                        {h.source === 'storehub' ? (
+                          <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-800">
+                            StoreHub
+                          </span>
+                        ) : null}
                         {voided ? (
                           <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
                             Voided
