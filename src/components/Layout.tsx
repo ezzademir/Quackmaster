@@ -181,7 +181,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <>
               <NavSection title="Overview" collapsed={collapsed} items={mainNav} />
               <NavSection title="Hub" collapsed={collapsed} items={hubNav} />
-              <NavSection title="Outlets" collapsed={collapsed} items={[...outletNav, ...(isAdmin ? posCompareNav : [])]} />
+              <NavSection title="Outlets" collapsed={collapsed} items={outletNav} />
+              {isAdmin && <NavSection title="POS" collapsed={collapsed} items={posCompareNav} />}
               <NavSection title="Find" collapsed={collapsed} items={findNav} />
               {isAdmin && (
                 <>
