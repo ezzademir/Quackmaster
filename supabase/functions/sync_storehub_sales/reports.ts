@@ -432,46 +432,83 @@ function skuLabel(
   return `${sku} · ${names.join(", ")}`;
 }
 
-async function loadSupplyMovements(
+function supplyOrderPeriodDate(so: {
+  supply_date?: string | null;
+  dispatch_date?: string | null;
+}): string | null {
+  const raw = (so.supply_date ?? so.dispatch_date ?? "").trim();
+  return raw ? raw.slice(0, 10) : null;
+}
+
+function isoDateInRange(iso: string | null, from: string, to: string): boolean {
+  if (!iso) return false;
+  return iso >= from && iso <= to;
+}
+
+type DispatchedSupplyLine = { signed_qty: number; lot_id: string | null; product_batch: string };
+type PeriodSupplyOrder = { outlet_id: string; qty: number };
+
+/** Hub dispatch by supply date — same definition as Distribution “Total Dispatched”. */
+async function loadDispatchedSupplyLines(
   admin: SupabaseClient,
-  outletIds: string[],
+  outletIds: string[] | null,
   from: string,
   to: string,
-): Promise<Array<{ signed_qty: number; lot_id: string | null; product_batch: string }>> {
-  const out: Array<{ signed_qty: number; lot_id: string | null; product_batch: string }> = [];
-  const page = 1000;
-  let offset = 0;
-  while (true) {
-    let q = admin
-      .from("outlet_stock_movements")
-      .select("signed_qty, outlet_inventory:outlet_inventory_id(lot_id, product_batch)")
-      .in("movement_type", ["supply_in", "transfer_in"])
-      .gte("business_date", from)
-      .lte("business_date", to)
-      .range(offset, offset + page - 1);
-    if (outletIds.length === 1) q = q.eq("outlet_id", outletIds[0]);
-    else if (outletIds.length > 1) q = q.in("outlet_id", outletIds);
-    else break;
-    const { data, error } = await q;
+): Promise<{
+  rows: DispatchedSupplyLine[];
+  periodOrders: PeriodSupplyOrder[];
+  periodAllOutletQty: number;
+}> {
+  const { data: orders, error: orderErr } = await admin
+    .from("supply_orders")
+    .select("id, outlet_id, status, supply_date, dispatch_date, total_quantity");
+  if (orderErr) throw new Error(orderErr.message);
+
+  const inPeriod: Array<{ id: string; outlet_id: string; qty: number }> = [];
+  for (const so of orders ?? []) {
+    const st = String(so.status ?? "").toLowerCase().trim();
+    if (st !== "dispatched" && st !== "received") continue;
+    if (!isoDateInRange(supplyOrderPeriodDate(so), from, to)) continue;
+    inPeriod.push({
+      id: String(so.id),
+      outlet_id: String(so.outlet_id ?? ""),
+      qty: num(so.total_quantity),
+    });
+  }
+
+  const periodOrders = inPeriod.map((o) => ({ outlet_id: o.outlet_id, qty: o.qty }));
+  const periodAllOutletQty = inPeriod.reduce((sum, o) => sum + o.qty, 0);
+  const scoped = outletIds == null
+    ? inPeriod
+    : inPeriod.filter((o) => outletIds.includes(o.outlet_id));
+  const scopedIds = scoped.map((o) => o.id);
+  if (scopedIds.length === 0) {
+    return { rows: [], periodOrders, periodAllOutletQty };
+  }
+
+  const rows: DispatchedSupplyLine[] = [];
+  for (let i = 0; i < scopedIds.length; i += 200) {
+    const slice = scopedIds.slice(i, i + 200);
+    const { data, error } = await admin
+      .from("supply_order_lines")
+      .select("quantity, product_batch, hub:hub_inventory_id(lot_id, product_batch)")
+      .in("supply_order_id", slice);
     if (error) throw new Error(error.message);
-    const rows = data ?? [];
-    for (const row of rows) {
-      const inv = firstEmbed(
-        row.outlet_inventory as
+    for (const row of data ?? []) {
+      const hub = firstEmbed(
+        row.hub as
           | { lot_id?: string | null; product_batch?: string | null }
           | Array<{ lot_id?: string | null; product_batch?: string | null }>
           | null,
       );
-      out.push({
-        signed_qty: num(row.signed_qty),
-        lot_id: (inv?.lot_id as string | null) ?? null,
-        product_batch: String(inv?.product_batch ?? ""),
+      rows.push({
+        signed_qty: num(row.quantity),
+        lot_id: (hub?.lot_id as string | null) ?? null,
+        product_batch: String(hub?.product_batch ?? row.product_batch ?? ""),
       });
     }
-    if (rows.length < page) break;
-    offset += page;
   }
-  return out;
+  return { rows, periodOrders, periodAllOutletQty };
 }
 
 function soldVsSuppliedStatus(posQty: number, soldQty: number): DiffStatus {
@@ -488,7 +525,9 @@ async function soldVsSuppliedReport(opts: {
   to: string;
   txns: ShTxn[];
   journals: JournalLine[];
-  outletIds: string[];
+  outletIds: string[] | null;
+  mappedOutletIds: string[];
+  storeScoped: boolean;
   productToSku: Map<string, string>;
   productMeta: Map<string, { sku: string; name: string }>;
   productsById: Map<string, ShProduct>;
@@ -534,9 +573,8 @@ async function soldVsSuppliedReport(opts: {
   const lotSold = new Map<string, Map<string, { label: string; sold: number; supplied: number }>>();
   const journalLotIds = opts.journals.map((l) => l.lot_id).filter((id): id is string => Boolean(id));
 
-  const supplyRows = opts.outletIds.length
-    ? await loadSupplyMovements(opts.admin, opts.outletIds, opts.from, opts.to)
-    : [];
+  const dispatched = await loadDispatchedSupplyLines(opts.admin, opts.outletIds, opts.from, opts.to);
+  const supplyRows = dispatched.rows;
   const supplyLotIds = supplyRows.map((r) => r.lot_id).filter((id): id is string => Boolean(id));
   const lotInfo = await loadLotInfo(opts.admin, [...journalLotIds, ...supplyLotIds]);
 
@@ -600,13 +638,43 @@ async function soldVsSuppliedReport(opts: {
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
 
+  const { data: outlets } = await opts.admin.from("outlets").select("id, name");
+  const outletName = new Map(
+    (outlets ?? []).map((o) => [String(o.id), String(o.name ?? "").trim() || String(o.id)]),
+  );
+  const mapped = new Set(opts.mappedOutletIds);
+  const unmapped = new Map<string, number>();
+  for (const so of dispatched.periodOrders) {
+    if (!so.outlet_id || mapped.has(so.outlet_id)) continue;
+    const name = outletName.get(so.outlet_id) ?? so.outlet_id;
+    unmapped.set(name, (unmapped.get(name) ?? 0) + so.qty);
+  }
+  const unmappedParts = [...unmapped.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, qty]) => `${name} ${qty.toLocaleString()}`);
+  const noticeParts = [
+    "QMERP supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
+    "Leftover is period dispatch minus posted Outlet sales (ignores opening stock and waste). Full stock equation is on Reconciliation. Lots are ERP-only; StoreHub tickets have no batch numbers.",
+  ];
+  if (opts.storeScoped && dispatched.periodAllOutletQty > 0) {
+    noticeParts.push(
+      `Distribution all-outlet dispatched in this period: ${dispatched.periodAllOutletQty.toLocaleString()}. This store card is that outlet only.`,
+    );
+  }
+  if (unmappedParts.length) {
+    noticeParts.push(
+      opts.storeScoped
+        ? `Also dispatched to unmapped outlets (no SHPOS): ${unmappedParts.join(" · ")}.`
+        : `Includes outlets with no StoreHub map: ${unmappedParts.join(" · ")}. Those have QMERP dispatch but no SHPOS tickets.`,
+    );
+  }
+
   return finish(rows, {
     report: "sold_vs_supplied",
     from: opts.from,
     to: opts.to,
     posOnly: false,
-    notice:
-      "Leftover is supplied minus posted Outlet sales (ignores opening stock and waste). Full stock equation is on Reconciliation. Lots are ERP-only; StoreHub tickets have no batch numbers.",
+    notice: noticeParts.join(" "),
     columns: [
       { key: "label", label: "Product" },
       { key: "posQty", label: "SHPOS sold" },
@@ -765,7 +833,9 @@ export async function handleReport(opts: {
       to,
       txns,
       journals,
-      outletIds,
+      outletIds: opts.storeId?.trim() ? outletIds : null,
+      mappedOutletIds: outletIds,
+      storeScoped: Boolean(opts.storeId?.trim()),
       productToSku,
       productMeta,
       productsById,
