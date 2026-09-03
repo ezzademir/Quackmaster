@@ -12,6 +12,7 @@ import {
   fulfillReservation,
 } from './inventory';
 import { retryWithBackoff } from './errorHandling';
+import { malaysiaCalendarDate } from './dateRange';
 
 export interface SupplyOrderItem {
   /** Finished-goods batch label; null for raw-material hub lines. */
@@ -203,14 +204,13 @@ export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ succ
       }
     }
 
+    const dispatchDate = malaysiaCalendarDate();
     await retryWithBackoff(async () => await
       supabase
         .from('supply_orders')
-        .update({ status: 'dispatched', dispatch_date: new Date().toISOString().split('T')[0] })
+        .update({ status: 'dispatched', dispatch_date: dispatchDate })
         .eq('id', supplyOrderId)
     );
-
-    const dispatchDate = new Date().toISOString().split('T')[0];
     await writeLedgerEntry({
       action: 'dispatched',
       entityType: 'supply_order',

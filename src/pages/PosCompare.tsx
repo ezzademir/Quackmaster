@@ -279,7 +279,7 @@ export function PosCompare() {
         title="SHPOS vs QMERP"
         description={
           tally
-            ? 'Sold vs supplied: pick products, then compare POS sold to ERP sold and hub dispatch (with lots).'
+            ? 'Sold vs supplied: pick products, then compare POS sold to ERP sold and hub dispatch by supply date (same as Distribution).'
             : 'Compare StoreHub POS tickets to Quackmaster journals. Units should match; ringgit stays on POS.'
         }
         filters={
@@ -313,7 +313,7 @@ export function PosCompare() {
             <label className="w-full min-w-0 text-sm sm:w-auto">
               <span className="mb-1 block text-xs text-stone-500">Store</span>
               <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className={fieldClass}>
-                <option value="">All mapped stores</option>
+                <option value="">{tally ? 'All QMERP outlets' : 'All mapped stores'}</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -327,7 +327,7 @@ export function PosCompare() {
                 onFilterChange={(range) => setDateRange(range)}
                 hint={
                   tally
-                    ? 'Applies to POS tickets, posted Outlet sales, and hub dispatch. All time is the last 2 years.'
+                    ? 'Applies to POS tickets, posted Outlet sales, and hub dispatch by supply date. All time is the last 2 years.'
                     : 'Applies to POS tickets and QMERP journals. All time is the last 2 years.'
                 }
               />
@@ -450,7 +450,7 @@ export function PosCompare() {
             title="Nothing compared yet"
             description={
               tally
-                ? 'Tick the products to watch, set the period, then Compare. Leftover is supplied minus posted Outlet sales.'
+                ? 'Tick the products to watch, set the period, then Compare. QMERP supplied uses the same supply-date dispatch total as Distribution. Leftover is that dispatch minus posted Outlet sales.'
                 : 'Choose a StoreHub report, set the period, then Compare. Gaps show tickets or units that are not in Quackmaster.'
             }
           />
@@ -496,7 +496,7 @@ export function PosCompare() {
                 result.posOnly
                   ? 'Not stored in journals'
                   : tally
-                    ? 'Dispatched to outlet'
+                    ? 'Dispatched to outlet (supply date)'
                     : 'Posted outlet sales units'
               }
             />
