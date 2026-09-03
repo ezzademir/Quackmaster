@@ -57,7 +57,7 @@ const STATUS_CLASS: Record<StorehubDiffStatus, string> = {
 
 const groups = [...new Set(STOREHUB_REPORTS.map((r) => r.group))];
 
-const fieldClass = 'min-w-[9rem] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm';
+const fieldClass = 'w-full min-w-0 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm sm:w-auto sm:min-w-[9rem]';
 
 const PERIOD_BUCKET_REPORTS = new Set(['sales_over_time', 'sales_by_product', 'sales_by_sku', 'sales_by_category']);
 
@@ -231,7 +231,7 @@ export function PosCompare() {
         }
         filters={
           <>
-            <label className="text-sm">
+            <label className="w-full min-w-0 text-sm sm:w-auto">
               <span className="mb-1 block text-xs text-stone-500">Report</span>
               <select
                 value={reportId}
@@ -242,7 +242,7 @@ export function PosCompare() {
                   setResult(null);
                   setError(null);
                 }}
-                className={`${fieldClass} min-w-[16rem]`}
+                className={`${fieldClass} sm:min-w-[16rem]`}
               >
                 {groups.map((group) => (
                   <optgroup key={group} label={group}>
@@ -257,7 +257,7 @@ export function PosCompare() {
                 ))}
               </select>
             </label>
-            <label className="text-sm">
+            <label className="w-full min-w-0 text-sm sm:w-auto">
               <span className="mb-1 block text-xs text-stone-500">Store</span>
               <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className={fieldClass}>
                 <option value="">All mapped stores</option>
@@ -268,7 +268,7 @@ export function PosCompare() {
                 ))}
               </select>
             </label>
-            <div className={snapshot ? 'hidden' : ''}>
+            <div className={snapshot ? 'hidden' : 'w-full min-w-0 sm:w-auto'}>
               <DateFilter
                 defaultType="last7Days"
                 onFilterChange={(range) => setDateRange(range)}
@@ -280,7 +280,7 @@ export function PosCompare() {
               />
             </div>
             {showViewBy && (
-              <label className="text-sm">
+              <label className="w-full min-w-0 text-sm sm:w-auto">
                 <span className="mb-1 block text-xs text-stone-500">View by</span>
                 <select
                   value={effectiveViewBy}
@@ -294,7 +294,7 @@ export function PosCompare() {
                 </select>
               </label>
             )}
-            <Button disabled={busy || !canRun} onClick={() => void run()}>
+            <Button className="w-full sm:w-auto" disabled={busy || !canRun} onClick={() => void run()}>
               {busy ? 'Comparing…' : snapshot ? 'Compare now' : 'Compare'}
             </Button>
           </>

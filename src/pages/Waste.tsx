@@ -473,7 +473,7 @@ export function Waste() {
             : 'Record hub or outlet waste. Event date is when the waste happened.'
         }
         filters={
-          <div className={pageTab === 'overview' ? '' : 'hidden'}>
+          <div className={pageTab === 'overview' ? 'w-full min-w-0 sm:w-auto' : 'hidden'}>
             <DateFilter
               defaultType="last7Days"
               onFilterChange={(range) => setHistoryRange(range)}

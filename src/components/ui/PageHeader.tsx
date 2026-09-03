@@ -12,15 +12,23 @@ export function PageHeader({
   filters?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="min-w-0">
         <h1 className="text-2xl font-bold text-stone-900">{title}</h1>
         {description ? <div className="mt-1 text-sm text-stone-500">{description}</div> : null}
       </div>
       {(actions || filters) && (
-        <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          {actions ? <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
-          {filters ? <div className="flex flex-wrap items-end gap-3 sm:justify-end">{filters}</div> : null}
+        <div className="flex w-full min-w-0 flex-col items-stretch gap-2 lg:w-auto lg:items-end">
+          {actions ? (
+            <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
+              {actions}
+            </div>
+          ) : null}
+          {filters ? (
+            <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end lg:justify-end">
+              {filters}
+            </div>
+          ) : null}
         </div>
       )}
     </div>

@@ -865,14 +865,14 @@ export function Sales() {
     <div>
       <label className="mb-1 block text-xs font-medium text-stone-600">Outlet</label>
       {isSupervisor ? (
-        <p className="min-w-[12rem] rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-800">
+        <p className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-800 sm:min-w-[12rem] sm:w-auto">
           {outlets.find((o) => o.id === outletId)?.name ?? 'Your outlet'}
         </p>
       ) : (
         <select
           value={outletId}
           onChange={(e) => setOutletId(e.target.value)}
-          className="min-w-[12rem] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm sm:min-w-[12rem] sm:w-auto"
         >
           {outlets.map((o) => (
             <option key={o.id} value={o.id}>
