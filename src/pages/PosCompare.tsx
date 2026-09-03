@@ -25,6 +25,21 @@ function isLegacyBatch(value: string): boolean {
   return /^BATCH-[0-9a-f-]+$/i.test(value.trim());
 }
 
+function displayProductLabel(sku: string, fallback: string, picks: ProductPick[]): string {
+  if (fallback.includes(' · ')) return fallback;
+  const names = [
+    ...new Set(
+      picks
+        .filter((p) => p.sku === sku || p.sku.toLowerCase() === sku.toLowerCase())
+        .map((p) => p.name.trim())
+        .filter((n) => n && n.toLowerCase() !== sku.toLowerCase())
+    ),
+  ];
+  if (names.length === 0) return fallback;
+  if (sku.startsWith('unmapped:')) return names[0];
+  return `${sku} · ${names.join(', ')}`;
+}
+
 function resolvePickSku(productId: string, mappedSku: string, storehubSku: string): string {
   const mapped = mappedSku.trim();
   if (mapped && !isLegacyBatch(mapped)) return mapped;
@@ -538,6 +553,7 @@ export function PosCompare() {
               {tally ? (
                 <TallyTable
                   rows={visibleRows}
+                  picks={picks}
                   expanded={expanded}
                   onToggle={toggleExpand}
                 />
@@ -595,10 +611,12 @@ export function PosCompare() {
 
 function TallyTable({
   rows,
+  picks,
   expanded,
   onToggle,
 }: {
   rows: StorehubReportRow[];
+  picks: ProductPick[];
   expanded: Set<string>;
   onToggle: (key: string) => void;
 }) {
@@ -619,6 +637,7 @@ function TallyTable({
         {rows.map((row) => {
           const open = expanded.has(row.key);
           const hasLots = (row.lots?.length ?? 0) > 0;
+          const label = displayProductLabel(row.key, row.label, picks);
           return (
             <Fragment key={row.key}>
               <tr
@@ -636,10 +655,10 @@ function TallyTable({
                       className="inline-flex items-center gap-1 text-left font-medium text-stone-800"
                     >
                       <ChevronRight size={14} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-                      {row.label}
+                      {label}
                     </button>
                   ) : (
-                    row.label
+                    label
                   )}
                 </td>
                 <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
