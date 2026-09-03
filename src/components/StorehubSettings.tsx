@@ -118,7 +118,7 @@ export function StorehubSettings() {
       return;
     }
     setStores(data.stores);
-    setProducts(data.products.filter((p) => !p.isParentProduct));
+    setProducts(data.products);
     setProductSku((prev) => {
       const next = { ...prev };
       for (const p of data.products) {

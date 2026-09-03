@@ -11,13 +11,39 @@ import {
   type StorehubReportResult,
   type StorehubDiffStatus,
   type StorehubReportRow,
+  type StorehubProduct,
 } from '../utils/storehubSync';
 
 type StoreOpt = { id: string; name: string };
 type RowFilter = 'gaps' | 'all';
-type ProductPick = { sku: string; name: string; fg: boolean };
+type ProductPick = { id: string; sku: string; name: string; fg: boolean };
 
 const SKU_PICK_KEY = 'qm-sold-vs-supplied-skus';
+const PRODUCT_PICK_KEY = 'qm-sold-vs-supplied-product-ids';
+
+function isLegacyBatch(value: string): boolean {
+  return /^BATCH-[0-9a-f-]+$/i.test(value.trim());
+}
+
+function resolvePickSku(productId: string, mappedSku: string, storehubSku: string): string {
+  const mapped = mappedSku.trim();
+  if (mapped && !isLegacyBatch(mapped)) return mapped;
+  const sh = storehubSku.trim();
+  if (sh && !isLegacyBatch(sh)) return sh;
+  return `unmapped:${productId}`;
+}
+
+function readStoredIds(key: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.map((s) => String(s).trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
 
 function periodIso(range: DateRange | null): { from: string; to: string } {
   if (range) {
@@ -61,18 +87,6 @@ const fieldClass = 'w-full min-w-0 rounded-lg border border-stone-300 bg-white p
 
 const PERIOD_BUCKET_REPORTS = new Set(['sales_over_time', 'sales_by_product', 'sales_by_sku', 'sales_by_category']);
 
-function readStoredSkus(): string[] | null {
-  try {
-    const raw = localStorage.getItem(SKU_PICK_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return null;
-    return parsed.map((s) => String(s).trim()).filter(Boolean);
-  } catch {
-    return null;
-  }
-}
-
 export function PosCompare() {
   const [stores, setStores] = useState<StoreOpt[]>([]);
   const [reportId, setReportId] = useState('sold_vs_supplied');
@@ -84,7 +98,7 @@ export function PosCompare() {
   const [result, setResult] = useState<StorehubReportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picks, setPicks] = useState<ProductPick[]>([]);
-  const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [pickerReady, setPickerReady] = useState(false);
   const [pickQuery, setPickQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -92,7 +106,8 @@ export function PosCompare() {
   const selected = STOREHUB_REPORTS.find((r) => r.id === reportId);
   const snapshot = Boolean(selected?.snapshot);
   const tally = reportId === 'sold_vs_supplied';
-  const canRun = Boolean(selected?.available) && (!tally || selectedSkus.length > 0);
+  const selectedSkus = [...new Set(picks.filter((p) => selectedIds.includes(p.id)).map((p) => p.sku))];
+  const canRun = Boolean(selected?.available) && (!tally || selectedIds.length > 0);
   const showViewBy = PERIOD_BUCKET_REPORTS.has(reportId);
   const showHour = reportId === 'sales_over_time';
   const effectiveViewBy = reportId !== 'sales_over_time' && viewBy === 'hour' ? 'day' : viewBy;
@@ -114,38 +129,61 @@ export function PosCompare() {
 
   useEffect(() => {
     void (async () => {
-      const [{ data: maps }, { data: recipes }] = await Promise.all([
+      const [{ data: maps }, { data: recipes }, catalog] = await Promise.all([
         supabase
           .from('storehub_product_map')
-          .select('quackmaster_sku, storehub_name, storehub_sku')
-          .order('storehub_name'),
-        supabase.from('recipes').select('default_product_batch'),
+          .select('storehub_product_id, quackmaster_sku, storehub_name, storehub_sku'),
+        supabase.from('recipes').select('name, default_product_batch'),
+        invokeStorehub<{ products: StorehubProduct[] }>('catalog'),
       ]);
-      const fg = new Set(
+      const fgSkus = new Set(
         (recipes ?? [])
           .map((r) => String(r.default_product_batch ?? '').trim())
           .filter(Boolean)
       );
-      const bySku = new Map<string, ProductPick>();
+      const fgNames = new Set(
+        (recipes ?? [])
+          .map((r) => String(r.name ?? '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+      const mapped = new Map<string, { sku: string; name: string; shSku: string }>();
       for (const row of maps ?? []) {
-        const sku = String(row.quackmaster_sku ?? '').trim();
-        if (!sku) continue;
-        const name = (row.storehub_name as string) || (row.storehub_sku as string) || sku;
-        const cur = bySku.get(sku);
-        if (cur) {
-          if (!cur.name.includes(name)) cur.name = `${cur.name}, ${name}`;
-        } else {
-          bySku.set(sku, { sku, name, fg: fg.has(sku) });
-        }
+        const id = String(row.storehub_product_id ?? '').trim();
+        if (!id) continue;
+        mapped.set(id, {
+          sku: String(row.quackmaster_sku ?? '').trim(),
+          name: (row.storehub_name as string) || '',
+          shSku: (row.storehub_sku as string) || '',
+        });
       }
-      const list = [...bySku.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+      const byId = new Map<string, ProductPick>();
+      function addPick(id: string, name: string, shSku: string, mappedSku: string) {
+        const sku = resolvePickSku(id, mappedSku, shSku);
+        const label = name.trim() || shSku.trim() || sku;
+        const fg = fgSkus.has(sku) || fgNames.has(label.toLowerCase());
+        byId.set(id, { id, sku, name: label, fg });
+      }
+
+      for (const p of catalog.data?.products ?? []) {
+        const m = mapped.get(p.id);
+        addPick(p.id, p.name, p.sku, m?.sku ?? '');
+      }
+      for (const [id, m] of mapped) {
+        if (!byId.has(id)) addPick(id, m.name, m.shSku, m.sku);
+      }
+
+      const list = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
       setPicks(list);
-      const stored = readStoredSkus();
-      if (stored) {
-        const allowed = new Set(list.map((p) => p.sku));
-        setSelectedSkus(stored.filter((s) => allowed.has(s)));
+      const allowed = new Set(list.map((p) => p.id));
+      const storedIds = readStoredIds(PRODUCT_PICK_KEY)?.filter((id) => allowed.has(id));
+      const storedSkus = readStoredIds(SKU_PICK_KEY);
+      if (storedIds && storedIds.length) {
+        setSelectedIds(storedIds);
+      } else if (storedSkus?.length) {
+        setSelectedIds(list.filter((p) => storedSkus.includes(p.sku)).map((p) => p.id));
       } else {
-        setSelectedSkus(list.filter((p) => p.fg).map((p) => p.sku));
+        setSelectedIds(list.filter((p) => p.fg).map((p) => p.id));
       }
       setPickerReady(true);
     })();
@@ -153,12 +191,12 @@ export function PosCompare() {
 
   useEffect(() => {
     if (!pickerReady) return;
-    localStorage.setItem(SKU_PICK_KEY, JSON.stringify(selectedSkus));
-  }, [pickerReady, selectedSkus]);
+    localStorage.setItem(PRODUCT_PICK_KEY, JSON.stringify(selectedIds));
+  }, [pickerReady, selectedIds]);
 
   async function run() {
     if (!canRun) return;
-    if (tally && selectedSkus.length === 0) {
+    if (tally && selectedIds.length === 0) {
       setError('Pick at least one product.');
       return;
     }
@@ -207,8 +245,8 @@ export function PosCompare() {
     return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
   });
 
-  function toggleSku(sku: string) {
-    setSelectedSkus((prev) => (prev.includes(sku) ? prev.filter((s) => s !== sku) : [...prev, sku]));
+  function toggleProduct(id: string) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
   }
 
   function toggleExpand(key: string) {
@@ -307,28 +345,28 @@ export function PosCompare() {
             <p className="text-sm font-medium text-stone-800">
               Products on this tally
               <span className="ml-2 font-normal text-stone-400">
-                {selectedSkus.length} selected
+                {selectedIds.length} selected
               </span>
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               <button
                 type="button"
                 className="rounded-md border border-stone-200 px-2 py-1 text-stone-600 hover:bg-stone-50"
-                onClick={() => setSelectedSkus(picks.filter((p) => p.fg).map((p) => p.sku))}
+                onClick={() => setSelectedIds(picks.filter((p) => p.fg).map((p) => p.id))}
               >
                 Finished goods
               </button>
               <button
                 type="button"
                 className="rounded-md border border-stone-200 px-2 py-1 text-stone-600 hover:bg-stone-50"
-                onClick={() => setSelectedSkus(picks.map((p) => p.sku))}
+                onClick={() => setSelectedIds(picks.map((p) => p.id))}
               >
-                All mapped
+                All products
               </button>
               <button
                 type="button"
                 className="rounded-md border border-stone-200 px-2 py-1 text-stone-600 hover:bg-stone-50"
-                onClick={() => setSelectedSkus([])}
+                onClick={() => setSelectedIds([])}
               >
                 None
               </button>
@@ -341,28 +379,28 @@ export function PosCompare() {
             placeholder="Find product or SKU"
             className={`${fieldClass} w-full max-w-sm`}
           />
-          {picks.length === 0 ? (
+          {!pickerReady ? (
+            <p className="text-sm text-stone-500">Loading StoreHub products…</p>
+          ) : picks.length === 0 ? (
             <p className="text-sm text-stone-500">
-              Map StoreHub products to recipe SKUs in{' '}
-              <Link to="/settings" className="font-medium underline">
-                Settings
-              </Link>{' '}
-              first.
+              Could not load StoreHub products. Check Settings → StoreHub POS sync, then refresh this page.
             </p>
           ) : (
             <div className="max-h-48 overflow-y-auto rounded-lg border border-stone-100">
               {visiblePicks.map((p) => (
                 <label
-                  key={p.sku}
+                  key={p.id}
                   className="flex cursor-pointer items-center gap-2 border-b border-stone-50 px-3 py-1.5 text-sm last:border-b-0 hover:bg-stone-50"
                 >
                   <input
                     type="checkbox"
-                    checked={selectedSkus.includes(p.sku)}
-                    onChange={() => toggleSku(p.sku)}
+                    checked={selectedIds.includes(p.id)}
+                    onChange={() => toggleProduct(p.id)}
                   />
                   <span className="font-medium text-stone-800">{p.name}</span>
-                  <span className="text-stone-400">{p.sku}</span>
+                  <span className="text-stone-400">
+                    {p.sku.startsWith('unmapped:') ? 'not mapped' : p.sku}
+                  </span>
                   {p.fg && <span className="ml-auto text-[10px] uppercase tracking-wide text-stone-400">FG</span>}
                 </label>
               ))}
