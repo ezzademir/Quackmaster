@@ -138,13 +138,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
     : (user?.email?.[0] ?? 'U').toUpperCase();
 
   return (
-    <div className="flex h-dvh min-h-0 max-h-dvh bg-stone-50 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]">
+    <div className="flex h-dvh min-h-0 max-h-dvh overflow-hidden bg-stone-50 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]">
       {sidebarOpen && (
         <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
       <aside
-        className={`fixed md:relative z-40 flex min-h-0 flex-col bg-stone-900 transition-all duration-300 ease-in-out flex-shrink-0 h-dvh max-h-dvh ${
+        className={`fixed z-40 flex min-h-0 flex-col bg-stone-900 transition-all duration-300 ease-in-out flex-shrink-0 max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:left-[env(safe-area-inset-left,0px)] max-md:top-[env(safe-area-inset-top,0px)] h-dvh max-h-dvh md:relative md:h-full ${
           sidebarOpen ? 'w-60' : '-translate-x-full'
         } md:translate-x-0 md:w-60 ${collapsed ? 'md:w-[72px]' : ''}`}
       >
@@ -266,8 +266,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
-          <div className="mx-auto max-w-7xl px-3 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] pt-5 sm:px-4 md:px-6 md:py-8 md:pb-8">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
+          <div className="mx-auto w-full min-w-0 max-w-7xl px-3 py-5 sm:px-4 md:px-6 md:py-8">
             {children}
           </div>
         </main>

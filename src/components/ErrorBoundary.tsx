@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.error) {
       return (
-        <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-gray-50 px-6 py-12 text-center auth-safe-padding">
+        <div className="flex h-dvh max-h-dvh flex-col items-center justify-center gap-4 overflow-y-auto bg-gray-50 px-6 py-12 text-center auth-safe-padding">
           <div className="max-w-md rounded-xl border border-red-200 bg-white p-6 shadow-sm">
             <p className="text-sm font-semibold text-red-700">Something went wrong</p>
             <p className="mt-2 text-xs text-gray-600 break-words">{this.state.error.message}</p>

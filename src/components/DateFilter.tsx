@@ -116,23 +116,23 @@ export function DateFilter({
     }`;
 
   return (
-    <div className={`relative ${className}`}>
-      <div className="flex flex-col items-end gap-1">
+    <div className={`relative min-w-0 ${className}`}>
+      <div className="flex w-full min-w-0 flex-col items-stretch gap-1 sm:items-end">
         <span className="text-xs font-medium text-stone-600">{label}</span>
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50 transition-colors"
+          className="inline-flex w-full min-h-11 items-center justify-between gap-2 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50 transition-colors sm:w-auto sm:justify-center"
         >
           <Calendar size={14} className="text-stone-500" />
           {DATE_FILTER_LABELS[filterType]}
           <ChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
-        {hint ? <p className="max-w-xs text-right text-xs text-stone-500">{hint}</p> : null}
+        {hint ? <p className="max-w-xs text-xs text-stone-500 sm:text-right">{hint}</p> : null}
       </div>
 
       {isOpen && (
-        <div className="absolute right-0 top-full z-10 mt-2 w-56 rounded-lg border border-stone-200 bg-white shadow-lg">
+        <div className="absolute left-0 right-0 top-full z-10 mt-2 w-full rounded-lg border border-stone-200 bg-white shadow-lg sm:left-auto sm:right-0 sm:w-56">
           <div className="space-y-1 p-2">
             {(
               [

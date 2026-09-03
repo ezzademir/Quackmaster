@@ -606,7 +606,7 @@ export function Users() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center py-16">
         <div className="text-gray-500">Loading users...</div>
       </div>
     );
@@ -616,7 +616,7 @@ export function Users() {
 
   return (
     <div className="space-y-6">
-      <div className={`transition-[margin] ${drawer.open ? 'mr-[min(28rem,92vw)]' : ''}`}>
+      <div className={`transition-[margin] ${drawer.open ? 'md:mr-[min(28rem,92vw)]' : ''}`}>
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-stone-900 sm:text-3xl">User Management</h1>
@@ -929,7 +929,7 @@ export function Users() {
             className="fixed inset-0 z-40 bg-black/30 md:bg-black/20"
             onClick={() => setDrawer({ open: false })}
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-gray-200 bg-white shadow-xl">
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-gray-200 bg-white shadow-xl max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:top-[env(safe-area-inset-top,0px)]">
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
               <h2 className="text-lg font-semibold text-gray-900">User details</h2>
               <button

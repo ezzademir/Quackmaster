@@ -16,7 +16,7 @@ export function FilterBar({
   label?: string;
 }) {
   return (
-    <div className="flex flex-wrap items-end gap-3">
+    <div className="flex flex-wrap items-end gap-3 [&>*]:min-w-0 [&>*]:w-full sm:[&>*]:w-auto">
       {children}
       {onPeriodChange ? (
         <DateFilter
