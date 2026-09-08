@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { handleReport } from "./reports.ts";
 import type { ShProduct, ShStore, ShTxn } from "./types.ts";
+import { addIsoDays, autoSyncWindowFrom } from "./window.ts";
 
 const STOREHUB_HOST = "https://api.storehubhq.com";
 const MIN_INTERVAL_MS = 350;
@@ -40,13 +41,6 @@ function malaysiaDate(d: Date): string {
     month: "2-digit",
     day: "2-digit",
   }).format(d);
-}
-
-function addDays(isoDate: string, days: number): string {
-  const [y, m, d] = isoDate.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
 }
 
 function todayMy(): string {
@@ -237,7 +231,7 @@ async function fetchTransactionsWindowed(
     safety += 1;
     const txns = await fetchTransactions(sh, storeId, windowFrom, windowTo);
     if (txns.length >= MAX_TXNS && windowFrom < windowTo) {
-      const mid = addDays(
+      const mid = addIsoDays(
         windowFrom,
         Math.max(
           0,
@@ -250,7 +244,7 @@ async function fetchTransactionsWindowed(
       );
       const leftTo = mid < windowTo ? mid : windowFrom;
       out.push(...await fetchTransactions(sh, storeId, windowFrom, leftTo));
-      windowFrom = addDays(leftTo, 1);
+      windowFrom = addIsoDays(leftTo, 1);
       continue;
     }
     out.push(...txns);
@@ -424,8 +418,7 @@ async function handleSync(
   const to = opts.to?.trim() || todayMy();
   let from = opts.from?.trim() || "";
   if (!from) {
-    const last = settings?.last_success_to as string | null | undefined;
-    from = last ? last : addDays(to, -6);
+    from = autoSyncWindowFrom(settings?.last_success_to as string | null | undefined, to);
   }
 
   const { data: runRow, error: runErr } = await admin
@@ -483,7 +476,7 @@ async function handleSync(
           safety += 1;
           const txns = await fetchTransactions(sh, storeId, windowFrom, windowTo);
           if (txns.length >= MAX_TXNS && windowFrom < windowTo) {
-            const mid = addDays(
+            const mid = addIsoDays(
               windowFrom,
               Math.max(
                 0,
@@ -503,7 +496,7 @@ async function handleSync(
               else if (kind === "return") counts.returns_flagged += 1;
               else if (kind === "failed") counts.failed += 1;
             }
-            windowFrom = addDays(leftTo, 1);
+            windowFrom = addIsoDays(leftTo, 1);
             continue;
           }
           for (const txn of txns) {
