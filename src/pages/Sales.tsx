@@ -4,7 +4,7 @@ import { DateFilter } from '../components/DateFilter';
 import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
-import { formatDateForInput, getLast7Days, type DateRange } from '../utils/dateRange';
+import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
 import {
@@ -228,9 +228,7 @@ export function Sales() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
-  const [businessDate, setBusinessDate] = useState(() =>
-    new Date().toISOString().slice(0, 10)
-  );
+  const [businessDate, setBusinessDate] = useState(() => malaysiaCalendarDate());
   const [lines, setLines] = useState<LineRow[]>(() => blankLines());
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
@@ -264,6 +262,7 @@ export function Sales() {
   const [modalNotes, setModalNotes] = useState('');
   const [modalLines, setModalLines] = useState<ModalDraftLine[]>([]);
   const [modalStatus, setModalStatus] = useState('');
+  const [modalSource, setModalSource] = useState<string | null>(null);
   const [modalMessage, setModalMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [journalDateRange, setJournalDateRange] = useState<DateRange | null>(() => getLast7Days());
 
@@ -337,6 +336,7 @@ export function Sales() {
     setModalBusinessDate(header.business_date);
     setModalNotes(header.notes ?? '');
     setModalStatus(header.status ?? 'posted');
+    setModalSource(header.source ?? 'manual');
     if (isVoidedSalesStatus(header.status)) {
       setModalEditMode(false);
     }
@@ -365,6 +365,7 @@ export function Sales() {
       setModalBusinessDate('');
       setModalNotes('');
       setModalStatus('');
+      setModalSource(null);
       setModalLines([]);
       try {
         await populateModalFromJournal(journalId);
@@ -388,6 +389,7 @@ export function Sales() {
     setModalNotes('');
     setModalLines([]);
     setModalStatus('');
+    setModalSource(null);
   }, []);
 
   const loadOutlets = useCallback(async () => {
@@ -766,7 +768,9 @@ export function Sales() {
     const journalIdToDelete = modalJournalId;
     if (
       !window.confirm(
-        'Void this sale? Outlet stock will be restored. The sale stays on file as voided and leaves the posted list.'
+        modalSource === 'storehub'
+          ? 'Void this StoreHub sale? Outlet stock will be restored. Sync can re-post the POS ticket later if it is still active. Admin-only.'
+          : 'Void this sale? Outlet stock will be restored. The sale stays on file as voided and leaves the posted list.'
       )
     )
       return;
@@ -1526,14 +1530,20 @@ export function Sales() {
                 <>
                   {isAdmin && !isVoidedSalesStatus(modalStatus) && (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => setModalEditMode(true)}
-                        disabled={recentJournalBusy}
-                        className="btn-secondary"
-                      >
-                        Edit
-                      </button>
+                      {modalSource !== 'storehub' ? (
+                        <button
+                          type="button"
+                          onClick={() => setModalEditMode(true)}
+                          disabled={recentJournalBusy}
+                          className="btn-secondary"
+                        >
+                          Edit
+                        </button>
+                      ) : (
+                        <span className="mr-auto text-xs text-stone-500">
+                          StoreHub sales: void only (admin). Edit/replace is disabled.
+                        </span>
+                      )}
                       <button
                         type="button"
                         onClick={() => void handleModalDelete()}

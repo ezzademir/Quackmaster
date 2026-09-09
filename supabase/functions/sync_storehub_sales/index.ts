@@ -517,10 +517,15 @@ async function handleSync(
         }
       }
 
-      await admin
-        .from("storehub_sync_settings")
-        .update({ last_success_to: to, updated_at: new Date().toISOString() })
-        .eq("id", 1);
+      // Do not advance the incremental cursor when any ticket failed in this
+      // window — otherwise insufficient_stock / unmapped_sku days fall out of
+      // the next cron range and never retry after restock (audit P0-3).
+      if (counts.failed === 0 && !runError) {
+        await admin
+          .from("storehub_sync_settings")
+          .update({ last_success_to: to, updated_at: new Date().toISOString() })
+          .eq("id", 1);
+      }
     }
   } catch (e) {
     runError = e instanceof Error ? e.message : String(e);
