@@ -18,6 +18,7 @@ import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
 import { displayLotFirst, displaySkuSecond, nestedLotLabel, nestedRecipeSku } from '../../utils/lotLabel';
 import { filterByStockView, type StockView } from '../../utils/stockView';
 import { StockViewToggle } from '../StockViewToggle';
+import { malaysiaCalendarDate } from '../../utils/dateRange';
 
 type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
 
@@ -173,7 +174,7 @@ interface Props {
 
 export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initialOutletId }: Props) {
   const [outletId, setOutletId] = useState('');
-  const [countDate, setCountDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [countDate, setCountDate] = useState(() => malaysiaCalendarDate());
   const [sessionNotes, setSessionNotes] = useState('');
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [loadingInv, setLoadingInv] = useState(false);

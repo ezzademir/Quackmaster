@@ -5,7 +5,7 @@ import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui
 import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
-import { getLast7Days, type DateRange } from '../utils/dateRange';
+import { getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
 
@@ -77,7 +77,7 @@ export function Waste() {
   const [outletId, setOutletId] = useState('');
   const [hubRows, setHubRows] = useState<HubPickRow[]>([]);
   const [outletRows, setOutletRows] = useState<OutletPickRow[]>([]);
-  const [wasteDate, setWasteDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [wasteDate, setWasteDate] = useState(() => malaysiaCalendarDate());
   const [notes, setNotes] = useState('');
   const [linesHub, setLinesHub] = useState<LineHub[]>([
     { key: crypto.randomUUID(), hub_inventory_id: '', product_batch: '', quantity: 0, waste_reason: 'spoilage' },
