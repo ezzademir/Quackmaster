@@ -541,13 +541,18 @@ function NewRunModal({
       });
 
       if (!result.success) {
-        // If QC failed, revert to draft status
+        // Abandon the draft. Inventory post is atomic; this must not leave hub FG behind.
         await supabase
           .from('production_runs')
           .update({ status: 'cancelled' })
           .eq('id', run.id);
 
-        setError(`QC Evaluation Failed: ${result.error}`);
+        const qcRejected = result.qcReport?.qcResult.passed === false;
+        setError(
+          qcRejected
+            ? `QC Evaluation Failed: ${result.error}`
+            : result.message || result.error || 'Production completion failed'
+        );
         setSaving(false);
         return;
       }
