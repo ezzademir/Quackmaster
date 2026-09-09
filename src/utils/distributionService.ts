@@ -9,10 +9,8 @@ import {
   checkInventoryAvailability,
   reserveInventory,
   releaseReservation,
-  fulfillReservation,
 } from './inventory';
 import { retryWithBackoff } from './errorHandling';
-import { malaysiaCalendarDate } from './dateRange';
 
 export interface SupplyOrderItem {
   /** Finished-goods batch label; null for raw-material hub lines. */
@@ -34,6 +32,30 @@ export interface SupplyOrderCreationResult {
   supplyOrderId?: string;
   reservations: Array<{ item: SupplyOrderItem; reserved: boolean; error?: string }>;
   errors: string[];
+}
+
+
+/** Normalize Supabase RPC jsonb / error into the service success shape. */
+export function parseSupplyMutationRpc(
+  data: unknown,
+  error: { message: string } | null,
+  fallbackError: string
+): { success: boolean; error?: string } {
+  if (error) {
+    return { success: false, error: error.message };
+  }
+  const payload = data as { success?: boolean; error?: string; status?: string } | null;
+  if (payload && payload.success === false) {
+    const statusHint =
+      payload.status != null && payload.status !== ''
+        ? ` (status: ${payload.status})`
+        : '';
+    return {
+      success: false,
+      error: `${payload.error ?? fallbackError}${statusHint}`,
+    };
+  }
+  return { success: true };
 }
 
 /**
@@ -168,60 +190,15 @@ export async function createSupplyOrder(
 }
 
 /**
- * Dispatch supply order — fulfill hub reservations (goods leave hub). Outlet on-hand is credited on receipt.
+ * Dispatch supply order — atomic server RPC fulfills all hub reservations and sets status.
+ * Outlet on-hand is credited on receipt (separate RPC).
  */
 export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order, error: orderErr } = await supabase
-      .from('supply_orders')
-      .select('id, status, outlet_id')
-      .eq('id', supplyOrderId)
-      .single();
-
-    if (orderErr || !order) {
-      return { success: false, error: 'Supply order not found' };
-    }
-
-    if (order.status !== 'pending') {
-      return { success: false, error: `Cannot dispatch order with status: ${order.status}` };
-    }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('hub_inventory_id, quantity, product_batch')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const result = await fulfillReservation(
-          line.hub_inventory_id,
-          Number(line.quantity),
-          supplyOrderId
-        );
-        if (!result.success) {
-          return { success: false, error: result.error ?? 'Failed to fulfill hub reservation' };
-        }
-      }
-    }
-
-    const dispatchDate = malaysiaCalendarDate();
-    await retryWithBackoff(async () => await
-      supabase
-        .from('supply_orders')
-        .update({ status: 'dispatched', dispatch_date: dispatchDate })
-        .eq('id', supplyOrderId)
-    );
-    await writeLedgerEntry({
-      action: 'dispatched',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'dispatched', dispatch_date: dispatchDate },
-      metadata: { entity_label: 'Supply order dispatched' },
+    const { data, error } = await supabase.rpc('dispatch_supply_order', {
+      p_supply_order_id: supplyOrderId,
     });
-
-    return { success: true };
+    return parseSupplyMutationRpc(data, error, 'dispatch_supply_order failed');
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to dispatch' };
   }
@@ -253,79 +230,37 @@ export async function confirmSupplyOrderReceipt(supplyOrderId: string): Promise<
 }
 
 /**
- * Cancel a **pending** supply order: releases hub reservations, sets status to cancelled, writes ledger.
- * Inventory-safe only while still pending. For dispatched/received reversals, use `adminDeleteSupplyOrder` (RPC restores hub / outlet).
+ * Cancel a **pending** supply order via atomic RPC (release by reference_id + status).
+ * Inventory-safe only while still pending. For dispatched/received reversals, use `adminDeleteSupplyOrder`.
  */
 export async function cancelSupplyOrder(
   supplyOrderId: string,
   reason: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: order } = await supabase
-      .from('supply_orders')
-      .select('id, status')
-      .eq('id', supplyOrderId)
-      .single();
-
-    if (!order) {
-      return { success: false, error: 'Supply order not found' };
-    }
-
-    const st = String(order.status ?? '').toLowerCase().trim();
-    if (st === 'cancelled') {
-      return { success: true };
-    }
-    if (st !== 'pending') {
-      if (st === 'received') {
+    const { data, error } = await supabase.rpc('cancel_supply_order', {
+      p_supply_order_id: supplyOrderId,
+      p_reason: reason,
+    });
+    const parsed = parseSupplyMutationRpc(data, error, 'cancel_supply_order failed');
+    if (!parsed.success && parsed.error) {
+      const err = parsed.error;
+      if (err.includes('invalid_status') && err.includes('received')) {
         return {
           success: false,
           error:
             'Received orders cannot be cancelled this way. An administrator can use Delete order to reverse inventory.',
         };
       }
-      if (st === 'dispatched') {
+      if (err.includes('invalid_status') && err.includes('dispatched')) {
         return {
           success: false,
           error:
             'Dispatched orders cannot be cancelled this way — hub stock was already fulfilled. An administrator can use Delete order to reverse the hub shipment.',
         };
       }
-      return { success: false, error: `Cannot cancel supply order with status “${st}”.` };
     }
-
-    const { data: lines } = await supabase
-      .from('supply_order_lines')
-      .select('hub_inventory_id, quantity')
-      .eq('supply_order_id', supplyOrderId);
-
-    if (lines?.length) {
-      for (const line of lines) {
-        const result = await releaseReservation(
-          line.hub_inventory_id,
-          Number(line.quantity),
-          supplyOrderId
-        );
-        if (!result.success) {
-          return { success: false, error: result.error ?? 'Failed to release reservation' };
-        }
-      }
-    }
-
-    await retryWithBackoff(async () => await
-      supabase.from('supply_orders').update({ status: 'cancelled' }).eq('id', supplyOrderId)
-    );
-
-    await writeLedgerEntry({
-      action: 'cancelled',
-      entityType: 'supply_order',
-      entityId: supplyOrderId,
-      module: 'distribution',
-      operation: 'update',
-      afterData: { status: 'cancelled' },
-      metadata: { entity_label: 'Supply order cancelled', cancellation_reason: reason },
-    });
-
-    return { success: true };
+    return parsed;
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to cancel' };
   }
