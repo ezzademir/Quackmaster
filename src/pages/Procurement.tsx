@@ -10,6 +10,10 @@ import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validateP
 import { retryWithBackoff } from '../utils/errorHandling';
 import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
+import {
+  cancelPurchaseOrderErrorMessage,
+  extractAtomicRpcErrorCode,
+} from '../utils/atomicRpcErrors';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
 type Tab = 'orders' | 'suppliers' | 'materials';
@@ -442,22 +446,6 @@ function purchaseOrderCanRemove(po: POWithDetails): boolean {
   return purchaseOrderCanSimpleDelete(po) || purchaseOrderUseCancelRpc(po);
 }
 
-function rpcCancelPoErrorMessage(code: string | undefined): string {
-  switch (code) {
-    case 'not_authenticated':
-      return 'You must be signed in to cancel a purchase order.';
-    case 'insufficient_hub_quantity':
-      return 'Cannot cancel: hub no longer holds enough quantity to undo receipts (inventory may have been used). Reduce usage or reverse manually before deleting.';
-    case 'hub_below_reserved':
-      return 'Cannot cancel: reversing receipts would drop hub stock below reserved quantity.';
-    case 'cannot_cancel_missing_hub_row':
-      return 'Cannot cancel: hub inventory row is missing for a received material.';
-    case 'po_not_found':
-      return 'This purchase order no longer exists.';
-    default:
-      return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
-  }
-}
 
 function NewPOModal({
   suppliers,
@@ -918,12 +906,20 @@ function PODetailModal({
       );
 
       if (rpcErr) {
-        throw rpcErr;
+        setError(
+          extractAtomicRpcErrorCode(undefined, rpcErr.message) ??
+            rpcErr.message ??
+            'Receive shipment failed'
+        );
+        setSaving(false);
+        return;
       }
 
       const rpcResult = rpcData as { success?: boolean; error?: string } | null;
       if (rpcResult && rpcResult.success === false) {
-        setError(rpcResult.error ?? 'Receive shipment failed');
+        setError(
+          extractAtomicRpcErrorCode(rpcResult.error) ?? 'Receive shipment failed'
+        );
         setSaving(false);
         return;
       }
@@ -1214,7 +1210,11 @@ export function Procurement() {
       );
 
       if (rpcErr) {
-        alert(rpcErr.message);
+        alert(
+          cancelPurchaseOrderErrorMessage(
+            extractAtomicRpcErrorCode(undefined, rpcErr.message)
+          )
+        );
         return;
       }
 
@@ -1223,7 +1223,11 @@ export function Procurement() {
       }
 
       if (rpcPayload?.success !== true) {
-        alert(rpcCancelPoErrorMessage(rpcPayload?.error));
+        alert(
+          cancelPurchaseOrderErrorMessage(
+            extractAtomicRpcErrorCode(rpcPayload?.error)
+          )
+        );
         return;
       }
 

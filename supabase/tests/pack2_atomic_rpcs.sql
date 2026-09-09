@@ -1,0 +1,24 @@
+-- Manual / CI regression notes for migration 20260909120000_062_pack2_atomic_rpcs.sql
+-- No local Postgres in the draft agent environment; run against a staging DB when available.
+--
+-- PP-01 post_production_completion_inventory
+--   Setup: recipe with 2 RM lines; hub stock enough for RM1, zero for RM2; run in_progress.
+--   Call: post_production_completion_inventory(run, sku, qty>0)
+--   Expect: soft success:false OR exception; NO new inventory_lots / hub FG; RM1 qoh unchanged.
+--
+-- PP-02 receive_po_shipment
+--   Setup: PO with 2 lines; line2 target > ordered (or hub_below_reserved on reduce).
+--   Call: receive_po_shipment with both lines
+--   Expect: failure; line1 quantity_received and hub qoh unchanged (no partial commit).
+--   Happy path: cumulative qty re-post with same totals → delta 0, no double hub credit.
+--
+-- PP-03 cancel_purchase_order
+--   Setup: two received lines; second RM hub qoh < received (or below reserved after reverse).
+--   Call: cancel_purchase_order
+--   Expect: failure; neither line reversed; PO still exists.
+--
+-- inventory-distribution P0-1 receive_supply_order
+--   Setup: dispatched SO with 2 lines; second hub_inventory_id deleted/invalid FG.
+--   Call: receive_supply_order
+--   Expect: failure; outlet_inventory for line1 unchanged (no partial credit); status still dispatched.
+--   Retry after fixing line2 must not double-credit line1.
