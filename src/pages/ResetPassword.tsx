@@ -79,9 +79,9 @@ export function ResetPassword() {
         setError(updErr.message);
         return;
       }
-      const uid = session?.user?.id;
-      if (uid) {
-        await supabase.from('profiles').update({ password_reset_required: false }).eq('id', uid);
+      // Best-effort clear; privileged column is guarded — use RPC when session exists
+      if (session?.user?.id) {
+        await supabase.rpc('clear_own_password_reset_required');
       }
       await supabase.auth.signOut();
       navigate('/login', { replace: true, state: { resetSuccess: true } });

@@ -107,8 +107,32 @@ function LayoutShell() {
   );
 }
 
+function ProfileLoadError({ onSignOut }: { onSignOut: () => void }) {
+  return (
+    <div className="flex min-h-dvh h-dvh max-h-dvh items-center justify-center overflow-y-auto bg-stone-50 auth-safe-padding">
+      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 shadow-sm text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 text-xl font-bold text-white">
+          Q
+        </div>
+        <h1 className="text-lg font-bold text-stone-900 mb-2">Profile unavailable</h1>
+        <p className="text-sm text-stone-600 mb-6 leading-relaxed">
+          You are signed in, but your profile could not be loaded. Access is blocked until this is
+          resolved. Contact an administrator if this continues.
+        </p>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="w-full rounded-lg border border-gray-200 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ProtectedShell() {
-  const { session, loading, profileLoading, profile } = useAuth();
+  const { session, loading, profileLoading, profile, signOut } = useAuth();
   const location = useLocation();
 
   if (loading) return <LoadingScreen />;
@@ -116,6 +140,17 @@ function ProtectedShell() {
   if (profileLoading) {
     return (
       <LoadingScreen subtitle="Loading your profile from the server. If this hangs, check your connection or Supabase status." />
+    );
+  }
+
+  // Fail closed: never grant the operational shell when profile is missing.
+  if (!profile) {
+    return (
+      <ProfileLoadError
+        onSignOut={() => {
+          void signOut();
+        }}
+      />
     );
   }
 

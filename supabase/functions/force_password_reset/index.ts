@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("Origin");
@@ -31,40 +32,72 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  if (req.method !== "POST") {
+    return jsonResponse({ error: "Method not allowed" }, req, 405);
+  }
+
   try {
-    const { userId } = await req.json();
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return jsonResponse({ error: "Missing or invalid Authorization header" }, req, 401);
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    if (!supabaseUrl || !anonKey || !serviceKey) {
+      return jsonResponse({ error: "Missing Supabase configuration" }, req, 500);
+    }
+
+    const jwt = authHeader.replace(/^Bearer\s+/i, "");
+
+    const userClient = createClient(supabaseUrl, anonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const {
+      data: { user: caller },
+      error: callerErr,
+    } = await userClient.auth.getUser(jwt);
+
+    if (callerErr || !caller) {
+      return jsonResponse({ error: "Invalid session" }, req, 401);
+    }
+
+    const adminClient = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: profile, error: profileErr } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", caller.id)
+      .maybeSingle();
+
+    if (profileErr) {
+      return jsonResponse({ error: `Profile check failed: ${profileErr.message}` }, req, 500);
+    }
+
+    if (profile?.role !== "admin") {
+      return jsonResponse({ error: "Forbidden: admin only" }, req, 403);
+    }
+
+    const body = await req.json() as { userId?: string };
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
 
     if (!userId) {
       return jsonResponse({ error: "userId is required" }, req, 400);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const { error: updateErr } = await adminClient
+      .from("profiles")
+      .update({ password_reset_required: true })
+      .eq("id", userId);
 
-    if (!supabaseUrl || !supabaseServiceKey) {
-      return jsonResponse({ error: "Missing Supabase configuration" }, req, 500);
-    }
-
-    const response = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${supabaseServiceKey}`,
-        "Apikey": supabaseServiceKey,
-      },
-      body: JSON.stringify({
-        password_reset_required: true,
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      return jsonResponse(
-        { error: `Failed to update profile: ${error}` },
-        req,
-        response.status,
-      );
+    if (updateErr) {
+      return jsonResponse({ error: `Failed to update profile: ${updateErr.message}` }, req, 400);
     }
 
     return jsonResponse({
