@@ -107,6 +107,10 @@ export interface ReportRow {
   posQty: number | null;
   posRm: number | null;
   dashQty: number | null;
+  /** Posted outlet sales ingested from StoreHub (`sales_journals.source = 'storehub'`). */
+  dashStorehubQty?: number | null;
+  /** Posted outlet sales that are not StoreHub-ingested (null / manual / other). */
+  dashManualQty?: number | null;
   suppliedQty?: number | null;
   leftoverQty?: number | null;
   posVsSold?: number | null;
@@ -130,6 +134,8 @@ export interface ReportResult {
     posQty: number;
     posRm: number;
     dashQty: number;
+    dashStorehubQty: number;
+    dashManualQty: number;
     suppliedQty: number;
     leftoverQty: number;
     match: number;

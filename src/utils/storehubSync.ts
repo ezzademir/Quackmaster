@@ -106,6 +106,8 @@ export interface StorehubReportRow {
   posQty: number | null;
   posRm: number | null;
   dashQty: number | null;
+  dashStorehubQty?: number | null;
+  dashManualQty?: number | null;
   suppliedQty?: number | null;
   leftoverQty?: number | null;
   posVsSold?: number | null;
@@ -128,6 +130,8 @@ export interface StorehubReportResult {
     posQty: number;
     posRm: number;
     dashQty: number;
+    dashStorehubQty?: number;
+    dashManualQty?: number;
     suppliedQty?: number;
     leftoverQty?: number;
     match: number;
