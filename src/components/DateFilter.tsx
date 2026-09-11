@@ -64,6 +64,10 @@ interface DateFilterProps {
   hint?: string;
   label?: string;
   defaultType?: DateFilterType;
+  /** When set with defaultType=custom, seeds the custom inputs and notifies parent. */
+  defaultRange?: DateRange | null;
+  /** Change to re-apply defaultType / defaultRange (e.g. after period drill-down). */
+  syncKey?: string | number;
 }
 
 export function DateFilter({
@@ -72,18 +76,33 @@ export function DateFilter({
   hint,
   label = 'View period',
   defaultType = 'all',
+  defaultRange = null,
+  syncKey,
 }: DateFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [filterType, setFilterType] = useState<DateFilterType>(defaultType);
-  const [customStartDate, setCustomStartDate] = useState(formatDateForInput(new Date()));
-  const [customEndDate, setCustomEndDate] = useState(formatDateForInput(new Date()));
+  const [customStartDate, setCustomStartDate] = useState(
+    defaultRange ? formatDateForInput(defaultRange.start) : formatDateForInput(new Date())
+  );
+  const [customEndDate, setCustomEndDate] = useState(
+    defaultRange ? formatDateForInput(defaultRange.end) : formatDateForInput(new Date())
+  );
 
   useEffect(() => {
+    if (defaultType === 'custom' && defaultRange) {
+      setFilterType('custom');
+      setCustomStartDate(formatDateForInput(defaultRange.start));
+      setCustomEndDate(formatDateForInput(defaultRange.end));
+      onFilterChange(defaultRange, 'custom');
+      return;
+    }
     if (defaultType === 'all') return;
-    onFilterChange(rangeForFilterType(defaultType), defaultType);
-    // Notify parent once when a non-all default is requested.
+    const range = rangeForFilterType(defaultType);
+    setFilterType(defaultType);
+    onFilterChange(range, defaultType);
+    // Notify parent when a non-all default is requested or syncKey changes (drill-down).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [syncKey]);
 
   function handleFilterSelect(type: DateFilterType) {
     setFilterType(type);
@@ -125,7 +144,9 @@ export function DateFilter({
           className="inline-flex w-full min-h-11 items-center justify-between gap-2 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50 transition-colors sm:w-auto sm:justify-center"
         >
           <Calendar size={14} className="text-stone-500" />
-          {DATE_FILTER_LABELS[filterType]}
+          {filterType === 'custom' && customStartDate && customEndDate
+            ? `${customStartDate} → ${customEndDate}`
+            : DATE_FILTER_LABELS[filterType]}
           <ChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {hint ? <p className="max-w-xs text-xs text-stone-500 sm:text-right">{hint}</p> : null}

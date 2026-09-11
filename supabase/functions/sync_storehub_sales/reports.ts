@@ -445,6 +445,22 @@ function isoDateInRange(iso: string | null, from: string, to: string): boolean {
   return iso >= from && iso <= to;
 }
 
+/** Malaysia calendar day of a POS ticket, or null if timestamp missing/invalid. */
+function txnMalaysiaDay(txn: ShTxn): string | null {
+  if (!txn.transactionTime) return null;
+  const dt = new Date(txn.transactionTime);
+  if (Number.isNaN(dt.getTime())) return null;
+  return malaysiaDate(dt);
+}
+
+/** Keep tickets whose MY business day falls in the requested period. */
+function txnInPeriod(txn: ShTxn, from: string, to: string): boolean {
+  const day = txnMalaysiaDay(txn);
+  // StoreHub already windowed the fetch; missing timestamps still count in-range.
+  if (!day) return true;
+  return isoDateInRange(day, from, to);
+}
+
 type DispatchedSupplyLine = { signed_qty: number; lot_id: string | null; product_batch: string };
 type PeriodSupplyOrder = { outlet_id: string; qty: number };
 
@@ -554,7 +570,7 @@ async function soldVsSuppliedReport(opts: {
   const pos = new Map<string, { qty: number; rm: number }>();
   const posLabels = new Map<string, string>();
   for (const txn of opts.txns) {
-    if (!isSale(txn)) continue;
+    if (!isSale(txn) || !txnInPeriod(txn, opts.from, opts.to)) continue;
     for (const item of txn.items ?? []) {
       if (String(item.itemType ?? "Item") !== "Item") continue;
       const pid = String(item.productId ?? "").trim();
@@ -797,10 +813,12 @@ export async function handleReport(opts: {
   if (report === "sales_over_time") {
     const pos = new Map<string, { qty: number; rm: number; label: string }>();
     for (const txn of txns) {
-      if (!isSale(txn) || !txn.transactionTime) continue;
-      const dt = new Date(txn.transactionTime);
-      const day = malaysiaDate(dt);
-      const key = bucketKey(day, malaysiaHour(dt), viewBy);
+      if (!isSale(txn) || !txnInPeriod(txn, from, to)) continue;
+      const day = txnMalaysiaDay(txn) ?? from;
+      const hour = txn.transactionTime && !Number.isNaN(new Date(txn.transactionTime).getTime())
+        ? malaysiaHour(new Date(txn.transactionTime))
+        : "00";
+      const key = bucketKey(day, hour, viewBy);
       const cur = pos.get(key) ?? { qty: 0, rm: 0, label: key };
       cur.qty += itemQty(txn);
       cur.rm += num(txn.total);
@@ -809,6 +827,7 @@ export async function handleReport(opts: {
     const dash = new Map<string, number>();
     if (!posOnly) {
       for (const line of journals) {
+        if (line.quantity_sold <= 0) continue;
         const key = bucketKey(line.business_date, "00", viewBy);
         dash.set(key, (dash.get(key) ?? 0) + line.quantity_sold);
       }
@@ -821,11 +840,14 @@ export async function handleReport(opts: {
       posOnly,
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
-        : "SHPOS qty is units on completed tickets (cancels excluded). QMERP qty is posted outlet sales units.",
+        : "SHPOS qty is units on completed tickets in Asia/Kuala_Lumpur (cancels & returns excluded). QMERP qty is all posted outlet sales for mapped outlets — including manual journals, so totals can exceed SHPOS. Not the same as Sold vs supplied (which is SKU-scoped POS vs sold vs hub dispatch).",
     });
   }
 
   if (report === "sold_vs_supplied") {
+    const allMappedOutletIds = [...new Set(
+      [...storeMap.values()].map((v) => v.outletId).filter(Boolean),
+    )];
     return soldVsSuppliedReport({
       admin: opts.admin,
       selectedSkus: opts.skus ?? [],
@@ -834,7 +856,8 @@ export async function handleReport(opts: {
       txns,
       journals,
       outletIds: opts.storeId?.trim() ? outletIds : null,
-      mappedOutletIds: outletIds,
+      // Always every mapped outlet — used only for "unmapped outlet" notices.
+      mappedOutletIds: allMappedOutletIds,
       storeScoped: Boolean(opts.storeId?.trim()),
       productToSku,
       productMeta,
@@ -845,8 +868,8 @@ export async function handleReport(opts: {
   if (report === "sales_by_product" || report === "sales_by_sku" || report === "sales_by_category") {
     const pos = new Map<string, { qty: number; rm: number; label: string }>();
     for (const txn of txns) {
-      if (!isSale(txn) || !txn.transactionTime) continue;
-      const day = malaysiaDate(new Date(txn.transactionTime));
+      if (!isSale(txn) || !txnInPeriod(txn, from, to)) continue;
+      const day = txnMalaysiaDay(txn) ?? from;
       for (const item of txn.items ?? []) {
         if (String(item.itemType ?? "Item") !== "Item") continue;
         const pid = String(item.productId ?? "").trim();
@@ -909,7 +932,7 @@ export async function handleReport(opts: {
   if (report === "sales_by_channel") {
     const pos = new Map<string, { qty: number; rm: number; label: string }>();
     for (const txn of txns) {
-      if (!isSale(txn)) continue;
+      if (!isSale(txn) || !txnInPeriod(txn, from, to)) continue;
       const key = String(txn.channel ?? "OFFLINE_PAYMENTS") || "OFFLINE_PAYMENTS";
       const cur = pos.get(key) ?? { qty: 0, rm: 0, label: key };
       cur.qty += itemQty(txn);
@@ -918,6 +941,7 @@ export async function handleReport(opts: {
     }
     const dash = new Map<string, number>();
     for (const line of journals) {
+      if (line.quantity_sold <= 0) continue;
       const key = line.source === "storehub" ? channelFromNotes(line.notes) : "manual";
       dash.set(key, (dash.get(key) ?? 0) + line.quantity_sold);
     }
@@ -933,7 +957,7 @@ export async function handleReport(opts: {
   if (report === "sales_by_payment" || report === "promotions" || report === "tax" || report === "employee") {
     const pos = new Map<string, { qty: number; rm: number; label: string }>();
     for (const txn of txns) {
-      if (!isSale(txn)) continue;
+      if (!isSale(txn) || !txnInPeriod(txn, from, to)) continue;
       if (report === "sales_by_payment") {
         const pays = txn.payments?.length ? txn.payments : [{ paymentMethod: "(none)", amount: txn.total }];
         for (const p of pays) {
@@ -1035,6 +1059,7 @@ export async function handleReport(opts: {
 
     const pos = new Map<string, { qty: number; rm: number; label: string }>();
     for (const txn of txns) {
+      if (!txnInPeriod(txn, from, to)) continue;
       const ref = String(txn.refId ?? "").trim();
       if (!ref) continue;
       if (report === "returns") {
