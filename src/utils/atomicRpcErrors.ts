@@ -29,6 +29,22 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'supply_order_not_found',
   'hub_inventory_missing',
   'hub_inventory_invalid_fg',
+  // P0 sales atomic (067)
+  'fifo_alloc_internal_error',
+  'fifo_line_alloc_failed',
+  'outlet_inventory_row_missing_mid_post',
+  'outlet_stock_missing_for_reversal',
+  'insufficient_stock',
+  'insufficient_available',
+  'outlet_inventory_row_not_found',
+  // P0 transfer RLS / RPC auth (067)
+  'transfer_not_found',
+  'invalid_status',
+  'cannot_cancel_received',
+  'already_cancelled',
+  'cannot_fulfill_reserved',
+  'outlet_inventory_not_found',
+  'inventory_wrong_outlet',
 ] as const;
 
 export type AtomicRpcErrorCode = (typeof KNOWN_ATOMIC_RPC_CODES)[number];
@@ -71,3 +87,53 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
       return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
   }
 }
+
+export function salesJournalErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'not_authenticated_or_inactive':
+      return 'You must be an active staff member (or outlet supervisor) to post sales.';
+    case 'insufficient_stock':
+    case 'insufficient_available':
+      return 'Not enough outlet stock available for this sale.';
+    case 'fifo_alloc_internal_error':
+    case 'fifo_line_alloc_failed':
+      return 'Sale could not be allocated to stock rows (inventory changed mid-post). Retry after refreshing stock.';
+    case 'outlet_inventory_row_missing_mid_post':
+    case 'outlet_inventory_row_not_found':
+      return 'An outlet inventory row disappeared mid-post. Refresh and try again.';
+    case 'outlet_stock_missing_for_reversal':
+      return 'Cannot void: outlet stock row for reversal is missing.';
+    case 'admin_required':
+      return 'Only an admin can void this sales journal.';
+    default:
+      return code ? `Could not complete sales journal (${code}).` : 'Could not complete sales journal.';
+  }
+}
+
+export function outletTransferErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'not_authenticated_or_inactive':
+      return 'You must be active staff or admin to manage outlet transfers.';
+    case 'transfer_not_found':
+      return 'This outlet transfer no longer exists.';
+    case 'invalid_status':
+      return 'This transfer is not in a status that allows that action.';
+    case 'cannot_cancel_received':
+      return 'Received transfers cannot be cancelled.';
+    case 'already_cancelled':
+      return 'This transfer is already cancelled.';
+    case 'cannot_fulfill_reserved':
+      return 'Cannot dispatch: reserved source stock is no longer available.';
+    case 'outlet_inventory_not_found':
+    case 'inventory_wrong_outlet':
+      return 'Transfer line inventory is missing or not on the source outlet.';
+    case 'invalid_outlets':
+      return 'Source and destination outlets are invalid.';
+    case 'invalid_lines':
+    case 'invalid_line':
+      return 'Transfer lines are invalid.';
+    default:
+      return code ? `Could not complete outlet transfer (${code}).` : 'Could not complete outlet transfer.';
+  }
+}
+

@@ -3,6 +3,7 @@
  * Handles supply orders with inventory reservations and fulfillment
  */
 
+import { extractAtomicRpcErrorCode, outletTransferErrorMessage } from './atomicRpcErrors';
 import { supabase } from './supabase';
 import { writeLedgerEntry } from './ledger';
 import {
@@ -386,10 +387,22 @@ export async function createOutletTransfer(params: CreateOutletTransferParams): 
       })
     );
 
-    if (error) return { success: false, error: error.message };
+    if (error) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+      };
+    }
 
     const r = data as OutletTransferRpc | null;
-    if (!r?.success) return { success: false, error: r?.error ?? 'Failed to create outlet transfer' };
+    if (!r?.success) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(
+          extractAtomicRpcErrorCode(r?.error) ?? 'Failed to create outlet transfer'
+        ),
+      };
+    }
 
     return {
       success: true,
@@ -406,9 +419,19 @@ export async function dispatchOutletTransfer(transferId: string): Promise<{ succ
     const { data, error } = await retryWithBackoff(async () =>
       supabase.rpc('dispatch_outlet_transfer', { p_transfer_id: transferId })
     );
-    if (error) return { success: false, error: error.message };
+    if (error) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+      };
+    }
     const r = data as OutletTransferRpc | null;
-    if (!r?.success) return { success: false, error: r?.error ?? 'Dispatch failed' };
+    if (!r?.success) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(r?.error) ?? 'Dispatch failed'),
+      };
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Dispatch failed' };
@@ -420,9 +443,19 @@ export async function receiveOutletTransfer(transferId: string): Promise<{ succe
     const { data, error } = await retryWithBackoff(async () =>
       supabase.rpc('receive_outlet_transfer', { p_transfer_id: transferId })
     );
-    if (error) return { success: false, error: error.message };
+    if (error) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+      };
+    }
     const r = data as OutletTransferRpc | null;
-    if (!r?.success) return { success: false, error: r?.error ?? 'Receive failed' };
+    if (!r?.success) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(r?.error) ?? 'Receive failed'),
+      };
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Receive failed' };
@@ -435,9 +468,19 @@ export async function cancelOutletTransfer(transferId: string): Promise<{ succes
     const { data, error } = await retryWithBackoff(async () =>
       supabase.rpc('cancel_outlet_transfer', { p_transfer_id: transferId })
     );
-    if (error) return { success: false, error: error.message };
+    if (error) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+      };
+    }
     const r = data as OutletTransferRpc | null;
-    if (!r?.success) return { success: false, error: r?.error ?? 'Cancel failed' };
+    if (!r?.success) {
+      return {
+        success: false,
+        error: outletTransferErrorMessage(extractAtomicRpcErrorCode(r?.error) ?? 'Cancel failed'),
+      };
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Cancel failed' };

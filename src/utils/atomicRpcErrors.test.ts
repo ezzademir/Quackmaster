@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   cancelPurchaseOrderErrorMessage,
   extractAtomicRpcErrorCode,
+  outletTransferErrorMessage,
+  salesJournalErrorMessage,
 } from './atomicRpcErrors';
 
 describe('extractAtomicRpcErrorCode', () => {
@@ -29,5 +31,18 @@ describe('cancelPurchaseOrderErrorMessage', () => {
 
   it('includes unknown codes in the fallback', () => {
     expect(cancelPurchaseOrderErrorMessage('weird')).toContain('weird');
+  });
+});
+
+describe('salesJournalErrorMessage', () => {
+  it('maps mid-post RAISE codes', () => {
+    expect(salesJournalErrorMessage('fifo_alloc_internal_error')).toMatch(/allocated/i);
+    expect(salesJournalErrorMessage('outlet_inventory_row_missing_mid_post')).toMatch(/inventory/i);
+  });
+});
+
+describe('outletTransferErrorMessage', () => {
+  it('maps pending-blocked auth', () => {
+    expect(outletTransferErrorMessage('not_authenticated_or_inactive')).toMatch(/active staff/i);
   });
 });

@@ -1,3 +1,4 @@
+import { extractAtomicRpcErrorCode, salesJournalErrorMessage } from './atomicRpcErrors';
 import { supabase } from './supabase';
 
 export interface SalesJournalLineInput {
@@ -34,7 +35,10 @@ export async function postSalesJournal(params: {
   });
 
   if (error) {
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: salesJournalErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+    };
   }
 
   const payload = data as {
@@ -47,7 +51,9 @@ export async function postSalesJournal(params: {
   if (!payload?.success) {
     return {
       success: false,
-      error: payload?.error ?? 'post_sales_journal failed',
+      error: salesJournalErrorMessage(
+        extractAtomicRpcErrorCode(payload?.error) ?? 'post_sales_journal failed'
+      ),
     };
   }
 
@@ -76,7 +82,10 @@ export async function postSalesJournalFifoBySku(params: {
   });
 
   if (error) {
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: salesJournalErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+    };
   }
 
   const payload = data as {
@@ -89,7 +98,9 @@ export async function postSalesJournalFifoBySku(params: {
   if (!payload?.success) {
     return {
       success: false,
-      error: payload?.error ?? 'post_sales_journal_fifo_by_sku failed',
+      error: salesJournalErrorMessage(
+        extractAtomicRpcErrorCode(payload?.error) ?? 'post_sales_journal_fifo_by_sku failed'
+      ),
     };
   }
 
@@ -108,7 +119,10 @@ export async function voidSalesJournal(params: {
   });
 
   if (error) {
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: salesJournalErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)),
+    };
   }
 
   const payload = data as { success?: boolean; error?: string } | null;
@@ -116,7 +130,9 @@ export async function voidSalesJournal(params: {
   if (!payload?.success) {
     return {
       success: false,
-      error: payload?.error ?? 'void_sales_journal failed',
+      error: salesJournalErrorMessage(
+        extractAtomicRpcErrorCode(payload?.error) ?? 'void_sales_journal failed'
+      ),
     };
   }
 
