@@ -4,7 +4,14 @@ import { AlertTriangle, ChevronRight, CircleDollarSign, Package, Scale, Truck } 
 import { DateFilter } from '../components/DateFilter';
 import { Button, EmptyState, PageHeader, StatCard } from '../components/ui';
 import { supabase } from '../utils/supabase';
-import { formatDateForInput, getLast7Days, type DateRange } from '../utils/dateRange';
+import {
+  formatDateForInput,
+  getLast7Days,
+  malaysiaCalendarDate,
+  rangeFromPeriodBucket,
+  type DateRange,
+} from '../utils/dateRange';
+import type { DateFilterType } from '../components/DateFilter';
 import {
   STOREHUB_REPORTS,
   invokeStorehub,
@@ -64,10 +71,11 @@ function periodIso(range: DateRange | null): { from: string; to: string } {
   if (range) {
     return { from: formatDateForInput(range.start), to: formatDateForInput(range.end) };
   }
-  const to = new Date();
-  const from = new Date();
-  from.setFullYear(from.getFullYear() - 2);
-  return { from: formatDateForInput(from), to: formatDateForInput(to) };
+  const to = malaysiaCalendarDate();
+  const [y, m, d] = to.split('-').map(Number);
+  const fromDt = new Date(Date.UTC(y - 2, m - 1, d));
+  const from = fromDt.toISOString().slice(0, 10);
+  return { from, to };
 }
 
 function fmtQty(n: number | null | undefined): string {
@@ -117,6 +125,12 @@ export function PosCompare() {
   const [pickerReady, setPickerReady] = useState(false);
   const [pickQuery, setPickQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [filterType, setFilterType] = useState<DateFilterType>('last7Days');
+  const [filterSyncKey, setFilterSyncKey] = useState(0);
+  const [drillLabel, setDrillLabel] = useState<string | null>(null);
+  const [parentViewBy, setParentViewBy] = useState<'week' | 'month' | null>(null);
+  const [preDrillRange, setPreDrillRange] = useState<DateRange | null>(null);
+  const [preDrillFilterType, setPreDrillFilterType] = useState<DateFilterType>('last7Days');
 
   const selected = STOREHUB_REPORTS.find((r) => r.id === reportId);
   const snapshot = Boolean(selected?.snapshot);
@@ -273,6 +287,91 @@ export function PosCompare() {
     });
   }
 
+  const canDrill =
+    showViewBy && (effectiveViewBy === 'week' || effectiveViewBy === 'month');
+
+  async function runWith(
+    nextReport: string,
+    nextRange: DateRange | null,
+    nextViewBy: typeof viewBy,
+    nextStoreId: string,
+    nextSkus: string[] | undefined,
+  ) {
+    if (!STOREHUB_REPORTS.find((r) => r.id === nextReport)?.available) return;
+    if (nextReport === 'sold_vs_supplied' && (!nextSkus || nextSkus.length === 0)) {
+      setError('Pick at least one product.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setRowFilter(nextReport === 'sold_vs_supplied' ? 'all' : 'gaps');
+    setExpanded(new Set());
+    const snap = Boolean(STOREHUB_REPORTS.find((r) => r.id === nextReport)?.snapshot);
+    const period = snap ? {} : periodIso(nextRange);
+    const showVb = PERIOD_BUCKET_REPORTS.has(nextReport);
+    const eff = nextReport !== 'sales_over_time' && nextViewBy === 'hour' ? 'day' : nextViewBy;
+    const { data, error: err } = await invokeStorehub<StorehubReportResult>('report', {
+      report: nextReport,
+      ...period,
+      storeId: nextStoreId || undefined,
+      viewBy: showVb ? eff : undefined,
+      skus: nextSkus,
+    });
+    setBusy(false);
+    if (err && !data) {
+      setResult(null);
+      setError(err);
+      return;
+    }
+    setResult(data);
+    setError(data?.error || err);
+    if (data?.posOnly) setRowFilter('all');
+  }
+
+  function drillToDay(row: StorehubReportRow) {
+    if (!canDrill) return;
+    const bucketRange = rangeFromPeriodBucket(row.key, effectiveViewBy);
+    if (!bucketRange) return;
+    const fromGrain = effectiveViewBy === 'month' ? 'month' : 'week';
+    if (!drillLabel) {
+      setPreDrillRange(dateRange);
+      setPreDrillFilterType(filterType);
+    }
+    setParentViewBy(fromGrain);
+    setDrillLabel(row.label.includes(' · ') ? row.label.slice(0, row.label.indexOf(' · ')) : row.label);
+    setDateRange(bucketRange);
+    setFilterType('custom');
+    setFilterSyncKey((k) => k + 1);
+    setViewBy('day');
+    void runWith(
+      reportId,
+      bucketRange,
+      'day',
+      storeId,
+      tally ? selectedSkus : undefined,
+    );
+  }
+
+  function clearDrill() {
+    const restoreView = parentViewBy ?? 'day';
+    const restoreRange = preDrillRange;
+    const restoreType = preDrillFilterType;
+    setDrillLabel(null);
+    setParentViewBy(null);
+    setPreDrillRange(null);
+    setViewBy(restoreView);
+    setFilterType(restoreType);
+    setDateRange(restoreRange);
+    setFilterSyncKey((k) => k + 1);
+    void runWith(
+      reportId,
+      restoreRange,
+      restoreView,
+      storeId,
+      tally ? selectedSkus : undefined,
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -323,27 +422,41 @@ export function PosCompare() {
             </label>
             <div className={snapshot ? 'hidden' : 'w-full min-w-0 sm:w-auto'}>
               <DateFilter
-                defaultType="last7Days"
-                onFilterChange={(range) => setDateRange(range)}
+                defaultType={filterType}
+                defaultRange={filterType === 'custom' ? dateRange : null}
+                syncKey={filterSyncKey}
+                onFilterChange={(range, type) => {
+                  setFilterType(type);
+                  setDateRange(range);
+                  if (type !== 'custom') {
+                    setDrillLabel(null);
+                    setParentViewBy(null);
+                  }
+                }}
                 hint={
                   tally
-                    ? 'Applies to POS tickets, posted Outlet sales, and hub dispatch by supply date. All time is the last 2 years.'
-                    : 'Applies to POS tickets and QMERP journals. All time is the last 2 years.'
+                    ? 'Malaysia calendar (Asia/Kuala_Lumpur). Applies to POS tickets, posted Outlet sales, and hub dispatch by supply date. Weeks are Mon–Sun. All time is the last 2 years.'
+                    : 'Malaysia calendar (Asia/Kuala_Lumpur). Applies to POS tickets and QMERP journals. Weeks are Mon–Sun. All time is the last 2 years.'
                 }
               />
             </div>
             {showViewBy && (
               <label className="w-full min-w-0 text-sm sm:w-auto">
-                <span className="mb-1 block text-xs text-stone-500">View by</span>
+                <span className="mb-1 block text-xs text-stone-500">Bucket</span>
                 <select
                   value={effectiveViewBy}
-                  onChange={(e) => setViewBy(e.target.value as typeof viewBy)}
+                  onChange={(e) => {
+                    const next = e.target.value as typeof viewBy;
+                    setViewBy(next);
+                    setDrillLabel(null);
+                    setParentViewBy(null);
+                  }}
                   className={fieldClass}
                 >
-                  <option value="day">Day</option>
-                  <option value="week">Week</option>
-                  <option value="month">Month</option>
-                  {showHour && <option value="hour">Hour</option>}
+                  <option value="day">Daily</option>
+                  <option value="week">Weekly</option>
+                  <option value="month">Monthly</option>
+                  {showHour && <option value="hour">Hourly</option>}
                 </select>
               </label>
             )}
@@ -442,6 +555,27 @@ export function PosCompare() {
 
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>
+      )}
+
+      {drillLabel && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-950">
+          <span>
+            Day drill-down for <span className="font-semibold">{drillLabel}</span>
+            {dateRange
+              ? ` (${formatDateForInput(dateRange.start)} → ${formatDateForInput(dateRange.end)})`
+              : ''}
+            . Click a week/month row again from the parent bucket after clearing.
+          </span>
+          <button
+            type="button"
+            className="rounded-md border border-sky-300 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-100"
+            onClick={() => {
+              clearDrill();
+            }}
+          >
+            Back to {parentViewBy === 'month' ? 'monthly' : 'weekly'}
+          </button>
+        </div>
       )}
 
       {!result && !error && !busy && (
@@ -561,7 +695,12 @@ export function PosCompare() {
                 <table className="data-table min-w-[40rem]">
                   <thead>
                     <tr>
-                      <th>Row</th>
+                      <th>
+                        Row
+                        {canDrill ? (
+                          <span className="ml-2 font-normal text-stone-400">· click bucket for days</span>
+                        ) : null}
+                      </th>
                       <th className="text-right">SHPOS qty</th>
                       <th className="text-right">SHPOS RM</th>
                       <th className="text-right">QMERP qty</th>
@@ -578,7 +717,21 @@ export function PosCompare() {
                             : 'hover:bg-stone-50'
                         }
                       >
-                        <td>{row.label}</td>
+                        <td>
+                          {canDrill ? (
+                            <button
+                              type="button"
+                              onClick={() => drillToDay(row)}
+                              className="inline-flex items-center gap-1 text-left font-medium text-sky-900 underline-offset-2 hover:underline"
+                              title="Show daily rows for this bucket"
+                            >
+                              {row.label}
+                              <ChevronRight size={14} className="shrink-0 text-sky-700" />
+                            </button>
+                          ) : (
+                            row.label
+                          )}
+                        </td>
                         <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
                         <td className="text-right tabular-nums">{fmtRm(row.posRm)}</td>
                         <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
