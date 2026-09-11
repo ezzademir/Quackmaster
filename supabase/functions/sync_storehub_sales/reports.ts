@@ -93,6 +93,42 @@ function qtyEq(a: number | null, b: number | null): boolean {
   return Math.abs(a - b) < QTY_EPS;
 }
 
+/** StoreHub-ingested journals only. Null / manual / anything else is "manual/other". */
+function isStorehubJournalSource(source: string | null | undefined): boolean {
+  return (source ?? "").trim().toLowerCase() === "storehub";
+}
+
+function addQty(map: Map<string, number>, key: string, qty: number) {
+  map.set(key, (map.get(key) ?? 0) + qty);
+}
+
+function splitJournalMaps(
+  journals: JournalLine[],
+  keyFn: (line: JournalLine) => string,
+): { all: Map<string, number>; storehub: Map<string, number>; manual: Map<string, number> } {
+  const all = new Map<string, number>();
+  const storehub = new Map<string, number>();
+  const manual = new Map<string, number>();
+  for (const line of journals) {
+    if (line.quantity_sold <= 0) continue;
+    const key = keyFn(line);
+    addQty(all, key, line.quantity_sold);
+    if (isStorehubJournalSource(line.source)) addQty(storehub, key, line.quantity_sold);
+    else addQty(manual, key, line.quantity_sold);
+  }
+  return { all, storehub, manual };
+}
+
+const SPLIT_SOLD_COLUMNS = [
+  { key: "label", label: "Row" },
+  { key: "posQty", label: "SHPOS sold" },
+  { key: "posRm", label: "SHPOS RM" },
+  { key: "dashStorehubQty", label: "QMERP sold (StoreHub)" },
+  { key: "dashManualQty", label: "QMERP sold (manual)" },
+  { key: "dashQty", label: "QMERP sold (all)" },
+  { key: "status", label: "Status" },
+];
+
 function isLegacyBatch(value: string): boolean {
   return /^BATCH-[0-9a-f-]+$/i.test(value.trim());
 }
@@ -245,6 +281,8 @@ function emptyTotals() {
     posQty: 0,
     posRm: 0,
     dashQty: 0,
+    dashStorehubQty: 0,
+    dashManualQty: 0,
     suppliedQty: 0,
     leftoverQty: 0,
     match: 0,
@@ -261,6 +299,8 @@ function finish(rows: ReportRow[], extra: Partial<ReportResult> & Pick<ReportRes
     totals.posQty += r.posQty ?? 0;
     totals.posRm += r.posRm ?? 0;
     totals.dashQty += r.dashQty ?? 0;
+    totals.dashStorehubQty += r.dashStorehubQty ?? 0;
+    totals.dashManualQty += r.dashManualQty ?? 0;
     totals.suppliedQty += r.suppliedQty ?? 0;
     totals.leftoverQty += r.leftoverQty ?? 0;
     totals[r.status] += 1;
@@ -286,28 +326,60 @@ function finish(rows: ReportRow[], extra: Partial<ReportResult> & Pick<ReportRes
   };
 }
 
-function mergeKeys(pos: Map<string, { qty: number; rm: number; label: string }>, dash: Map<string, number>, posOnly: boolean): ReportRow[] {
-  const keys = new Set([...pos.keys(), ...dash.keys()]);
+function mergeKeys(
+  pos: Map<string, { qty: number; rm: number; label: string }>,
+  dash: Map<string, number>,
+  posOnly: boolean,
+  split?: { storehub: Map<string, number>; manual: Map<string, number> },
+): ReportRow[] {
+  const keys = new Set([
+    ...pos.keys(),
+    ...dash.keys(),
+    ...(split ? split.storehub.keys() : []),
+    ...(split ? split.manual.keys() : []),
+  ]);
   const rows: ReportRow[] = [];
   for (const key of [...keys].sort((a, b) => a.localeCompare(b))) {
     const p = pos.get(key);
     const d = dash.has(key) ? dash.get(key)! : null;
-    const posQty = p ? p.qty : dash.has(key) && !p ? null : p?.qty ?? null;
-    const posRm = p ? p.rm : null;
-    const dashQty = posOnly ? null : d;
+    const sh = split ? (split.storehub.get(key) ?? 0) : null;
+    const man = split ? (split.manual.get(key) ?? 0) : null;
+    const allDash = d != null ? d : (sh ?? 0) + (man ?? 0);
     const havePos = Boolean(p);
-    const haveDash = d != null && !posOnly;
+    const haveDash = !posOnly && (d != null || (split != null && ((sh ?? 0) > 0 || (man ?? 0) > 0)));
     let status: DiffStatus;
-    if (posOnly) status = "pos_only";
-    else if (havePos && haveDash) status = qtyEq(p!.qty, d) ? "match" : "qty_mismatch";
-    else if (havePos) status = "missing_in_dashboard";
-    else status = "extra_in_dashboard";
+    if (posOnly) {
+      status = "pos_only";
+    } else if (split) {
+      // Match SHPOS to StoreHub-ingested only (manual never closes a gap).
+      const posQty = havePos ? p!.qty : 0;
+      const shQty = sh ?? 0;
+      if (!havePos) {
+        status = "extra_in_dashboard";
+      } else if (qtyEq(posQty, shQty)) {
+        status = "match";
+      } else if (posQty > 0 && shQty === 0) {
+        status = "missing_in_dashboard";
+      } else if (posQty === 0 && shQty > 0) {
+        status = "extra_in_dashboard";
+      } else {
+        status = "qty_mismatch";
+      }
+    } else if (havePos && haveDash) {
+      status = qtyEq(p!.qty, d) ? "match" : "qty_mismatch";
+    } else if (havePos) {
+      status = "missing_in_dashboard";
+    } else {
+      status = "extra_in_dashboard";
+    }
     rows.push({
       key,
       label: p?.label ?? key,
-      posQty: havePos ? p!.qty : posQty,
-      posRm,
-      dashQty: haveDash ? d : dashQty,
+      posQty: havePos ? p!.qty : null,
+      posRm: p ? p.rm : null,
+      dashQty: posOnly ? null : haveDash ? allDash : havePos ? 0 : null,
+      dashStorehubQty: posOnly || !split ? undefined : sh,
+      dashManualQty: posOnly || !split ? undefined : man,
       status,
     });
   }
@@ -586,6 +658,8 @@ async function soldVsSuppliedReport(opts: {
   }
 
   const sold = new Map<string, number>();
+  const soldStorehub = new Map<string, number>();
+  const soldManual = new Map<string, number>();
   const lotSold = new Map<string, Map<string, { label: string; sold: number; supplied: number }>>();
   const journalLotIds = opts.journals.map((l) => l.lot_id).filter((id): id is string => Boolean(id));
 
@@ -612,6 +686,11 @@ async function soldVsSuppliedReport(opts: {
     const sku = line.recipe_sku;
     if (!selected.includes(sku)) continue;
     sold.set(sku, (sold.get(sku) ?? 0) + line.quantity_sold);
+    if (isStorehubJournalSource(line.source)) {
+      soldStorehub.set(sku, (soldStorehub.get(sku) ?? 0) + line.quantity_sold);
+    } else {
+      soldManual.set(sku, (soldManual.get(sku) ?? 0) + line.quantity_sold);
+    }
     lotBucket(sku, line.lot_id, line.product_batch).sold += line.quantity_sold;
   }
 
@@ -634,6 +713,8 @@ async function soldVsSuppliedReport(opts: {
     const posQty = pos.get(sku)?.qty ?? 0;
     const posRm = pos.get(sku)?.rm ?? 0;
     const dashQty = sold.get(sku) ?? 0;
+    const dashStorehubQty = soldStorehub.get(sku) ?? 0;
+    const dashManualQty = soldManual.get(sku) ?? 0;
     const suppliedQty = supplied.get(sku) ?? 0;
     const leftoverQty = suppliedQty - dashQty;
     const lots: ReportLot[] = [...(lotSold.get(sku)?.values() ?? [])]
@@ -646,11 +727,14 @@ async function soldVsSuppliedReport(opts: {
       posQty,
       posRm,
       dashQty,
+      dashStorehubQty,
+      dashManualQty,
       suppliedQty,
       leftoverQty,
-      posVsSold: posQty - dashQty,
+      // POS vs StoreHub-ingested sold — manual journals do not count as a POS gap.
+      posVsSold: posQty - dashStorehubQty,
       lots,
-      status: soldVsSuppliedStatus(posQty, dashQty),
+      status: soldVsSuppliedStatus(posQty, dashStorehubQty),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
 
@@ -670,7 +754,8 @@ async function soldVsSuppliedReport(opts: {
     .map(([name, qty]) => `${name} ${qty.toLocaleString()}`);
   const noticeParts = [
     "QMERP supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
-    "Leftover is period dispatch minus posted Outlet sales (ignores opening stock and waste). Full stock equation is on Reconciliation. Lots are ERP-only; StoreHub tickets have no batch numbers.",
+    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare SHPOS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
+    "Lots are ERP-only; StoreHub tickets have no batch numbers.",
   ];
   if (opts.storeScoped && dispatched.periodAllOutletQty > 0) {
     noticeParts.push(
@@ -694,10 +779,12 @@ async function soldVsSuppliedReport(opts: {
     columns: [
       { key: "label", label: "Product" },
       { key: "posQty", label: "SHPOS sold" },
-      { key: "dashQty", label: "QMERP sold" },
+      { key: "dashStorehubQty", label: "QMERP sold (StoreHub)" },
+      { key: "dashManualQty", label: "QMERP sold (manual)" },
+      { key: "dashQty", label: "QMERP sold (all)" },
       { key: "suppliedQty", label: "QMERP supplied" },
       { key: "leftoverQty", label: "Leftover" },
-      { key: "posVsSold", label: "POS vs sold" },
+      { key: "posVsSold", label: "POS vs StoreHub sold" },
       { key: "status", label: "Status" },
     ],
   });
@@ -825,22 +912,24 @@ export async function handleReport(opts: {
       pos.set(key, cur);
     }
     const dash = new Map<string, number>();
+    let split: { storehub: Map<string, number>; manual: Map<string, number> } | undefined;
     if (!posOnly) {
-      for (const line of journals) {
-        if (line.quantity_sold <= 0) continue;
-        const key = bucketKey(line.business_date, "00", viewBy);
-        dash.set(key, (dash.get(key) ?? 0) + line.quantity_sold);
-      }
+      const parts = splitJournalMaps(journals, (line) => bucketKey(line.business_date, "00", viewBy));
+      for (const [k, v] of parts.all) dash.set(k, v);
+      split = { storehub: parts.storehub, manual: parts.manual };
     }
-    return finish(mergeKeys(pos, dash, posOnly), {
+    return finish(mergeKeys(pos, dash, posOnly, split), {
       report,
       from,
       to,
       viewBy,
       posOnly,
+      columns: posOnly
+        ? undefined
+        : SPLIT_SOLD_COLUMNS,
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
-        : "SHPOS qty is units on completed tickets in Asia/Kuala_Lumpur (cancels & returns excluded). QMERP qty is all posted outlet sales for mapped outlets — including manual journals, so totals can exceed SHPOS. Not the same as Sold vs supplied (which is SKU-scoped POS vs sold vs hub dispatch).",
+        : "SHPOS sold = completed POS tickets (MY calendar; cancels & returns out). QMERP sold (StoreHub) = journals with source=storehub. QMERP sold (manual) = null/manual/other. QMERP sold (all) = both — so TTDI-style 923 vs 1498 is explained by the manual column. Match status compares SHPOS to StoreHub-ingested only.",
     });
   }
 

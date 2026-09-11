@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, CircleDollarSign, Package, Scale, Truck } from 'lucide-react';
+import { AlertTriangle, ChevronRight, CircleDollarSign, HelpCircle, Package, Scale, Truck } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
 import { Button, EmptyState, PageHeader, StatCard } from '../components/ui';
 import { supabase } from '../utils/supabase';
@@ -96,6 +96,17 @@ const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
   pos_only: 'SHPOS only',
 };
 
+/** Plain-language help for status chips (title tooltip). */
+const STATUS_HELP: Record<StorehubDiffStatus, string> = {
+  match: 'SHPOS sold matches QMERP sold from StoreHub ingest for this row.',
+  qty_mismatch: 'SHPOS sold and QMERP StoreHub-ingested sold both exist but the unit counts differ.',
+  missing_in_dashboard:
+    'SHPOS has sales here, but QMERP has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
+  extra_in_dashboard:
+    'QMERP has posted sales here (often manual or StoreHub ingest) with no matching SHPOS tickets in this period.',
+  pos_only: 'This report has no QMERP journal side — POS tickets only.',
+};
+
 const STATUS_CLASS: Record<StorehubDiffStatus, string> = {
   match: 'bg-emerald-100 text-emerald-800',
   qty_mismatch: 'bg-amber-100 text-amber-900',
@@ -103,6 +114,18 @@ const STATUS_CLASS: Record<StorehubDiffStatus, string> = {
   extra_in_dashboard: 'bg-sky-100 text-sky-800',
   pos_only: 'bg-stone-100 text-stone-600',
 };
+
+function StatusChip({ status }: { status: StorehubDiffStatus }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[status]}`}
+      title={STATUS_HELP[status]}
+    >
+      {STATUS_LABEL[status]}
+      <HelpCircle size={11} className="opacity-70" aria-hidden />
+    </span>
+  );
+}
 
 const groups = [...new Set(STOREHUB_REPORTS.map((r) => r.group))];
 
@@ -140,6 +163,7 @@ export function PosCompare() {
   const showViewBy = PERIOD_BUCKET_REPORTS.has(reportId);
   const showHour = reportId === 'sales_over_time';
   const effectiveViewBy = reportId !== 'sales_over_time' && viewBy === 'hour' ? 'day' : viewBy;
+  const showSplitSold = reportId === 'sales_over_time' || reportId === 'sold_vs_supplied';
 
   useEffect(() => {
     void (async () => {
@@ -378,8 +402,8 @@ export function PosCompare() {
         title="SHPOS vs QMERP"
         description={
           tally
-            ? 'Sold vs supplied: pick products, then compare POS sold to ERP sold and hub dispatch by supply date (same as Distribution).'
-            : 'Compare StoreHub POS tickets to Quackmaster journals. Units should match; ringgit stays on POS.'
+            ? 'Sold vs supplied: compare SHPOS tickets to QMERP sold (StoreHub vs manual) and hub dispatch by supply date. Finished goods are pre-selected when possible.'
+            : 'Compare StoreHub POS tickets to Quackmaster journals. Sales Over Time splits QMERP sold into StoreHub-ingested vs manual so period gaps (e.g. TTDI 923 vs 1498) are explainable.'
         }
         filters={
           <>
@@ -460,7 +484,16 @@ export function PosCompare() {
                 </select>
               </label>
             )}
-            <Button className="w-full sm:w-auto" disabled={busy || !canRun} onClick={() => void run()}>
+            <Button
+              className="w-full sm:w-auto"
+              disabled={busy || !canRun}
+              title={
+                tally && selectedIds.length === 0
+                  ? 'Pick at least one product (Finished goods is a one-click default).'
+                  : undefined
+              }
+              onClick={() => void run()}
+            >
               {busy ? 'Comparing…' : snapshot ? 'Compare now' : 'Compare'}
             </Button>
           </>
@@ -474,6 +507,11 @@ export function PosCompare() {
               Products on this tally
               <span className="ml-2 font-normal text-stone-400">
                 {selectedIds.length} selected
+                {pickerReady && selectedIds.length === 0
+                  ? ' · click Finished goods, then Compare'
+                  : pickerReady && picks.some((x) => x.fg)
+                    ? ' · FG pre-selected by default'
+                    : ''}
               </span>
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
@@ -584,8 +622,27 @@ export function PosCompare() {
             title="Nothing compared yet"
             description={
               tally
-                ? 'Tick the products to watch, set the period, then Compare. QMERP supplied uses the same supply-date dispatch total as Distribution. Leftover is that dispatch minus posted Outlet sales.'
-                : 'Choose a StoreHub report, set the period, then Compare. Gaps show tickets or units that are not in Quackmaster.'
+                ? selectedIds.length === 0
+                  ? 'Next: click Finished goods (or tick products), set the Malaysia period, then Compare.'
+                  : 'Next: set the Malaysia period if needed, then click Compare. Columns show SHPOS sold, QMERP sold (StoreHub / manual / all), supplied, and leftover.'
+                : reportId === 'sales_over_time'
+                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual QMERP sold explains totals above SHPOS.'
+                  : 'Next: choose a report, set the period, then Compare. Gaps are SHPOS vs QMERP StoreHub-ingested sold where that split applies.'
+            }
+            action={
+              canRun ? (
+                <Button onClick={() => void run()} disabled={busy}>
+                  Compare now
+                </Button>
+              ) : tally ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => setSelectedIds(picks.filter((x) => x.fg).map((x) => x.id))}
+                  disabled={!pickerReady || !picks.some((x) => x.fg)}
+                >
+                  Select finished goods
+                </Button>
+              ) : undefined
             }
           />
         </div>
@@ -594,19 +651,62 @@ export function PosCompare() {
       {result && !result.error && (
         <div className="space-y-4">
           {result.notice && <p className="text-sm text-stone-500">{result.notice}</p>}
+          {!result.posOnly && (
+            <details className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-600">
+              <summary className="cursor-pointer font-medium text-stone-800">What do the status chips mean?</summary>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-600">
+                {(Object.keys(STATUS_HELP) as StorehubDiffStatus[]).map((k) => (
+                  <li key={k}>
+                    <span className="font-medium">{STATUS_LABEL[k]}:</span> {STATUS_HELP[k]}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
 
-          <div className={`grid grid-cols-2 gap-3 ${tally ? 'lg:grid-cols-4' : 'lg:grid-cols-4'}`}>
+          {(() => {
+            const hasSplit =
+              showSplitSold &&
+              !result.posOnly &&
+              (result.totals.dashStorehubQty != null ||
+                result.totals.dashManualQty != null ||
+                result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null));
+            const shSold = result.totals.dashStorehubQty ?? null;
+            const manSold = result.totals.dashManualQty ?? null;
+            return (
+          <div className={`grid grid-cols-2 gap-3 ${hasSplit || tally ? 'lg:grid-cols-3 xl:grid-cols-6' : 'lg:grid-cols-4'}`}>
             <StatCard
               icon={<Package size={18} />}
               tone="brand"
-              label={tally ? 'SHPOS sold' : 'SHPOS qty'}
+              label="SHPOS sold"
               value={fmtQty(result.totals.posQty)}
-              sub={result.snapshot ? 'On hand now' : 'Units on POS tickets'}
+              sub={result.snapshot ? 'On hand now' : 'Units on completed POS tickets'}
             />
-            {tally ? (
+            {hasSplit ? (
+              <>
+                <StatCard
+                  icon={<Scale size={18} />}
+                  label="QMERP sold (StoreHub)"
+                  value={fmtQty(shSold)}
+                  sub="source = storehub"
+                />
+                <StatCard
+                  icon={<Scale size={18} />}
+                  label="QMERP sold (manual)"
+                  value={fmtQty(manSold)}
+                  sub="null / manual / other"
+                />
+                <StatCard
+                  icon={<Scale size={18} />}
+                  label="QMERP sold (all)"
+                  value={fmtQty(result.totals.dashQty)}
+                  sub="StoreHub + manual posted"
+                />
+              </>
+            ) : tally ? (
               <StatCard
                 icon={<Scale size={18} />}
-                label="QMERP sold"
+                label="QMERP sold (all)"
                 value={fmtQty(result.totals.dashQty)}
                 sub="Posted outlet sales units"
               />
@@ -618,9 +718,10 @@ export function PosCompare() {
                 sub="POS only"
               />
             )}
+            {!hasSplit && (
             <StatCard
               icon={tally ? <Truck size={18} /> : <Scale size={18} />}
-              label={tally ? 'QMERP supplied' : 'QMERP qty'}
+              label={tally ? 'QMERP supplied' : 'QMERP sold (all)'}
               value={
                 result.posOnly
                   ? '—'
@@ -634,6 +735,23 @@ export function PosCompare() {
                     : 'Posted outlet sales units'
               }
             />
+            )}
+            {tally && (
+              <StatCard
+                icon={<Truck size={18} />}
+                label="QMERP supplied"
+                value={fmtQty(result.totals.suppliedQty)}
+                sub="Dispatched to outlet (supply date)"
+              />
+            )}
+            {hasSplit && !tally && (
+              <StatCard
+                icon={<CircleDollarSign size={18} />}
+                label="SHPOS RM"
+                value={fmtRm(result.totals.posRm)}
+                sub="POS only"
+              />
+            )}
             <StatCard
               icon={<AlertTriangle size={18} />}
               tone={gapCount > 0 ? 'danger' : 'muted'}
@@ -641,15 +759,22 @@ export function PosCompare() {
               value={String(gapCount)}
               sub={
                 tally
-                  ? `${result.totals.match} POS vs sold match · leftover is not a gap`
-                  : `${result.totals.match} match · ${result.totals.pos_only} SHPOS only`
+                  ? `${result.totals.match} SHPOS vs StoreHub sold match · leftover is not a gap`
+                  : hasSplit
+                    ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−SHPOS`
+                    : `${result.totals.match} match · ${result.totals.pos_only} SHPOS only`
               }
             />
           </div>
+            );
+          })()}
 
           {result.rows.length === 0 ? (
             <div className="panel">
-              <EmptyState title="No rows in this range" description="Try a wider date range or another store." />
+              <EmptyState
+                title="No rows in this range"
+                description="Next: widen the Malaysia date range, pick another store, or (for Sold vs supplied) include more products."
+              />
             </div>
           ) : (
             <div className="panel overflow-x-auto">
@@ -690,60 +815,19 @@ export function PosCompare() {
                   picks={picks}
                   expanded={expanded}
                   onToggle={toggleExpand}
+                  showSplit={result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null)}
                 />
               ) : (
-                <table className="data-table min-w-[40rem]">
-                  <thead>
-                    <tr>
-                      <th>
-                        Row
-                        {canDrill ? (
-                          <span className="ml-2 font-normal text-stone-400">· click bucket for days</span>
-                        ) : null}
-                      </th>
-                      <th className="text-right">SHPOS qty</th>
-                      <th className="text-right">SHPOS RM</th>
-                      <th className="text-right">QMERP qty</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {visibleRows.map((row) => (
-                      <tr
-                        key={row.key}
-                        className={
-                          row.status === 'qty_mismatch' || row.status === 'missing_in_dashboard'
-                            ? 'bg-amber-50/60'
-                            : 'hover:bg-stone-50'
-                        }
-                      >
-                        <td>
-                          {canDrill ? (
-                            <button
-                              type="button"
-                              onClick={() => drillToDay(row)}
-                              className="inline-flex items-center gap-1 text-left font-medium text-sky-900 underline-offset-2 hover:underline"
-                              title="Show daily rows for this bucket"
-                            >
-                              {row.label}
-                              <ChevronRight size={14} className="shrink-0 text-sky-700" />
-                            </button>
-                          ) : (
-                            row.label
-                          )}
-                        </td>
-                        <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
-                        <td className="text-right tabular-nums">{fmtRm(row.posRm)}</td>
-                        <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-                        <td>
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[row.status]}`}>
-                            {STATUS_LABEL[row.status]}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <PeriodTable
+                  rows={visibleRows}
+                  canDrill={canDrill}
+                  showSplit={
+                    showSplitSold &&
+                    !result.posOnly &&
+                    result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null)
+                  }
+                  onDrill={drillToDay}
+                />
               )}
               {rowFilter === 'gaps' && !result.posOnly && visibleRows.length === 0 && (
                 <p className="px-4 py-6 text-center text-sm text-stone-500">No gaps in this report.</p>
@@ -762,27 +846,118 @@ export function PosCompare() {
   );
 }
 
+function PeriodTable({
+  rows,
+  canDrill,
+  showSplit,
+  onDrill,
+}: {
+  rows: StorehubReportRow[];
+  canDrill: boolean;
+  showSplit: boolean;
+  onDrill: (row: StorehubReportRow) => void;
+}) {
+  return (
+    <table className={`data-table ${showSplit ? 'min-w-[52rem]' : 'min-w-[40rem]'}`}>
+      <thead>
+        <tr>
+          <th>
+            Row
+            {canDrill ? (
+              <span className="ml-2 font-normal text-stone-400">· click bucket for days</span>
+            ) : null}
+          </th>
+          <th className="text-right">SHPOS sold</th>
+          <th className="text-right">SHPOS RM</th>
+          {showSplit ? (
+            <>
+              <th className="text-right">QMERP sold (StoreHub)</th>
+              <th className="text-right">QMERP sold (manual)</th>
+              <th className="text-right">QMERP sold (all)</th>
+            </>
+          ) : (
+            <th className="text-right">QMERP sold (all)</th>
+          )}
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-stone-100">
+        {rows.map((row) => (
+          <tr
+            key={row.key}
+            className={
+              row.status === 'qty_mismatch' || row.status === 'missing_in_dashboard'
+                ? 'bg-amber-50/60'
+                : 'hover:bg-stone-50'
+            }
+          >
+            <td>
+              {canDrill ? (
+                <button
+                  type="button"
+                  onClick={() => onDrill(row)}
+                  className="inline-flex items-center gap-1 text-left font-medium text-sky-900 underline-offset-2 hover:underline"
+                  title="Show daily rows for this bucket"
+                >
+                  {row.label}
+                  <ChevronRight size={14} className="shrink-0 text-sky-700" />
+                </button>
+              ) : (
+                row.label
+              )}
+            </td>
+            <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
+            <td className="text-right tabular-nums">{fmtRm(row.posRm)}</td>
+            {showSplit ? (
+              <>
+                <td className="text-right tabular-nums">{fmtQty(row.dashStorehubQty)}</td>
+                <td className="text-right tabular-nums">{fmtQty(row.dashManualQty)}</td>
+                <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
+              </>
+            ) : (
+              <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
+            )}
+            <td>
+              <StatusChip status={row.status} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function TallyTable({
   rows,
   picks,
   expanded,
   onToggle,
+  showSplit,
 }: {
   rows: StorehubReportRow[];
   picks: ProductPick[];
   expanded: Set<string>;
   onToggle: (key: string) => void;
+  showSplit: boolean;
 }) {
   return (
-    <table className="data-table min-w-[52rem]">
+    <table className={`data-table ${showSplit ? 'min-w-[64rem]' : 'min-w-[52rem]'}`}>
       <thead>
         <tr>
           <th>Product</th>
           <th className="text-right">SHPOS sold</th>
-          <th className="text-right">QMERP sold</th>
+          {showSplit ? (
+            <>
+              <th className="text-right">QMERP sold (StoreHub)</th>
+              <th className="text-right">QMERP sold (manual)</th>
+              <th className="text-right">QMERP sold (all)</th>
+            </>
+          ) : (
+            <th className="text-right">QMERP sold (all)</th>
+          )}
           <th className="text-right">QMERP supplied</th>
           <th className="text-right">Leftover</th>
-          <th className="text-right">POS vs sold</th>
+          <th className="text-right">{showSplit ? 'POS vs StoreHub' : 'POS vs sold'}</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -815,14 +990,20 @@ function TallyTable({
                   )}
                 </td>
                 <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
+                {showSplit ? (
+                  <>
+                    <td className="text-right tabular-nums">{fmtQty(row.dashStorehubQty)}</td>
+                    <td className="text-right tabular-nums">{fmtQty(row.dashManualQty)}</td>
+                    <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
+                  </>
+                ) : (
+                  <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
+                )}
                 <td className="text-right tabular-nums">{fmtQty(row.suppliedQty)}</td>
                 <td className="text-right tabular-nums">{fmtQty(row.leftoverQty)}</td>
                 <td className="text-right tabular-nums">{fmtQty(row.posVsSold)}</td>
                 <td>
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[row.status]}`}>
-                    {STATUS_LABEL[row.status]}
-                  </span>
+                  <StatusChip status={row.status} />
                 </td>
               </tr>
               {open &&
@@ -830,7 +1011,15 @@ function TallyTable({
                   <tr key={`${row.key}:${lot.label}`} className="bg-stone-50/80 text-stone-600">
                     <td className="pl-8 text-xs">{lot.label}</td>
                     <td className="text-right text-xs text-stone-400">—</td>
-                    <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
+                    {showSplit ? (
+                      <>
+                        <td className="text-right text-xs text-stone-400">—</td>
+                        <td className="text-right text-xs text-stone-400">—</td>
+                        <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
+                      </>
+                    ) : (
+                      <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
+                    )}
                     <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied)}</td>
                     <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied - lot.sold)}</td>
                     <td className="text-right text-xs text-stone-400">—</td>
