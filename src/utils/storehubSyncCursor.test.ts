@@ -11,8 +11,9 @@ describe('isHardSyncFailure', () => {
     expect(isHardSyncFailure('unmapped_store')).toBe(true);
   });
 
-  it('treats insufficient_stock and other ingest errors as retryable', () => {
+  it('treats insufficient_stock and other ingest errors as non-hard', () => {
     expect(isHardSyncFailure('insufficient_stock')).toBe(false);
+    expect(isHardSyncFailure('insufficient_stock_shortfall')).toBe(false);
     expect(isHardSyncFailure('ingest_failed')).toBe(false);
     expect(isHardSyncFailure('')).toBe(false);
     expect(isHardSyncFailure(null)).toBe(false);
@@ -26,13 +27,13 @@ describe('shouldAdvanceStorehubCursor', () => {
     ).toBe(true);
   });
 
-  it('holds the cursor when any retryable failure remains', () => {
+  it('advances even when stock/ops (retryable) failures remain', () => {
     expect(
       shouldAdvanceStorehubCursor({ failedRetryable: 1, runError: null }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldAdvanceStorehubCursor({ failedRetryable: 12, runError: null }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('holds the cursor when the run itself errored', () => {
@@ -42,11 +43,17 @@ describe('shouldAdvanceStorehubCursor', () => {
         runError: 'boom',
       }),
     ).toBe(false);
+    expect(
+      shouldAdvanceStorehubCursor({
+        failedRetryable: 5,
+        runError: 'StoreHub /transactions 500',
+      }),
+    ).toBe(false);
   });
 });
 
 describe('tallyProcessKind', () => {
-  it('splits failed vs failed_hard for cursor decision', () => {
+  it('splits failed vs failed_hard; cursor advances regardless of ticket fails', () => {
     const counts = {
       sales_ingested: 0,
       cancelled: 0,
@@ -67,14 +74,6 @@ describe('tallyProcessKind', () => {
       failed_retryable: 1,
       failed_hard: 2,
     });
-    expect(
-      shouldAdvanceStorehubCursor({
-        failedRetryable: counts.failed_retryable,
-        runError: null,
-      }),
-    ).toBe(false);
-
-    counts.failed_retryable = 0;
     expect(
       shouldAdvanceStorehubCursor({
         failedRetryable: counts.failed_retryable,

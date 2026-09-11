@@ -392,12 +392,15 @@ async function processTxn(
     success?: boolean;
     error?: string;
     idempotent_replay?: boolean;
+    shortfall?: boolean;
     sku?: string;
     requested?: number;
     available?: number;
   } | null;
 
   if (!payload?.success) {
+    // Pre-068 RPCs (or non-stock errors) still return insufficient_stock as fail.
+    // Cursor no longer stalls on these; event stays visible in Settings.
     await recordFail(admin, {
       refId: refRaw,
       invoice: txn.invoiceNumber,
@@ -414,6 +417,8 @@ async function processTxn(
     return "failed";
   }
 
+  // 068+: shortfall posts journal + needs_review sync_event (negative ATP).
+  // Count as ingested so revenue tickets are not dropped.
   return payload.idempotent_replay ? "skipped" : "ingested";
 }
 
@@ -520,10 +525,9 @@ async function handleSync(
         }
       }
 
-      // Hold last_success_to only for retryable failures (e.g. insufficient_stock)
-      // so restock can clear the same window. Hard failures (unmapped_sku /
-      // unmapped_store) still write sync_events for Settings but must not freeze
-      // the cursor forever — mapping is an ops fix, not a cron retry (audit P0-3).
+      // Never stall last_success_to on ticket failures (unmapped OR stock/ops).
+      // Shortfalls post via ingest (needs_review + negative ATP) or stay as
+      // failed sync_events — visible in Settings. Only run-level errors hold.
       if (shouldAdvanceStorehubCursor({
         failedRetryable: counts.failed_retryable,
         runError,
