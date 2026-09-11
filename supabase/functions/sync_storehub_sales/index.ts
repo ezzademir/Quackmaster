@@ -2,6 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { handleReport } from "./reports.ts";
 import type { ShProduct, ShStore, ShTxn } from "./types.ts";
+import {
+  shouldAdvanceStorehubCursor,
+  tallyProcessKind,
+  type SyncProcessKind,
+} from "./cursor.ts";
 
 const STOREHUB_HOST = "https://api.storehubhq.com";
 const MIN_INTERVAL_MS = 350;
@@ -265,7 +270,7 @@ async function processTxn(
   storeMap: Map<string, string>,
   productMap: Map<string, string>,
   runId: string,
-): Promise<"ingested" | "cancelled" | "return" | "failed" | "skipped"> {
+): Promise<SyncProcessKind> {
   const refRaw = String(txn.refId ?? "").trim();
   if (!UUID_RE.test(refRaw)) {
     return "skipped";
@@ -325,7 +330,8 @@ async function processTxn(
       payload: { storeId, channel: txn.channel },
       runId,
     });
-    return "failed";
+    // Hard failure: still logged for Settings, but must not block the cursor.
+    return "failed_hard";
   }
 
   const qtyBySku = new Map<string, number>();
@@ -344,7 +350,8 @@ async function processTxn(
         payload: { productId: pid, quantity: qty, channel: txn.channel },
         runId,
       });
-      return "failed";
+      // Hard failure: still logged for Settings, but must not block the cursor.
+      return "failed_hard";
     }
     qtyBySku.set(sku, (qtyBySku.get(sku) ?? 0) + qty);
   }
@@ -450,6 +457,8 @@ async function handleSync(
     cancelled: 0,
     returns_flagged: 0,
     failed: 0,
+    failed_retryable: 0,
+    failed_hard: 0,
   };
   let runError: string | null = null;
 
@@ -498,29 +507,27 @@ async function handleSync(
             const first = await fetchTransactions(sh, storeId, windowFrom, leftTo);
             for (const txn of first) {
               const kind = await processTxn(admin, txn, storeMap, productMap, runId);
-              if (kind === "ingested") counts.sales_ingested += 1;
-              else if (kind === "cancelled") counts.cancelled += 1;
-              else if (kind === "return") counts.returns_flagged += 1;
-              else if (kind === "failed") counts.failed += 1;
+              tallyProcessKind(kind, counts);
             }
             windowFrom = addDays(leftTo, 1);
             continue;
           }
           for (const txn of txns) {
             const kind = await processTxn(admin, txn, storeMap, productMap, runId);
-            if (kind === "ingested") counts.sales_ingested += 1;
-            else if (kind === "cancelled") counts.cancelled += 1;
-            else if (kind === "return") counts.returns_flagged += 1;
-            else if (kind === "failed") counts.failed += 1;
+            tallyProcessKind(kind, counts);
           }
           break;
         }
       }
 
-      // Do not advance the incremental cursor when any ticket failed in this
-      // window — otherwise insufficient_stock / unmapped_sku days fall out of
-      // the next cron range and never retry after restock (audit P0-3).
-      if (counts.failed === 0 && !runError) {
+      // Hold last_success_to only for retryable failures (e.g. insufficient_stock)
+      // so restock can clear the same window. Hard failures (unmapped_sku /
+      // unmapped_store) still write sync_events for Settings but must not freeze
+      // the cursor forever — mapping is an ops fix, not a cron retry (audit P0-3).
+      if (shouldAdvanceStorehubCursor({
+        failedRetryable: counts.failed_retryable,
+        runError,
+      })) {
         await admin
           .from("storehub_sync_settings")
           .update({ last_success_to: to, updated_at: new Date().toISOString() })
