@@ -5,6 +5,7 @@ import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
+import { outletRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
 import {
   postSalesJournal,
@@ -17,6 +18,11 @@ import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
   key: string;
+  /** Display helper from inventory_lots.manufactured_at */
+  production_date_label?: string | null;
+  lot_label?: string | null;
+  available_qty?: number;
+  fromInventory?: boolean;
 }
 
 const blankLines = (): LineRow[] => [
@@ -25,6 +31,87 @@ const blankLines = (): LineRow[] => [
 
 /** Page size for Recent journals list; use Next to load more. */
 const HISTORY_PAGE_SIZE = 25;
+
+interface OutletInventoryLot {
+  expiry_date: string | null;
+  manufactured_at: string | null;
+  product_batch_label?: string | null;
+  production_run?: unknown;
+}
+
+interface OutletInventoryRowForLoad {
+  id: string;
+  product_batch: string;
+  quantity_on_hand: number;
+  reserved_quantity: number | null;
+  available_quantity: number | null;
+  created_at: string | null;
+  lot: OutletInventoryLot | OutletInventoryLot[] | null;
+}
+
+function normalizeLot(lot: OutletInventoryRowForLoad['lot']): OutletInventoryLot | null {
+  if (lot == null) return null;
+  return Array.isArray(lot) ? (lot[0] ?? null) : lot;
+}
+
+function formatProductionDateLabel(manufacturedAt: string | null | undefined): string | null {
+  if (manufacturedAt == null || manufacturedAt === '') return null;
+  const d = new Date(manufacturedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { dateStyle: 'short' });
+}
+
+function compareNullableStringAsc(a: string | null | undefined, b: string | null | undefined): number {
+  const emptyA = a == null || a === '';
+  const emptyB = b == null || b === '';
+  if (emptyA && emptyB) return 0;
+  if (emptyA) return 1;
+  if (emptyB) return -1;
+  return a.localeCompare(b);
+}
+
+/** Prefill lines from FG stock currently at the outlet (supplied / on hand). */
+function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[] {
+  const parsed = rows
+    .map((row) => {
+      const batch = row.product_batch.trim();
+      if (!batch) return null;
+      return { row, batch, lot: normalizeLot(row.lot) };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+
+  if (parsed.length === 0) return blankLines();
+
+  parsed.sort((a, b) => {
+    const byExpiry = compareNullableStringAsc(a.lot?.expiry_date, b.lot?.expiry_date);
+    if (byExpiry !== 0) return byExpiry;
+    const byMfg = compareNullableStringAsc(a.lot?.manufactured_at, b.lot?.manufactured_at);
+    if (byMfg !== 0) return byMfg;
+    const byCreated = compareNullableStringAsc(a.row.created_at, b.row.created_at);
+    if (byCreated !== 0) return byCreated;
+    return a.row.id.localeCompare(b.row.id);
+  });
+
+  return parsed.map(({ row, batch, lot }) => {
+    const lotLabel = nestedLotLabel(lot as never);
+    const recipeSku = nestedRecipeSku(lot);
+    const displayBatch = displayLotFirst(lotLabel, batch) || batch;
+    const qoh = Number(row.quantity_on_hand ?? 0);
+    const res = Number(row.reserved_quantity ?? 0);
+    const avail = outletRowAvailableQuantity(qoh, res, row.available_quantity);
+    return {
+      key: crypto.randomUUID(),
+      // Keep a matchable identifier; posting uses outlet_inventory_id for the exact lot row.
+      product_batch: recipeSku || lotLabel || batch,
+      quantity_sold: 0,
+      outlet_inventory_id: row.id,
+      production_date_label: formatProductionDateLabel(lot?.manufactured_at),
+      lot_label: lotLabel,
+      available_qty: avail,
+      fromInventory: true,
+    };
+  });
+}
 
 interface ModalDraftLine extends SalesJournalLineInput {
   key: string;
@@ -128,6 +215,8 @@ export function Sales() {
   const [lines, setLines] = useState<LineRow[]>(() => blankLines());
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [inventoryEmptyNotice, setInventoryEmptyNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [history, setHistory] = useState<SalesJournalHistoryRow[]>([]);
@@ -156,6 +245,7 @@ export function Sales() {
   /** Latest outlet id — compare after awaits so overlapping loads can't apply wrong outlet. */
   const outletIdRef = useRef(outletId);
   outletIdRef.current = outletId;
+  const batchesFetchGenRef = useRef(0);
   const recentJournalBusy = modalLoading || modalSaving || modalDeleting;
 
   const populateModalFromJournal = useCallback(async (journalId: string): Promise<boolean> => {
@@ -462,6 +552,59 @@ export function Sales() {
     setHistoryLoadingMore(false);
   }, [journalDateRange, outletId, includeVoided]);
 
+  useEffect(() => {
+    setInventoryEmptyNotice(false);
+    batchesFetchGenRef.current += 1;
+    setLines(blankLines());
+  }, [outletId]);
+
+  const loadBatchesFromInventory = useCallback(async (opts?: { afterPost?: boolean }) => {
+    const outletSnap = outletIdRef.current;
+    if (!outletSnap) {
+      setMessage({ tone: 'err', text: 'Select an outlet.' });
+      return false;
+    }
+
+    const gen = ++batchesFetchGenRef.current;
+    setBatchesLoading(true);
+    if (!opts?.afterPost) setMessage(null);
+    try {
+      const { data, error } = await supabase
+        .from('outlet_inventory')
+        .select(
+          'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+        )
+        .eq('outlet_id', outletSnap)
+        .is('raw_material_id', null)
+        .gt('quantity_on_hand', 0);
+
+      if (error) throw error;
+      if (gen !== batchesFetchGenRef.current || outletSnap !== outletIdRef.current) {
+        return true;
+      }
+
+      const next = outletInventoryToSaleLines((data ?? []) as OutletInventoryRowForLoad[]);
+      const isEmpty = next.length === 1 && !next[0].product_batch;
+      setLines(next);
+      setInventoryEmptyNotice(isEmpty);
+      if (!opts?.afterPost && !isEmpty) {
+        setMessage({
+          tone: 'ok',
+          text: `Loaded ${next.length} supplied batch${next.length === 1 ? '' : 'es'} on hand at this outlet. Enter qty sold, then Post.`,
+        });
+      }
+      return true;
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Failed to load outlet inventory.';
+      if (gen === batchesFetchGenRef.current && outletSnap === outletIdRef.current) {
+        setMessage({ tone: 'err', text });
+      }
+      return false;
+    } finally {
+      if (gen === batchesFetchGenRef.current) setBatchesLoading(false);
+    }
+  }, []);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMessage(null);
@@ -473,10 +616,11 @@ export function Sales() {
       .map((l) => ({
         product_batch: l.product_batch.trim(),
         quantity_sold: Number(l.quantity_sold),
+        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
       }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
-      setMessage({ tone: 'err', text: 'Add at least one line with batch and quantity.' });
+      setMessage({ tone: 'err', text: 'Add at least one line with batch and quantity greater than zero.' });
       return;
     }
     setSubmitting(true);
@@ -500,7 +644,8 @@ export function Sales() {
           : `Posted ${formatSoldQty(postedQty)} units`,
       });
       setNotes('');
-      setLines(blankLines());
+      const reloaded = await loadBatchesFromInventory({ afterPost: true });
+      if (!reloaded) setLines(blankLines());
       void loadHistory();
       void loadOverview();
     } finally {
@@ -638,7 +783,7 @@ export function Sales() {
         description={
           pageTab === 'overview'
             ? 'Posted sales for this outlet. Voided journals stay on file and are hidden unless included.'
-            : 'Key sales by lot or SKU and quantity. Business date is the day the sale happened.'
+            : 'Load batches supplied to this outlet, enter qty sold, then post. Business date is the day the sale happened.'
         }
         filters={
           <>
@@ -781,25 +926,42 @@ export function Sales() {
             <div>
               <h2 className="text-sm font-semibold text-stone-900">Lines</h2>
               <p className="mt-0.5 text-xs text-stone-500">
-                Enter the lot or recipe SKU and quantity sold. The system allocates outlet stock by FIFO when you post.
+                Load on-hand batches that were supplied to this outlet, enter qty sold, then post. Each loaded line
+                deducts that exact lot.
               </p>
             </div>
-            <Button
-              type="button"
-              variant="secondary"
-              className="px-2 py-1 text-xs"
-              onClick={() => {
-                setLines((prev) => [
-                  ...prev,
-                  { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 },
-                ]);
-              }}
-            >
-              <Plus size={14} /> Add line
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                onClick={() => void loadBatchesFromInventory()}
+                disabled={!outletId || batchesLoading}
+              >
+                {batchesLoading ? 'Loading…' : 'Load batches from inventory'}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="px-2 py-1 text-xs"
+                onClick={() => {
+                  setInventoryEmptyNotice(false);
+                  setLines((prev) => [
+                    ...prev,
+                    { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 },
+                  ]);
+                }}
+              >
+                <Plus size={14} /> Add line
+              </Button>
+            </div>
           </div>
+          {inventoryEmptyNotice && (
+            <p className="mb-2 text-sm text-stone-500">No supplied batches on hand for this outlet.</p>
+          )}
           <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
-            <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Lot or SKU</div>
+            <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Batch / lot</div>
+            <div className="w-28 min-w-[7rem] text-xs font-medium text-stone-500">Prod. date</div>
             <div className="w-28 text-xs font-medium text-stone-500">Qty sold</div>
             <div className="w-10 shrink-0" aria-hidden />
           </div>
@@ -807,18 +969,36 @@ export function Sales() {
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-[140px] flex-1">
-                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Lot or SKU</span>
-                  <input
-                    placeholder="e.g. QUACKTEOW or lot code"
-                    value={line.product_batch}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setLines((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, product_batch: v } : r))
-                      );
-                    }}
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
-                  />
+                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Batch / lot</span>
+                  {line.fromInventory ? (
+                    <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+                      <span className="break-all font-mono text-stone-900">
+                        {formatLotWithSku(line.lot_label, line.product_batch)}
+                      </span>
+                    </div>
+                  ) : (
+                    <input
+                      placeholder="Lot or recipe SKU"
+                      value={line.product_batch}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setLines((prev) =>
+                          prev.map((r, i) =>
+                            i === idx
+                              ? { ...r, product_batch: v, outlet_inventory_id: undefined, fromInventory: false }
+                              : r
+                          )
+                        );
+                      }}
+                      className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                    />
+                  )}
+                </div>
+                <div className="w-full min-w-[7rem] sm:w-28">
+                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Prod. date</span>
+                  <div className="flex min-h-[38px] items-center rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm tabular-nums text-stone-800">
+                    {line.production_date_label ?? '—'}
+                  </div>
                 </div>
                 <div className="w-28">
                   <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Qty sold</span>
@@ -836,6 +1016,11 @@ export function Sales() {
                     }}
                     className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm tabular-nums"
                   />
+                  {line.available_qty != null ? (
+                    <p className="mt-0.5 text-[11px] tabular-nums text-stone-400">
+                      Available {formatSoldQty(line.available_qty)}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
@@ -861,7 +1046,7 @@ export function Sales() {
           />
         </div>
 
-        <Button type="submit" disabled={submitting || !outletId}>
+        <Button type="submit" disabled={submitting || batchesLoading || !outletId}>
           {submitting ? 'Posting…' : 'Post journal'}
         </Button>
       </form>
