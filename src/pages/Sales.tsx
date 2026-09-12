@@ -1,133 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Ban, ChevronDown, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
+import { Ban, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
 import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
-import { hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
 import {
   postSalesJournal,
-  postSalesJournalFifoBySku,
   replaceSalesJournal,
   voidSalesJournal,
   type SalesJournalLineInput,
 } from '../utils/visibilityService';
-import { displayLotFirst, formatLotWithSku, isLegacyBatchCode, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
+import { displayLotFirst, formatLotWithSku, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
 import type { Outlet } from '../types';
 
 interface LineRow extends SalesJournalLineInput {
   key: string;
-  /** UI-only; from inventory_lots.manufactured_at when loaded */
-  production_date_label: string | null;
-  lot_label?: string | null;
-  available_qty?: number;
 }
 
 const blankLines = (): LineRow[] => [
-  { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0, production_date_label: null },
+  { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 },
 ];
 
 /** Page size for Recent journals list; use Next to load more. */
 const HISTORY_PAGE_SIZE = 25;
-
-interface OutletInventoryLot {
-  expiry_date: string | null;
-  manufactured_at: string | null;
-  product_batch_label?: string | null;
-  production_run?: unknown;
-}
-
-interface OutletInventoryRowForFifo {
-  id: string;
-  product_batch: string;
-  quantity_on_hand: number;
-  reserved_quantity: number | null;
-  available_quantity: number | null;
-  created_at: string | null;
-  lot: OutletInventoryLot | OutletInventoryLot[] | null;
-}
-
-interface OutletInventoryLotWithLabel extends OutletInventoryLot {
-  product_batch_label?: string | null;
-}
-
-interface OutletInventoryRowForSku {
-  product_batch: string;
-  lot: OutletInventoryLotWithLabel | OutletInventoryLotWithLabel[] | null;
-}
-
-function normalizeLot(lot: OutletInventoryRowForFifo['lot']): OutletInventoryLot | null {
-  if (lot == null) return null;
-  return Array.isArray(lot) ? (lot[0] ?? null) : lot;
-}
-
-function distinctSortedSkus(rows: OutletInventoryRowForSku[]): string[] {
-  const set = new Set<string>();
-  for (const row of rows) {
-    const lot = nestedLotLabel(row.lot as never);
-    const recipeSku = nestedRecipeSku(row.lot);
-    const sku = skuForDisplay(lot, row.product_batch, recipeSku);
-    if (sku) set.add(sku);
-    if (lot && !isLegacyBatchCode(lot)) set.add(lot);
-  }
-  return [...set].sort((a, b) => a.localeCompare(b));
-}
-
-function formatProductionDateLabel(manufacturedAt: string | null | undefined): string | null {
-  if (manufacturedAt == null || manufacturedAt === '') return null;
-  const d = new Date(manufacturedAt);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { dateStyle: 'short' });
-}
-
-/** Ascending with null/empty last (FIFO: unknown dates after known). */
-function compareNullableStringAsc(a: string | null | undefined, b: string | null | undefined): number {
-  const emptyA = a == null || a === '';
-  const emptyB = b == null || b === '';
-  if (emptyA && emptyB) return 0;
-  if (emptyA) return 1;
-  if (emptyB) return -1;
-  return a.localeCompare(b);
-}
-
-function outletInventoryFifoToLines(rows: OutletInventoryRowForFifo[]): LineRow[] {
-  const parsed = rows
-    .map((row) => {
-      const batch = row.product_batch.trim();
-      if (!batch) return null;
-      return { row, batch, lot: normalizeLot(row.lot) };
-    })
-    .filter((x): x is NonNullable<typeof x> => x != null);
-
-  if (parsed.length === 0) return blankLines();
-
-  parsed.sort((a, b) => {
-    const byExpiry = compareNullableStringAsc(a.lot?.expiry_date, b.lot?.expiry_date);
-    if (byExpiry !== 0) return byExpiry;
-    const byMfg = compareNullableStringAsc(a.lot?.manufactured_at, b.lot?.manufactured_at);
-    if (byMfg !== 0) return byMfg;
-    const byCreated = compareNullableStringAsc(a.row.created_at, b.row.created_at);
-    if (byCreated !== 0) return byCreated;
-    return a.row.id.localeCompare(b.row.id);
-  });
-
-  return parsed.map(({ row, batch, lot }) => {
-    const qoh = Number(row.quantity_on_hand ?? 0);
-    const res = Number(row.reserved_quantity ?? 0);
-    const avail = hubRowAvailableQuantity(qoh, res, row.available_quantity);
-    return {
-      key: crypto.randomUUID(),
-      product_batch: displayLotFirst(nestedLotLabel(lot as never), batch) || batch,
-      quantity_sold: 0,
-      outlet_inventory_id: row.id,
-      production_date_label: formatProductionDateLabel(lot?.manufactured_at),
-      lot_label: nestedLotLabel(lot as never),
-      available_qty: avail,
-    };
-  });
-}
 
 interface ModalDraftLine extends SalesJournalLineInput {
   key: string;
@@ -225,15 +122,12 @@ function linesByJournalFromDb(
 export function Sales() {
   const { isAdmin, isSupervisor, profile } = useAuth();
   const [pageTab, setPageTab] = useState<'overview' | 'record'>('overview');
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
   const [businessDate, setBusinessDate] = useState(() => malaysiaCalendarDate());
   const [lines, setLines] = useState<LineRow[]>(() => blankLines());
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
-  const [batchesLoading, setBatchesLoading] = useState(false);
-  const [inventoryEmptyNotice, setInventoryEmptyNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [history, setHistory] = useState<SalesJournalHistoryRow[]>([]);
@@ -242,13 +136,6 @@ export function Sales() {
   const [includeVoided, setIncludeVoided] = useState(false);
   const [overview, setOverview] = useState<SalesOverview>(() => emptySalesOverview());
   const [overviewLoading, setOverviewLoading] = useState(false);
-
-  const [fifoSkus, setFifoSkus] = useState<string[]>([]);
-  const [fifoSkusLoading, setFifoSkusLoading] = useState(false);
-  const [fifoSku, setFifoSku] = useState('');
-  const [fifoQtySold, setFifoQtySold] = useState(0);
-  const [fifoPosting, setFifoPosting] = useState(false);
-  const fifoSkusGenRef = useRef(0);
   const overviewGenRef = useRef(0);
 
   const [journalModalOpen, setJournalModalOpen] = useState(false);
@@ -266,44 +153,9 @@ export function Sales() {
   const [modalMessage, setModalMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [journalDateRange, setJournalDateRange] = useState<DateRange | null>(() => getLast7Days());
 
-  /** Latest outlet id — compare after awaits so overlapping batch loads can't apply wrong outlet rows. */
+  /** Latest outlet id — compare after awaits so overlapping loads can't apply wrong outlet. */
   const outletIdRef = useRef(outletId);
   outletIdRef.current = outletId;
-  /** Invalidate older in-flight batch fetches when a newer load starts or outlet changes intent. */
-  const batchesFetchGenRef = useRef(0);
-  const inventoryBatchLoadsInFlightRef = useRef(0);
-
-  const refreshFifoSkus = useCallback(async () => {
-    const oid = outletIdRef.current;
-    if (!oid) {
-      setFifoSkus([]);
-      setFifoSku('');
-      setFifoSkusLoading(false);
-      return;
-    }
-    const gen = ++fifoSkusGenRef.current;
-    setFifoSkusLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('outlet_inventory')
-        .select('product_batch, lot:inventory_lots(product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))')
-        .eq('outlet_id', oid)
-        .is('raw_material_id', null)
-        .gt('quantity_on_hand', 0);
-      if (error) throw error;
-      if (gen !== fifoSkusGenRef.current) return;
-      const opts = distinctSortedSkus((data ?? []) as OutletInventoryRowForSku[]);
-      setFifoSkus(opts);
-      setFifoSku((prev) => (prev && opts.includes(prev) ? prev : ''));
-    } catch {
-      if (gen !== fifoSkusGenRef.current) return;
-      setFifoSkus([]);
-      setFifoSku('');
-    } finally {
-      if (gen === fifoSkusGenRef.current) setFifoSkusLoading(false);
-    }
-  }, []);
-
   const recentJournalBusy = modalLoading || modalSaving || modalDeleting;
 
   const populateModalFromJournal = useCallback(async (journalId: string): Promise<boolean> => {
@@ -610,111 +462,6 @@ export function Sales() {
     setHistoryLoadingMore(false);
   }, [journalDateRange, outletId, includeVoided]);
 
-  useEffect(() => {
-    setInventoryEmptyNotice(false);
-    batchesFetchGenRef.current += 1;
-  }, [outletId]);
-
-  useEffect(() => {
-    void refreshFifoSkus();
-  }, [outletId, refreshFifoSkus]);
-
-  const loadBatchesFromInventory = useCallback(
-    async (opts?: { afterPost?: boolean }) => {
-      const outletSnap = outletIdRef.current;
-      if (!outletSnap) {
-        setMessage({ tone: 'err', text: 'Select an outlet.' });
-        return false;
-      }
-
-      const gen = ++batchesFetchGenRef.current;
-      inventoryBatchLoadsInFlightRef.current += 1;
-      setBatchesLoading(true);
-      if (!opts?.afterPost) setMessage(null);
-      try {
-        const { data, error } = await supabase
-          .from('outlet_inventory')
-          .select(
-            'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
-          )
-          .eq('outlet_id', outletSnap)
-          .is('raw_material_id', null)
-          .gt('quantity_on_hand', 0);
-
-        if (error) throw error;
-
-        if (gen !== batchesFetchGenRef.current || outletSnap !== outletIdRef.current) {
-          return true;
-        }
-
-        const next = outletInventoryFifoToLines((data ?? []) as OutletInventoryRowForFifo[]);
-        const isEmpty = next.length === 1 && next[0].product_batch === '';
-        setLines(next);
-        setInventoryEmptyNotice(isEmpty);
-        setAdvancedOpen(true);
-        return true;
-      } catch (err) {
-        const text = err instanceof Error ? err.message : 'Failed to load outlet inventory.';
-        if (gen === batchesFetchGenRef.current && outletSnap === outletIdRef.current) {
-          setMessage({ tone: 'err', text });
-        }
-        return false;
-      } finally {
-        inventoryBatchLoadsInFlightRef.current -= 1;
-        if (inventoryBatchLoadsInFlightRef.current <= 0) {
-          inventoryBatchLoadsInFlightRef.current = 0;
-          setBatchesLoading(false);
-        }
-      }
-    },
-    []
-  );
-
-  async function handleFifoPost() {
-    setMessage(null);
-    if (!outletId) {
-      setMessage({ tone: 'err', text: 'Select an outlet.' });
-      return;
-    }
-    if (!fifoSku) {
-      setMessage({ tone: 'err', text: 'Select a SKU with stock at this outlet.' });
-      return;
-    }
-    const qty = Number(fifoQtySold);
-    if (!Number.isFinite(qty) || qty <= 0) {
-      setMessage({ tone: 'err', text: 'Enter a quantity greater than zero.' });
-      return;
-    }
-    setFifoPosting(true);
-    try {
-      const res = await postSalesJournalFifoBySku({
-        outletId,
-        businessDate,
-        sku: fifoSku,
-        quantitySold: qty,
-        notes: notes.trim() || undefined,
-        idempotencyKey: crypto.randomUUID(),
-      });
-      if (!res.success) {
-        setMessage({ tone: 'err', text: res.error ?? 'Failed to post FIFO sale.' });
-        return;
-      }
-      setMessage({
-        tone: 'ok',
-        text: res.idempotentReplay
-          ? 'Sale already recorded.'
-          : `Posted ${formatSoldQty(qty)} units`,
-      });
-      setFifoQtySold(0);
-      void loadHistory();
-      void loadOverview();
-      await loadBatchesFromInventory({ afterPost: true });
-      await refreshFifoSkus();
-    } finally {
-      setFifoPosting(false);
-    }
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMessage(null);
@@ -726,7 +473,6 @@ export function Sales() {
       .map((l) => ({
         product_batch: l.product_batch.trim(),
         quantity_sold: Number(l.quantity_sold),
-        ...(l.outlet_inventory_id ? { outlet_inventory_id: l.outlet_inventory_id } : {}),
       }))
       .filter((l) => l.product_batch && Number.isFinite(l.quantity_sold) && l.quantity_sold > 0);
     if (!cleaned.length) {
@@ -754,8 +500,7 @@ export function Sales() {
           : `Posted ${formatSoldQty(postedQty)} units`,
       });
       setNotes('');
-      const reloaded = await loadBatchesFromInventory({ afterPost: true });
-      if (!reloaded) setLines(blankLines());
+      setLines(blankLines());
       void loadHistory();
       void loadOverview();
     } finally {
@@ -769,7 +514,7 @@ export function Sales() {
     if (
       !window.confirm(
         modalSource === 'storehub'
-          ? 'Void this StoreHub sale? Outlet stock will be restored. Sync can re-post the POS ticket later if it is still active. Admin-only.'
+          ? 'Void this historical StoreHub sale? Outlet stock will be restored. Admin-only.'
           : 'Void this sale? Outlet stock will be restored. The sale stays on file as voided and leaves the posted list.'
       )
     )
@@ -785,7 +530,6 @@ export function Sales() {
       setHistory((prev) => prev.filter((h) => h.id !== journalIdToDelete));
       const refreshed = await loadHistory();
       void loadOverview();
-      void refreshFifoSkus();
       closeJournalModal();
       setMessage({
         tone: 'ok',
@@ -828,7 +572,6 @@ export function Sales() {
       setHistory((prev) => prev.filter((h) => h.id !== modalJournalId));
       await loadHistory();
       void loadOverview();
-      void refreshFifoSkus();
       closeJournalModal();
       setMessage({
         tone: 'ok',
@@ -895,7 +638,7 @@ export function Sales() {
         description={
           pageTab === 'overview'
             ? 'Posted sales for this outlet. Voided journals stay on file and are hidden unless included.'
-            : 'Record a FIFO sale first. Business date is the day the sale happened.'
+            : 'Key sales by lot or SKU and quantity. Business date is the day the sale happened.'
         }
         filters={
           <>
@@ -1033,123 +776,30 @@ export function Sales() {
           />
         </div>
 
-        <div className="rounded-lg border border-brand-100 bg-brand-50/40 p-4">
-          <h2 className="text-sm font-semibold text-stone-900">FIFO sale by SKU</h2>
-          <p className="mt-1 text-xs text-stone-600">
-            Pick the SKU (or a specific lot). Consumption follows FEFO; the journal shows which lot was sold.
-          </p>
-          <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_auto_auto] sm:items-end">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-stone-700">SKU</label>
-              <select
-                value={fifoSku}
-                onChange={(e) => setFifoSku(e.target.value)}
-                disabled={!outletId || fifoSkusLoading || fifoSkus.length === 0}
-                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm disabled:bg-stone-100"
-              >
-                <option value="">
-                  {fifoSkusLoading
-                    ? 'Loading SKUs…'
-                    : fifoSkus.length === 0
-                      ? 'No SKUs with stock'
-                      : 'Select SKU'}
-                </option>
-                {fifoSkus.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="w-full sm:w-32">
-              <label className="mb-1 block text-xs font-medium text-stone-700">Qty sold</label>
-              <input
-                type="number"
-                min={0}
-                step="0.0001"
-                placeholder="Qty"
-                value={Number.isFinite(fifoQtySold) ? fifoQtySold : ''}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  setFifoQtySold(Number.isFinite(v) ? v : 0);
-                }}
-                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm tabular-nums"
-              />
-            </div>
-            <div className="sm:pb-0.5">
-              <Button
-                type="button"
-                onClick={() => void handleFifoPost()}
-                disabled={
-                  !outletId ||
-                  !fifoSku ||
-                  fifoSkusLoading ||
-                  fifoPosting ||
-                  fifoSkus.length === 0 ||
-                  !Number.isFinite(fifoQtySold) ||
-                  fifoQtySold <= 0
-                }
-                className="w-full sm:w-auto"
-              >
-                {fifoPosting ? 'Posting…' : 'Post FIFO sale'}
-              </Button>
-            </div>
-          </div>
-        </div>
-
         <div>
-          <button
-            type="button"
-            onClick={() => setAdvancedOpen((open) => !open)}
-            className="flex w-full items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-left text-sm font-medium text-stone-800 hover:bg-stone-100"
-          >
-            Advanced: manual lines
-            <ChevronDown size={16} className={`text-stone-500 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
-          </button>
-          {advancedOpen && (
-            <div className="mt-3 space-y-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-stone-500">
-              Edit batches line by line for splits or overrides. Qty sold starts at 0; available stock is shown as a
-              helper.
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                className="px-2 py-1 text-xs"
-                onClick={() => void loadBatchesFromInventory()}
-                disabled={!outletId || batchesLoading}
-              >
-                {batchesLoading ? 'Loading…' : 'Load batches from inventory'}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="px-2 py-1 text-xs"
-                onClick={() => {
-                  setInventoryEmptyNotice(false);
-                  setLines((prev) => [
-                    ...prev,
-                    {
-                      key: crypto.randomUUID(),
-                      product_batch: '',
-                      quantity_sold: 0,
-                      production_date_label: null,
-                    },
-                  ]);
-                }}
-              >
-                <Plus size={14} /> Add line
-              </Button>
+            <div>
+              <h2 className="text-sm font-semibold text-stone-900">Lines</h2>
+              <p className="mt-0.5 text-xs text-stone-500">
+                Enter the lot or recipe SKU and quantity sold. The system allocates outlet stock by FIFO when you post.
+              </p>
             </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="px-2 py-1 text-xs"
+              onClick={() => {
+                setLines((prev) => [
+                  ...prev,
+                  { key: crypto.randomUUID(), product_batch: '', quantity_sold: 0 },
+                ]);
+              }}
+            >
+              <Plus size={14} /> Add line
+            </Button>
           </div>
-          {inventoryEmptyNotice && (
-            <p className="mb-2 text-sm text-stone-500">No stocked batches for this outlet.</p>
-          )}
           <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
-            <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Lot</div>
-            <div className="w-28 min-w-[7rem] text-xs font-medium text-stone-500">Prod. date</div>
+            <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Lot or SKU</div>
             <div className="w-28 text-xs font-medium text-stone-500">Qty sold</div>
             <div className="w-10 shrink-0" aria-hidden />
           </div>
@@ -1157,33 +807,18 @@ export function Sales() {
             {lines.map((line, idx) => (
               <div key={line.key} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-[140px] flex-1">
-                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Lot</span>
+                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Lot or SKU</span>
                   <input
-                    placeholder="Lot or SKU"
+                    placeholder="e.g. QUACKTEOW or lot code"
                     value={line.product_batch}
                     onChange={(e) => {
                       const v = e.target.value;
                       setLines((prev) =>
-                        prev.map((r, i) =>
-                          i === idx ? { ...r, product_batch: v, production_date_label: null } : r
-                        )
+                        prev.map((r, i) => (i === idx ? { ...r, product_batch: v } : r))
                       );
                     }}
                     className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
                   />
-                </div>
-                <div className="w-full min-w-[7rem] sm:w-28">
-                  <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Prod. date</span>
-                  <div
-                    className="flex min-h-[38px] items-center rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm tabular-nums text-stone-800"
-                    title={
-                      line.production_date_label
-                        ? `Production date ${line.production_date_label}`
-                        : 'No production date on file for this lot'
-                    }
-                  >
-                    {line.production_date_label ?? '—'}
-                  </div>
                 </div>
                 <div className="w-28">
                   <span className="mb-1 block text-xs font-medium text-stone-500 sm:hidden">Qty sold</span>
@@ -1191,7 +826,7 @@ export function Sales() {
                     type="number"
                     min={0}
                     step="0.01"
-                    placeholder="Qty sold"
+                    placeholder="Qty"
                     value={Number.isFinite(line.quantity_sold) ? line.quantity_sold : ''}
                     onChange={(e) => {
                       const v = parseFloat(e.target.value);
@@ -1201,11 +836,6 @@ export function Sales() {
                     }}
                     className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm tabular-nums"
                   />
-                  {line.available_qty != null ? (
-                    <p className="mt-0.5 text-[11px] tabular-nums text-stone-400">
-                      Available {formatSoldQty(line.available_qty)}
-                    </p>
-                  ) : null}
                 </div>
                 <button
                   type="button"
@@ -1219,8 +849,6 @@ export function Sales() {
               </div>
             ))}
           </div>
-            </div>
-          )}
         </div>
 
         <div>
@@ -1233,11 +861,9 @@ export function Sales() {
           />
         </div>
 
-        {advancedOpen ? (
-          <Button type="submit" disabled={submitting || batchesLoading || fifoPosting}>
-            {submitting ? 'Posting…' : 'Post manual journal'}
-          </Button>
-        ) : null}
+        <Button type="submit" disabled={submitting || !outletId}>
+          {submitting ? 'Posting…' : 'Post journal'}
+        </Button>
       </form>
       )}
 
@@ -1536,7 +1162,7 @@ export function Sales() {
                         </button>
                       ) : (
                         <span className="mr-auto text-xs text-stone-500">
-                          StoreHub sales: void only (admin). Edit/replace is disabled.
+                          Historical StoreHub sales: void only (admin). Edit/replace is disabled.
                         </span>
                       )}
                       <button
