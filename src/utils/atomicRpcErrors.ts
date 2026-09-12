@@ -37,6 +37,10 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'insufficient_stock',
   'insufficient_available',
   'outlet_inventory_row_not_found',
+  'replace_sales_journal_void_failed',
+  'replace_sales_journal_repost_failed',
+  'journal_not_found_or_not_posted',
+  'admin_required',
   // P0 transfer RLS / RPC auth (067)
   'transfer_not_found',
   'invalid_status',
@@ -104,7 +108,12 @@ export function salesJournalErrorMessage(code: string | undefined): string {
     case 'outlet_stock_missing_for_reversal':
       return 'Cannot void: outlet stock row for reversal is missing.';
     case 'admin_required':
-      return 'Only an admin can void this sales journal.';
+      return 'Only an admin can void or replace this sales journal.';
+    case 'replace_sales_journal_void_failed':
+    case 'replace_sales_journal_repost_failed':
+      return 'Sale was not updated. The original posted journal is unchanged.';
+    case 'journal_not_found_or_not_posted':
+      return 'This sale is no longer posted and cannot be edited.';
     default:
       return code ? `Could not complete sales journal (${code}).` : 'Could not complete sales journal.';
   }
