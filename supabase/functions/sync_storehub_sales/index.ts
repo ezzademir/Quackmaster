@@ -12,6 +12,8 @@ const STOREHUB_HOST = "https://api.storehubhq.com";
 const MIN_INTERVAL_MS = 350;
 const TZ = "Asia/Kuala_Lumpur";
 const MAX_TXNS = 5000;
+/** When false, POS tickets are compare-only (SHPOS vs QMERP). Outlet Sales stays manual. */
+const INGEST_ENABLED = false;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -620,6 +622,12 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "sync") {
+      if (!INGEST_ENABLED) {
+        return jsonResponse({
+          error:
+            "Journal ingest is turned off. Key sales in Outlet Sales (manual). Use SHPOS vs QMERP to compare POS tickets to those journals.",
+        }, req, 400);
+      }
       const admin = makeAdminClient();
       const result = await handleSync(admin, sh, {
         from: body.from,

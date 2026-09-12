@@ -8,37 +8,18 @@ import {
   type StorehubSyncEvent,
   type StorehubSyncRun,
 } from '../utils/storehubSync';
+
 type OutletOpt = { id: string; name: string };
-
-function todayIso(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function daysAgoIso(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 
 export function StorehubSettings() {
   const [outlets, setOutlets] = useState<OutletOpt[]>([]);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [lastRun, setLastRun] = useState<StorehubSyncRun | null>(null);
-  const [lastSuccessTo, setLastSuccessTo] = useState<string | null>(null);
   const [stores, setStores] = useState<StorehubStore[]>([]);
   const [products, setProducts] = useState<StorehubProduct[]>([]);
   const [storeOutlet, setStoreOutlet] = useState<Record<string, string>>({});
   const [productSku, setProductSku] = useState<Record<string, string>>({});
   const [events, setEvents] = useState<StorehubSyncEvent[]>([]);
-  const [from, setFrom] = useState(daysAgoIso(6));
-  const [to, setTo] = useState(todayIso());
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
 
@@ -98,7 +79,6 @@ export function StorehubSettings() {
     }
     setConfigured(Boolean(data?.configured));
     setLastRun(data?.lastRun ?? null);
-    setLastSuccessTo(data?.lastSuccessTo ?? null);
   }
 
   useEffect(() => {
@@ -162,7 +142,7 @@ export function StorehubSettings() {
       if (productErr) throw productErr;
       setNotice({
         tone: 'ok',
-        text: `Saved ${storeRows.length} store map(s) and ${productRows.length} product map(s).`,
+        text: `Saved ${storeRows.length} store map(s) and ${productRows.length} product map(s). Use SHPOS vs QMERP to compare.`,
       });
       await loadLocal();
     } catch (e) {
@@ -175,47 +155,14 @@ export function StorehubSettings() {
   const mappedStoreCount = Object.values(storeOutlet).filter(Boolean).length;
   const mappedProductCount = Object.values(productSku).filter((v) => v.trim()).length;
 
-  async function runSync() {
-    if (mappedStoreCount === 0 || mappedProductCount === 0) {
-      setNotice({
-        tone: 'err',
-        text: 'Map stores to outlets and products to SKUs, click Save maps, then Sync now.',
-      });
-      return;
-    }
-    setBusy('sync');
-    setNotice(null);
-    const { data, error } = await invokeStorehub<{
-      sales_ingested?: number;
-      cancelled?: number;
-      returns_flagged?: number;
-      failed?: number;
-      from?: string;
-      to?: string;
-      error?: string;
-    }>('sync', { from, to });
-    setBusy(null);
-    if (error) {
-      setNotice({ tone: 'err', text: error });
-      await loadStatus();
-      await loadLocal();
-      return;
-    }
-    setNotice({
-      tone: 'ok',
-      text: `Sync ${data?.from} → ${data?.to}: ${data?.sales_ingested ?? 0} sales, ${data?.cancelled ?? 0} cancelled, ${data?.returns_flagged ?? 0} returns to review, ${data?.failed ?? 0} failed.`,
-    });
-    await loadStatus();
-    await loadLocal();
-  }
-
   return (
     <div className="rounded-xl border border-teal-200 bg-teal-50/30 p-5 shadow-sm space-y-4">
       <div>
-        <h2 className="font-semibold text-gray-900">StoreHub POS sync</h2>
+        <h2 className="font-semibold text-gray-900">StoreHub POS maps</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Pull cashier sales into Quackmaster FIFO journals. StoreHub stock is cashier-facing only; lots and
-          counts stay here. Secrets live on the Edge Function, not in this app.
+          Map StoreHub stores and products for <span className="font-medium text-gray-800">SHPOS vs QMERP</span>{' '}
+          comparisons. Outlet Sales stays manual for all outlets — POS does not post journals or deduct stock.
+          Secrets live on the Edge Function, not in this app.
         </p>
       </div>
 
@@ -227,14 +174,16 @@ export function StorehubSettings() {
         >
           {configured == null ? 'Checking connection…' : configured ? 'API secrets set' : 'API secrets missing'}
         </span>
-        {lastSuccessTo && <span className="text-gray-500">Last window through {lastSuccessTo}</span>}
+        <span className="rounded-full bg-stone-100 px-2 py-0.5 font-semibold text-stone-700">
+          Journal ingest off
+        </span>
       </div>
 
       {lastRun && (
-        <p className="text-xs text-gray-600">
-          Last run {new Date(lastRun.started_at).toLocaleString('en-MY')}: {lastRun.sales_ingested} ingested,{' '}
-          {lastRun.failed} failed
-          {lastRun.error ? ` — ${lastRun.error}` : ''}
+        <p className="text-xs text-gray-500">
+          Historical ingest run {new Date(lastRun.started_at).toLocaleString('en-MY')}: {lastRun.sales_ingested}{' '}
+          posted, {lastRun.failed} failed
+          {lastRun.error ? ` — ${lastRun.error}` : ''}. New sales are keyed in Outlet Sales.
         </p>
       )}
 
@@ -248,7 +197,7 @@ export function StorehubSettings() {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           disabled={busy !== null}
@@ -266,6 +215,10 @@ export function StorehubSettings() {
         >
           {busy === 'save' ? 'Saving…' : 'Save maps'}
         </button>
+        <p className="text-xs text-gray-500">
+          {mappedStoreCount} store{mappedStoreCount === 1 ? '' : 's'} and {mappedProductCount} product
+          {mappedProductCount === 1 ? '' : 's'} mapped.
+        </p>
       </div>
 
       {stores.length > 0 && (
@@ -327,44 +280,9 @@ export function StorehubSettings() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-end gap-3 border-t border-teal-100 pt-4">
-        <label className="text-sm">
-          <span className="mb-1 block text-xs text-gray-500">From</span>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-xs text-gray-500">To</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
-          />
-        </label>
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={() => void runSync()}
-          className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
-        >
-          {busy === 'sync' ? 'Syncing…' : 'Sync now'}
-        </button>
-        <p className="text-xs text-gray-500">
-          {mappedStoreCount} store{mappedStoreCount === 1 ? '' : 's'} and {mappedProductCount} product
-          {mappedProductCount === 1 ? '' : 's'} mapped — save before syncing.
-        </p>
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-sm font-medium text-gray-800">Failed / needs review</h3>
-        {events.length === 0 ? (
-          <p className="text-xs text-gray-500">No failed or return-review events.</p>
-        ) : (
+      {events.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-sm font-medium text-gray-800">Historical failed / needs review</h3>
           <ul className="max-h-48 space-y-1 overflow-y-auto text-xs">
             {events.map((ev) => (
               <li key={ev.id} className="rounded border border-gray-200 bg-white px-3 py-2">
@@ -375,8 +293,8 @@ export function StorehubSettings() {
               </li>
             ))}
           </ul>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

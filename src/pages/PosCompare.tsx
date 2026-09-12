@@ -402,8 +402,8 @@ export function PosCompare() {
         title="SHPOS vs QMERP"
         description={
           tally
-            ? 'Sold vs supplied: compare SHPOS tickets to QMERP sold (StoreHub vs manual) and hub dispatch by supply date. Finished goods are pre-selected when possible.'
-            : 'Compare StoreHub POS tickets to Quackmaster journals. Sales Over Time splits QMERP sold into StoreHub-ingested vs manual so period gaps (e.g. TTDI 923 vs 1498) are explainable.'
+            ? 'Sold vs supplied: compare live POS to manual Outlet Sales and hub dispatch by supply date. Finished goods are pre-selected when possible. Key gaps in Outlet Sales.'
+            : 'Compare live StoreHub POS tickets to Quackmaster Outlet Sales. Journal ingest is off — key sales manually; use this screen for differences. Historical StoreHub-posted rows still appear in the StoreHub/manual split.'
         }
         filters={
           <>
@@ -459,8 +459,8 @@ export function PosCompare() {
                 }}
                 hint={
                   tally
-                    ? 'Malaysia calendar (Asia/Kuala_Lumpur). Applies to POS tickets, posted Outlet sales, and hub dispatch by supply date. Weeks are Mon–Sun. All time is the last 2 years.'
-                    : 'Malaysia calendar (Asia/Kuala_Lumpur). Applies to POS tickets and QMERP journals. Weeks are Mon–Sun. All time is the last 2 years.'
+                    ? 'Malaysia calendar (Asia/Kuala_Lumpur). Applies to live POS tickets, manual Outlet Sales, and hub dispatch by supply date. Weeks are Mon–Sun. All time is the last 2 years.'
+                    : 'Malaysia calendar (Asia/Kuala_Lumpur). Applies to live POS tickets and Outlet Sales journals. Weeks are Mon–Sun. All time is the last 2 years.'
                 }
               />
             </div>
@@ -549,7 +549,7 @@ export function PosCompare() {
             <p className="text-sm text-stone-500">Loading StoreHub products…</p>
           ) : picks.length === 0 ? (
             <p className="text-sm text-stone-500">
-              Could not load StoreHub products. Check Settings → StoreHub POS sync, then refresh this page.
+              Could not load StoreHub products. Check Settings → StoreHub POS maps, then refresh this page.
             </p>
           ) : (
             <div className="max-h-48 overflow-y-auto rounded-lg border border-stone-100">
@@ -585,7 +585,7 @@ export function PosCompare() {
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
           Map StoreHub stores in{' '}
           <Link to="/settings" className="font-medium underline">
-            Settings → StoreHub POS sync
+            Settings → StoreHub POS maps
           </Link>{' '}
           before comparing.
         </p>
@@ -624,10 +624,10 @@ export function PosCompare() {
               tally
                 ? selectedIds.length === 0
                   ? 'Next: click Finished goods (or tick products), set the Malaysia period, then Compare.'
-                  : 'Next: set the Malaysia period if needed, then click Compare. Columns show SHPOS sold, QMERP sold (StoreHub / manual / all), supplied, and leftover.'
+                  : 'Next: set the Malaysia period if needed, then click Compare. QMERP sold should be keyed in Outlet Sales; SHPOS sold is live POS. Leftover is hub dispatch minus those manuals.'
                 : reportId === 'sales_over_time'
-                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual QMERP sold explains totals above SHPOS.'
-                  : 'Next: choose a report, set the period, then Compare. Gaps are SHPOS vs QMERP StoreHub-ingested sold where that split applies.'
+                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual QMERP sold is what staff keyed; historical StoreHub ingest still appears in the split.'
+                  : 'Next: choose a report, set the period, then Compare. Gaps show POS vs what is posted in Outlet Sales.'
             }
             action={
               canRun ? (
@@ -708,7 +708,7 @@ export function PosCompare() {
                 icon={<Scale size={18} />}
                 label="QMERP sold (all)"
                 value={fmtQty(result.totals.dashQty)}
-                sub="Posted outlet sales units"
+                sub="Manual Outlet Sales units"
               />
             ) : (
               <StatCard
@@ -732,7 +732,7 @@ export function PosCompare() {
                   ? 'Not stored in journals'
                   : tally
                     ? 'Dispatched to outlet (supply date)'
-                    : 'Posted outlet sales units'
+                    : 'Manual Outlet Sales units'
               }
             />
             )}

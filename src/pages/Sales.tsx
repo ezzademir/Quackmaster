@@ -1295,11 +1295,6 @@ export function Sales() {
                     <td className="whitespace-nowrap px-4 py-2 align-top">
                       <div className="flex flex-wrap items-center gap-2">
                         <span>{h.business_date}</span>
-                        {h.source === 'storehub' ? (
-                          <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-800">
-                            StoreHub
-                          </span>
-                        ) : null}
                         {voided ? (
                           <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
                             Voided
