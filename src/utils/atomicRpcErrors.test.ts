@@ -39,6 +39,11 @@ describe('salesJournalErrorMessage', () => {
     expect(salesJournalErrorMessage('fifo_alloc_internal_error')).toMatch(/allocated/i);
     expect(salesJournalErrorMessage('outlet_inventory_row_missing_mid_post')).toMatch(/inventory/i);
   });
+
+  it('maps failed replace so the original posted journal is described as unchanged', () => {
+    expect(salesJournalErrorMessage('replace_sales_journal_repost_failed')).toMatch(/unchanged/i);
+    expect(salesJournalErrorMessage('insufficient_stock')).toMatch(/not enough/i);
+  });
 });
 
 describe('outletTransferErrorMessage', () => {
