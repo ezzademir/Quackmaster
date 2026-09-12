@@ -115,6 +115,19 @@ const STATUS_CLASS: Record<StorehubDiffStatus, string> = {
   pos_only: 'bg-stone-100 text-stone-600',
 };
 
+function isGapStatus(status: StorehubDiffStatus): boolean {
+  return status !== 'match' && status !== 'pos_only';
+}
+
+function tallyRowHasGap(row: StorehubReportRow): boolean {
+  if (isGapStatus(row.status)) return true;
+  return (row.days ?? []).some((d) => isGapStatus(d.status));
+}
+
+function gapKeys(rows: StorehubReportRow[]): string[] {
+  return rows.filter(tallyRowHasGap).map((r) => r.key);
+}
+
 function StatusChip({ status }: { status: StorehubDiffStatus }) {
   return (
     <span
@@ -274,17 +287,20 @@ export function PosCompare() {
     setResult(data);
     setError(data?.error || err);
     if (data?.posOnly) setRowFilter('all');
+    if (tally && data?.rows) setExpanded(new Set(gapKeys(data.rows)));
   }
 
   const gapCount = result
-    ? result.totals.qty_mismatch + result.totals.missing_in_dashboard + result.totals.extra_in_dashboard
+    ? tally
+      ? result.rows.filter(tallyRowHasGap).length
+      : result.totals.qty_mismatch + result.totals.missing_in_dashboard + result.totals.extra_in_dashboard
     : 0;
 
   const visibleRows = useMemo(() => {
     if (!result) return [];
     if (rowFilter === 'all' || result.posOnly || tally) {
       if (rowFilter === 'gaps' && tally) {
-        return result.rows.filter((r) => r.status !== 'match' && r.status !== 'pos_only');
+        return result.rows.filter(tallyRowHasGap);
       }
       return result.rows;
     }
@@ -350,6 +366,7 @@ export function PosCompare() {
     setResult(data);
     setError(data?.error || err);
     if (data?.posOnly) setRowFilter('all');
+    if (nextReport === 'sold_vs_supplied' && data?.rows) setExpanded(new Set(gapKeys(data.rows)));
   }
 
   function drillToDay(row: StorehubReportRow) {
@@ -402,7 +419,7 @@ export function PosCompare() {
         title="SHPOS vs QMERP"
         description={
           tally
-            ? 'Sold vs supplied: compare live POS to manual Outlet Sales and hub dispatch by supply date. Finished goods are pre-selected when possible. Key gaps in Outlet Sales.'
+            ? 'Sold vs supplied: compare live POS to manual Outlet Sales and hub dispatch by supply date. Finished goods are pre-selected when possible. Key gaps in Outlet Sales. On a multi-day period, expand a product to see which days differ.'
             : 'Compare live StoreHub POS tickets to Quackmaster Outlet Sales. Journal ingest is off — key sales manually; use this screen for differences. Historical StoreHub-posted rows still appear in the StoreHub/manual split.'
         }
         filters={
@@ -624,7 +641,7 @@ export function PosCompare() {
               tally
                 ? selectedIds.length === 0
                   ? 'Next: click Finished goods (or tick products), set the Malaysia period, then Compare.'
-                  : 'Next: set the Malaysia period if needed, then click Compare. QMERP sold should be keyed in Outlet Sales; SHPOS sold is live POS. Leftover is hub dispatch minus those manuals.'
+                  : 'Next: set the Malaysia period if needed, then click Compare. QMERP sold should be keyed in Outlet Sales; SHPOS sold is live POS. Leftover is hub dispatch minus those manuals. Expand a product to see days when the period is longer than one day.'
                 : reportId === 'sales_over_time'
                   ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual QMERP sold is what staff keyed; historical StoreHub ingest still appears in the split.'
                   : 'Next: choose a report, set the period, then Compare. Gaps show POS vs what is posted in Outlet Sales.'
@@ -784,6 +801,9 @@ export function PosCompare() {
                   <span className="ml-2 font-normal text-stone-400">
                     {result.snapshot ? 'Snapshot' : `${result.from} → ${result.to}`}
                     {result.viewBy ? ` · ${result.viewBy}` : ''}
+                    {tally && result.rows.some((r) => (r.days?.length ?? 0) > 0)
+                      ? ' · expand a product for days'
+                      : ''}
                   </span>
                 </p>
                 {!result.posOnly && gapCount > 0 && gapCount < result.rows.length && (
@@ -815,6 +835,7 @@ export function PosCompare() {
                   picks={picks}
                   expanded={expanded}
                   onToggle={toggleExpand}
+                  gapsOnly={rowFilter === 'gaps'}
                   showSplit={result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null)}
                 />
               ) : (
@@ -927,17 +948,87 @@ function PeriodTable({
   );
 }
 
+function TallyQtyCells({
+  row,
+  showSplit,
+  muted,
+}: {
+  row: Pick<
+    StorehubReportRow,
+    'posQty' | 'dashQty' | 'dashStorehubQty' | 'dashManualQty' | 'suppliedQty' | 'leftoverQty' | 'posVsSold'
+  >;
+  showSplit: boolean;
+  muted?: boolean;
+}) {
+  const numClass = muted ? 'text-right text-xs tabular-nums' : 'text-right tabular-nums';
+  return (
+    <>
+      <td className={numClass}>{fmtQty(row.posQty)}</td>
+      {showSplit ? (
+        <>
+          <td className={numClass}>{fmtQty(row.dashStorehubQty)}</td>
+          <td className={numClass}>{fmtQty(row.dashManualQty)}</td>
+          <td className={numClass}>{fmtQty(row.dashQty)}</td>
+        </>
+      ) : (
+        <td className={numClass}>{fmtQty(row.dashQty)}</td>
+      )}
+      <td className={numClass}>{fmtQty(row.suppliedQty)}</td>
+      <td className={numClass}>{fmtQty(row.leftoverQty)}</td>
+      <td className={numClass}>{fmtQty(row.posVsSold)}</td>
+    </>
+  );
+}
+
+function TallyLotRows({
+  parentKey,
+  lots,
+  showSplit,
+  indentClass,
+}: {
+  parentKey: string;
+  lots: NonNullable<StorehubReportRow['lots']>;
+  showSplit: boolean;
+  indentClass: string;
+}) {
+  return (
+    <>
+      {lots.map((lot) => (
+        <tr key={`${parentKey}:${lot.label}`} className="bg-stone-50/80 text-stone-600">
+          <td className={`${indentClass} text-xs`}>{lot.label}</td>
+          <td className="text-right text-xs text-stone-400">—</td>
+          {showSplit ? (
+            <>
+              <td className="text-right text-xs text-stone-400">—</td>
+              <td className="text-right text-xs text-stone-400">—</td>
+              <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
+            </>
+          ) : (
+            <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
+          )}
+          <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied)}</td>
+          <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied - lot.sold)}</td>
+          <td className="text-right text-xs text-stone-400">—</td>
+          <td />
+        </tr>
+      ))}
+    </>
+  );
+}
+
 function TallyTable({
   rows,
   picks,
   expanded,
   onToggle,
+  gapsOnly,
   showSplit,
 }: {
   rows: StorehubReportRow[];
   picks: ProductPick[];
   expanded: Set<string>;
   onToggle: (key: string) => void;
+  gapsOnly: boolean;
   showSplit: boolean;
 }) {
   return (
@@ -964,7 +1055,8 @@ function TallyTable({
       <tbody className="divide-y divide-stone-100">
         {rows.map((row) => {
           const open = expanded.has(row.key);
-          const hasLots = (row.lots?.length ?? 0) > 0;
+          const days = gapsOnly ? (row.days ?? []).filter((d) => isGapStatus(d.status)) : (row.days ?? []);
+          const hasExpand = days.length > 0 || (row.lots?.length ?? 0) > 0 || (row.days?.length ?? 0) > 0;
           const label = displayProductLabel(row.key, row.label, picks);
           return (
             <Fragment key={row.key}>
@@ -976,7 +1068,7 @@ function TallyTable({
                 }
               >
                 <td>
-                  {hasLots ? (
+                  {hasExpand ? (
                     <button
                       type="button"
                       onClick={() => onToggle(row.key)}
@@ -989,43 +1081,38 @@ function TallyTable({
                     label
                   )}
                 </td>
-                <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
-                {showSplit ? (
-                  <>
-                    <td className="text-right tabular-nums">{fmtQty(row.dashStorehubQty)}</td>
-                    <td className="text-right tabular-nums">{fmtQty(row.dashManualQty)}</td>
-                    <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-                  </>
-                ) : (
-                  <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-                )}
-                <td className="text-right tabular-nums">{fmtQty(row.suppliedQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.leftoverQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.posVsSold)}</td>
+                <TallyQtyCells row={row} showSplit={showSplit} />
                 <td>
                   <StatusChip status={row.status} />
                 </td>
               </tr>
               {open &&
-                (row.lots ?? []).map((lot) => (
-                  <tr key={`${row.key}:${lot.label}`} className="bg-stone-50/80 text-stone-600">
-                    <td className="pl-8 text-xs">{lot.label}</td>
-                    <td className="text-right text-xs text-stone-400">—</td>
-                    {showSplit ? (
-                      <>
-                        <td className="text-right text-xs text-stone-400">—</td>
-                        <td className="text-right text-xs text-stone-400">—</td>
-                        <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
-                      </>
-                    ) : (
-                      <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
-                    )}
-                    <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied)}</td>
-                    <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied - lot.sold)}</td>
-                    <td className="text-right text-xs text-stone-400">—</td>
-                    <td />
-                  </tr>
+                days.map((day) => (
+                  <Fragment key={day.key}>
+                    <tr
+                      className={
+                        day.status === 'qty_mismatch' || day.status === 'missing_in_dashboard'
+                          ? 'bg-amber-50/40 text-stone-800'
+                          : 'bg-stone-50/60 text-stone-700'
+                      }
+                    >
+                      <td className="pl-8 text-sm font-medium">{day.label}</td>
+                      <TallyQtyCells row={day} showSplit={showSplit} muted />
+                      <td>
+                        <StatusChip status={day.status} />
+                      </td>
+                    </tr>
+                    <TallyLotRows
+                      parentKey={day.key}
+                      lots={day.lots ?? []}
+                      showSplit={showSplit}
+                      indentClass="pl-12"
+                    />
+                  </Fragment>
                 ))}
+              {open && (row.lots?.length ?? 0) > 0 && (
+                <TallyLotRows parentKey={row.key} lots={row.lots ?? []} showSplit={showSplit} indentClass="pl-8" />
+              )}
             </Fragment>
           );
         })}

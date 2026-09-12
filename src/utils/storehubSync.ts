@@ -112,6 +112,8 @@ export interface StorehubReportRow {
   leftoverQty?: number | null;
   posVsSold?: number | null;
   lots?: StorehubReportLot[];
+  /** Activity days inside a multi-day Sold vs supplied window. */
+  days?: StorehubReportRow[];
   status: StorehubDiffStatus;
   detail?: string;
 }
