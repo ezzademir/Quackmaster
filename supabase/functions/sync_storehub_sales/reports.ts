@@ -533,7 +533,12 @@ function txnInPeriod(txn: ShTxn, from: string, to: string): boolean {
   return isoDateInRange(day, from, to);
 }
 
-type DispatchedSupplyLine = { signed_qty: number; lot_id: string | null; product_batch: string };
+type DispatchedSupplyLine = {
+  signed_qty: number;
+  lot_id: string | null;
+  product_batch: string;
+  supply_date: string;
+};
 type PeriodSupplyOrder = { outlet_id: string; qty: number };
 
 /** Hub dispatch by supply date — same definition as Distribution “Total Dispatched”. */
@@ -552,15 +557,17 @@ async function loadDispatchedSupplyLines(
     .select("id, outlet_id, status, supply_date, dispatch_date, total_quantity");
   if (orderErr) throw new Error(orderErr.message);
 
-  const inPeriod: Array<{ id: string; outlet_id: string; qty: number }> = [];
+  const inPeriod: Array<{ id: string; outlet_id: string; qty: number; supply_date: string }> = [];
   for (const so of orders ?? []) {
     const st = String(so.status ?? "").toLowerCase().trim();
     if (st !== "dispatched" && st !== "received") continue;
-    if (!isoDateInRange(supplyOrderPeriodDate(so), from, to)) continue;
+    const supplyDate = supplyOrderPeriodDate(so);
+    if (!isoDateInRange(supplyDate, from, to)) continue;
     inPeriod.push({
       id: String(so.id),
       outlet_id: String(so.outlet_id ?? ""),
       qty: num(so.total_quantity),
+      supply_date: supplyDate as string,
     });
   }
 
@@ -570,6 +577,7 @@ async function loadDispatchedSupplyLines(
     ? inPeriod
     : inPeriod.filter((o) => outletIds.includes(o.outlet_id));
   const scopedIds = scoped.map((o) => o.id);
+  const dateByOrderId = new Map(scoped.map((o) => [o.id, o.supply_date]));
   if (scopedIds.length === 0) {
     return { rows: [], periodOrders, periodAllOutletQty };
   }
@@ -579,7 +587,7 @@ async function loadDispatchedSupplyLines(
     const slice = scopedIds.slice(i, i + 200);
     const { data, error } = await admin
       .from("supply_order_lines")
-      .select("quantity, product_batch, hub:hub_inventory_id(lot_id, product_batch)")
+      .select("quantity, product_batch, supply_order_id, hub:hub_inventory_id(lot_id, product_batch)")
       .in("supply_order_id", slice);
     if (error) throw new Error(error.message);
     for (const row of data ?? []) {
@@ -589,10 +597,12 @@ async function loadDispatchedSupplyLines(
           | Array<{ lot_id?: string | null; product_batch?: string | null }>
           | null,
       );
+      const orderId = String(row.supply_order_id ?? "");
       rows.push({
         signed_qty: num(row.quantity),
         lot_id: (hub?.lot_id as string | null) ?? null,
         product_batch: String(hub?.product_batch ?? row.product_batch ?? ""),
+        supply_date: dateByOrderId.get(orderId) ?? "",
       });
     }
   }
@@ -640,9 +650,13 @@ async function soldVsSuppliedReport(opts: {
   }
 
   const pos = new Map<string, { qty: number; rm: number }>();
+  const posDay = new Map<string, { qty: number; rm: number }>();
   const posLabels = new Map<string, string>();
+  const dayKey = (sku: string, day: string) => `${sku}\t${day}`;
+
   for (const txn of opts.txns) {
     if (!isSale(txn) || !txnInPeriod(txn, opts.from, opts.to)) continue;
+    const day = txnMalaysiaDay(txn) ?? opts.from;
     for (const item of txn.items ?? []) {
       if (String(item.itemType ?? "Item") !== "Item") continue;
       const pid = String(item.productId ?? "").trim();
@@ -654,12 +668,20 @@ async function soldVsSuppliedReport(opts: {
       cur.qty += num(item.quantity);
       cur.rm += num(item.total ?? item.subTotal);
       pos.set(mapped.key, cur);
+      const dk = dayKey(mapped.key, day);
+      const dayCur = posDay.get(dk) ?? { qty: 0, rm: 0 };
+      dayCur.qty += num(item.quantity);
+      dayCur.rm += num(item.total ?? item.subTotal);
+      posDay.set(dk, dayCur);
     }
   }
 
   const sold = new Map<string, number>();
   const soldStorehub = new Map<string, number>();
   const soldManual = new Map<string, number>();
+  const soldDay = new Map<string, number>();
+  const soldStorehubDay = new Map<string, number>();
+  const soldManualDay = new Map<string, number>();
   const lotSold = new Map<string, Map<string, { label: string; sold: number; supplied: number }>>();
   const journalLotIds = opts.journals.map((l) => l.lot_id).filter((id): id is string => Boolean(id));
 
@@ -668,17 +690,24 @@ async function soldVsSuppliedReport(opts: {
   const supplyLotIds = supplyRows.map((r) => r.lot_id).filter((id): id is string => Boolean(id));
   const lotInfo = await loadLotInfo(opts.admin, [...journalLotIds, ...supplyLotIds]);
 
-  function lotBucket(sku: string, lotId: string | null, productBatch: string) {
-    let byLot = lotSold.get(sku);
+  function lotBucket(bucketKey: string, lotId: string | null, productBatch: string) {
+    let byLot = lotSold.get(bucketKey);
     if (!byLot) {
       byLot = new Map();
-      lotSold.set(sku, byLot);
+      lotSold.set(bucketKey, byLot);
     }
     const label = lotDisplayLabel(lotId, productBatch, lotInfo);
     const key = lotId || label;
     const cur = byLot.get(key) ?? { label, sold: 0, supplied: 0 };
     byLot.set(key, cur);
     return cur;
+  }
+
+  function lotsFor(bucketKey: string): ReportLot[] {
+    return [...(lotSold.get(bucketKey)?.values() ?? [])]
+      .filter((l) => l.sold > 0 || l.supplied > 0)
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((l) => ({ label: l.label, supplied: l.supplied, sold: l.sold }));
   }
 
   for (const line of opts.journals) {
@@ -692,9 +721,21 @@ async function soldVsSuppliedReport(opts: {
       soldManual.set(sku, (soldManual.get(sku) ?? 0) + line.quantity_sold);
     }
     lotBucket(sku, line.lot_id, line.product_batch).sold += line.quantity_sold;
+    const day = String(line.business_date ?? "").slice(0, 10);
+    if (day) {
+      const dk = dayKey(sku, day);
+      soldDay.set(dk, (soldDay.get(dk) ?? 0) + line.quantity_sold);
+      if (isStorehubJournalSource(line.source)) {
+        soldStorehubDay.set(dk, (soldStorehubDay.get(dk) ?? 0) + line.quantity_sold);
+      } else {
+        soldManualDay.set(dk, (soldManualDay.get(dk) ?? 0) + line.quantity_sold);
+      }
+      lotBucket(dk, line.lot_id, line.product_batch).sold += line.quantity_sold;
+    }
   }
 
   const supplied = new Map<string, number>();
+  const suppliedDay = new Map<string, number>();
   const skuByLot = new Map<string, string>();
   for (const [id, v] of lotInfo) skuByLot.set(id, v.sku);
   for (const row of supplyRows) {
@@ -707,6 +748,25 @@ async function soldVsSuppliedReport(opts: {
     if (qty <= 0) continue;
     supplied.set(sku, (supplied.get(sku) ?? 0) + qty);
     lotBucket(sku, row.lot_id, row.product_batch).supplied += qty;
+    const day = row.supply_date.slice(0, 10);
+    if (day) {
+      const dk = dayKey(sku, day);
+      suppliedDay.set(dk, (suppliedDay.get(dk) ?? 0) + qty);
+      lotBucket(dk, row.lot_id, row.product_batch).supplied += qty;
+    }
+  }
+
+  const multiDay = opts.from < opts.to;
+
+  function datesForSku(sku: string): string[] {
+    const dates = new Set<string>();
+    const prefix = `${sku}\t`;
+    for (const m of [posDay, soldDay, soldStorehubDay, soldManualDay, suppliedDay]) {
+      for (const k of m.keys()) {
+        if (k.startsWith(prefix)) dates.add(k.slice(prefix.length));
+      }
+    }
+    return [...dates].sort();
   }
 
   const rows: ReportRow[] = selected.map((sku) => {
@@ -717,10 +777,35 @@ async function soldVsSuppliedReport(opts: {
     const dashManualQty = soldManual.get(sku) ?? 0;
     const suppliedQty = supplied.get(sku) ?? 0;
     const leftoverQty = suppliedQty - dashQty;
-    const lots: ReportLot[] = [...(lotSold.get(sku)?.values() ?? [])]
-      .filter((l) => l.sold > 0 || l.supplied > 0)
-      .sort((a, b) => a.label.localeCompare(b.label))
-      .map((l) => ({ label: l.label, supplied: l.supplied, sold: l.sold }));
+    const lots = lotsFor(sku);
+    const days: ReportRow[] = [];
+    if (multiDay) {
+      for (const date of datesForSku(sku)) {
+        const dk = dayKey(sku, date);
+        const dayPos = posDay.get(dk);
+        const dayPosQty = dayPos?.qty ?? 0;
+        const dayDashQty = soldDay.get(dk) ?? 0;
+        const daySh = soldStorehubDay.get(dk) ?? 0;
+        const dayMan = soldManualDay.get(dk) ?? 0;
+        const daySupplied = suppliedDay.get(dk) ?? 0;
+        const dayLots = lotsFor(dk);
+        if (dayPosQty === 0 && dayDashQty === 0 && daySupplied === 0 && dayLots.length === 0) continue;
+        days.push({
+          key: `${sku}:${date}`,
+          label: date,
+          posQty: dayPosQty,
+          posRm: dayPos?.rm ?? 0,
+          dashQty: dayDashQty,
+          dashStorehubQty: daySh,
+          dashManualQty: dayMan,
+          suppliedQty: daySupplied,
+          leftoverQty: daySupplied - dayDashQty,
+          posVsSold: dayPosQty - daySh,
+          lots: dayLots,
+          status: soldVsSuppliedStatus(dayPosQty, daySh),
+        });
+      }
+    }
     return {
       key: sku,
       label: posLabels.get(sku) ?? skuLabel(sku, opts.productMeta, opts.productsById, recipeNames),
@@ -734,6 +819,7 @@ async function soldVsSuppliedReport(opts: {
       // POS vs StoreHub-ingested sold — manual journals do not count as a POS gap.
       posVsSold: posQty - dashStorehubQty,
       lots,
+      days: days.length ? days : undefined,
       status: soldVsSuppliedStatus(posQty, dashStorehubQty),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
@@ -756,6 +842,7 @@ async function soldVsSuppliedReport(opts: {
     "QMERP supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
     "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare SHPOS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
     "Lots are ERP-only; StoreHub tickets have no batch numbers.",
+    "On a multi-day period, expand a product to see which Malaysia days differ. Daily leftover is that day's dispatch minus that day's sold — not on-hand stock.",
   ];
   if (opts.storeScoped && dispatched.periodAllOutletQty > 0) {
     noticeParts.push(

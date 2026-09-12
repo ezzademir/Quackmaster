@@ -115,6 +115,8 @@ export interface ReportRow {
   leftoverQty?: number | null;
   posVsSold?: number | null;
   lots?: ReportLot[];
+  /** Activity days inside a multi-day Sold vs supplied window. */
+  days?: ReportRow[];
   status: DiffStatus;
   detail?: string;
 }
