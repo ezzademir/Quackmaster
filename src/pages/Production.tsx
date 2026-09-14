@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
-import { Button, PageHeader, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui';
 import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
 import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
@@ -1091,99 +1091,140 @@ export function Production() {
             />
           )}
           {tab === 'runs' && (
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
-                  <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Run #</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Recipe</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Date</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Planned</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actual</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Variants</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Yield</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                    <th className="w-16 px-4 md:px-6 py-3" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {runs.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center">
-                        <FlaskConical className="mx-auto mb-3 text-gray-300" size={40} />
-                        <p className="text-gray-400">No production runs yet</p>
-                      </td>
-                    </tr>
-                  ) : filteredRuns.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center">
-                        <p className="text-gray-500">No runs match this date range.</p>
-                        <p className="mt-1 text-sm text-gray-400">Try All time or adjust the filter.</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRuns.map((run) => {
-                      const yieldPct = effectiveRunYieldPct(run);
-                      return (
-                      <tr key={run.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{run.run_number}</td>
-                        <td className="px-4 md:px-6 py-4 font-mono text-xs text-gray-800">
-                          {firstFgLot(run)?.product_batch_label ?? '—'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{run.recipe?.name ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{new Date(run.production_date).toLocaleDateString()}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-700 text-xs">{run.planned_output}</td>
-                        <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{run.actual_output}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4">
-                          <VariantsBadge planned={run.planned_output} actual={run.actual_output} />
-                        </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4">{yieldPct != null ? <YieldBar value={yieldPct} /> : <span className="text-gray-400">—</span>}</td>
-                        <td className="px-4 md:px-6 py-4"><StatusBadge status={run.status} /></td>
-                        <td className="px-4 md:px-6 py-4">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setViewRun(run)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                            >
-                              Manage <ChevronRight size={14} />
-                            </button>
-                          </div>
-                        </td>
+            filteredRuns.length === 0 ? (
+              <div className="panel py-2">
+                <EmptyState
+                  title={runs.length === 0 ? 'No production runs yet' : 'No runs match this date range.'}
+                  description={runs.length === 0 ? undefined : 'Try All time or adjust the filter.'}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2 md:hidden">
+                  {filteredRuns.map((run) => (
+                    <ListRow
+                      key={run.id}
+                      title={run.run_number}
+                      meta={`${run.recipe?.name ?? '—'} · ${new Date(run.production_date).toLocaleDateString()} · Actual ${run.actual_output}`}
+                      aside={<StatusBadge status={run.status} />}
+                      body={
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs text-stone-600">
+                            {firstFgLot(run)?.product_batch_label ?? '—'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setViewRun(run)}
+                            className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-700"
+                          >
+                            Manage <ChevronRight size={14} />
+                          </button>
+                        </div>
+                      }
+                    />
+                  ))}
+                </div>
+                <div className="panel hidden overflow-x-auto md:block">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Run #</th>
+                        <th>Lot</th>
+                        <th>Recipe</th>
+                        <th>Date</th>
+                        <th className="hidden text-right sm:table-cell">Planned</th>
+                        <th className="text-right">Actual</th>
+                        <th className="hidden md:table-cell">Variants</th>
+                        <th className="hidden md:table-cell">Yield</th>
+                        <th>Status</th>
+                        <th className="w-16" />
                       </tr>
-                    );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {filteredRuns.map((run) => {
+                        const yieldPct = effectiveRunYieldPct(run);
+                        return (
+                          <tr key={run.id}>
+                            <td className="font-medium">{run.run_number}</td>
+                            <td className="font-mono text-xs">{firstFgLot(run)?.product_batch_label ?? '—'}</td>
+                            <td>{run.recipe?.name ?? '—'}</td>
+                            <td className="text-stone-500">{new Date(run.production_date).toLocaleDateString()}</td>
+                            <td className="hidden text-right sm:table-cell">{run.planned_output}</td>
+                            <td className="text-right font-medium">{run.actual_output}</td>
+                            <td className="hidden md:table-cell">
+                              <VariantsBadge planned={run.planned_output} actual={run.actual_output} />
+                            </td>
+                            <td className="hidden md:table-cell">
+                              {yieldPct != null ? <YieldBar value={yieldPct} /> : <span className="text-stone-400">—</span>}
+                            </td>
+                            <td>
+                              <StatusBadge status={run.status} />
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                onClick={() => setViewRun(run)}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-brand-800 hover:underline"
+                              >
+                                Manage <ChevronRight size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )
           )}
 
           {tab === 'recipes' && (
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
               {recipes.length === 0 ? (
-                <div className="sm:col-span-3 rounded-xl border-2 border-dashed border-gray-200 px-6 py-12 text-center text-gray-400">No recipes yet</div>
+                <div className="rounded-xl border border-dashed border-stone-200 px-6 py-12 text-center text-stone-400 sm:col-span-3">
+                  No recipes yet
+                </div>
               ) : (
                 recipes.map((recipe) => (
-                  <div key={recipe.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:border-emerald-200 transition-all">
+                  <div key={recipe.id} className="panel p-5 transition-colors hover:border-stone-300">
                     <div className="flex items-start justify-between">
                       <div>
-                        <h3 className="font-semibold text-gray-900">{recipe.name}</h3>
-                        <p className="mt-0.5 text-xs text-gray-500">Batch: {recipe.standard_batch_size} {recipe.batch_unit}</p>
+                        <h3 className="font-semibold text-stone-900">{recipe.name}</h3>
+                        <p className="mt-0.5 text-xs text-stone-500">
+                          Batch: {recipe.standard_batch_size} {recipe.batch_unit}
+                        </p>
                       </div>
                       <div className="flex gap-1">
-                        <button onClick={() => openEditRecipe(recipe)} className="text-gray-400 hover:text-blue-600 transition-colors p-1"><Edit2 size={15} /></button>
-                        <button onClick={() => deleteRecipe(recipe.id)} className="text-gray-400 hover:text-red-600 transition-colors p-1"><Trash2 size={15} /></button>
+                        <button
+                          type="button"
+                          onClick={() => openEditRecipe(recipe)}
+                          className="p-1 text-stone-400 transition-colors hover:text-brand-800"
+                        >
+                          <Edit2 size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteRecipe(recipe.id)}
+                          className="p-1 text-stone-400 transition-colors hover:text-red-600"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </div>
                     </div>
-                    {recipe.description && <p className="mt-2 text-xs text-gray-600 line-clamp-2">{recipe.description}</p>}
+                    {recipe.description && (
+                      <p className="mt-2 line-clamp-2 text-xs text-stone-600">{recipe.description}</p>
+                    )}
                     <div className="mt-3 space-y-1">
-                      <p className="text-xs font-semibold text-gray-500">Ingredients ({(recipe.ingredients ?? []).length})</p>
+                      <p className="text-xs font-semibold text-stone-500">
+                        Ingredients ({(recipe.ingredients ?? []).length})
+                      </p>
                       {(recipe.ingredients ?? []).slice(0, 4).map((ing) => (
-                        <div key={ing.id} className="flex items-center justify-between text-xs text-gray-700">
+                        <div key={ing.id} className="flex items-center justify-between text-xs text-stone-700">
                           <span>{ing.material?.name ?? ing.raw_material_id}</span>
-                          <span className="font-medium">{ing.quantity_required} {ing.material?.unit_of_measure}</span>
+                          <span className="font-medium">
+                            {ing.quantity_required} {ing.material?.unit_of_measure}
+                          </span>
                         </div>
                       ))}
                       {(recipe.ingredients ?? []).length > 4 && (
