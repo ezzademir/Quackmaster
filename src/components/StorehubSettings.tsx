@@ -142,7 +142,7 @@ export function StorehubSettings() {
       if (productErr) throw productErr;
       setNotice({
         tone: 'ok',
-        text: `Saved ${storeRows.length} store map(s) and ${productRows.length} product map(s). Use SHPOS vs QMERP to compare.`,
+        text: `Saved ${storeRows.length} store map(s) and ${productRows.length} product map(s). Use POS compare to compare.`,
       });
       await loadLocal();
     } catch (e) {
@@ -160,7 +160,7 @@ export function StorehubSettings() {
       <div>
         <h2 className="font-semibold text-gray-900">StoreHub POS maps</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Map StoreHub stores and products for <span className="font-medium text-gray-800">SHPOS vs QMERP</span>{' '}
+          Map StoreHub stores and products for <span className="font-medium text-stone-800">POS compare</span>{' '}
           comparisons. Outlet Sales stays manual for all outlets — POS does not post journals or deduct stock.
           Secrets live on the Edge Function, not in this app.
         </p>

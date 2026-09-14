@@ -416,7 +416,7 @@ export function PosCompare() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="SHPOS vs QMERP"
+        title="POS compare"
         description={
           tally
             ? 'Sold vs supplied: compare live POS to manual Outlet Sales and hub dispatch by supply date. Finished goods are pre-selected when possible. Key gaps in Outlet Sales. On a multi-day period, expand a product to see which days differ.'
