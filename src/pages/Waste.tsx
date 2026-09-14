@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard, StickyActions, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
@@ -530,38 +530,63 @@ export function Waste() {
             ) : history.length === 0 ? (
               <EmptyState title="No posted waste events in this period" />
             ) : (
-              <div className="overflow-x-auto rounded-lg border border-stone-100">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Location</th>
-                      <th className="text-right">Lines</th>
-                      <th className="text-right">Total qty</th>
-                      <th>Lots</th>
-                      <th>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {history.map((row) => {
-                      const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
-                      const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
-                      return (
-                        <tr key={row.id} className="hover:bg-stone-50/80">
-                          <td>{row.waste_date}</td>
-                          <td className="capitalize">{loc}</td>
-                          <td className="text-right tabular-nums">{row.line_count}</td>
-                          <td className="text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
-                          <td className="max-w-[220px] truncate font-mono text-xs" title={row.lot_summary}>
-                            {row.lot_summary}
-                          </td>
-                          <td className="max-w-[200px] truncate text-stone-500">{row.notes?.trim() || '—'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="space-y-2 md:hidden">
+                  {history.map((row) => {
+                    const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
+                    const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
+                    return (
+                      <ListRow
+                        key={row.id}
+                        title={<span className="tabular-nums">{row.waste_date}</span>}
+                        meta={`${loc} · ${row.line_count} line${row.line_count === 1 ? '' : 's'} · ${row.total_qty.toLocaleString()} qty`}
+                        body={
+                          <div className="space-y-1">
+                            <p className="truncate font-mono text-xs text-stone-700" title={row.lot_summary}>
+                              {row.lot_summary || '—'}
+                            </p>
+                            {row.notes?.trim() ? (
+                              <p className="truncate text-xs text-stone-500">{row.notes}</p>
+                            ) : null}
+                          </div>
+                        }
+                      />
+                    );
+                  })}
+                </div>
+                <div className="hidden overflow-x-auto rounded-lg border border-stone-100 md:block">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Location</th>
+                        <th className="text-right">Lines</th>
+                        <th className="text-right">Total qty</th>
+                        <th>Lots</th>
+                        <th>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((row) => {
+                        const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
+                        const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
+                        return (
+                          <tr key={row.id}>
+                            <td>{row.waste_date}</td>
+                            <td className="capitalize">{loc}</td>
+                            <td className="text-right tabular-nums">{row.line_count}</td>
+                            <td className="text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
+                            <td className="max-w-[220px] truncate font-mono text-xs" title={row.lot_summary}>
+                              {row.lot_summary}
+                            </td>
+                            <td className="max-w-[200px] truncate text-stone-500">{row.notes?.trim() || '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
             {historyHasMore && (
               <Button variant="secondary" disabled={historyLoading} onClick={() => setHistoryPage((p) => p + 1)}>
@@ -655,7 +680,7 @@ export function Waste() {
               </button>
             </div>
             {linesHub.map((line, idx) => (
-              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-stone-100 bg-stone-50 p-3">
                 <select
                   value={line.hub_inventory_id}
                   onChange={(e) => syncHubBatch(idx, e.target.value)}
@@ -724,7 +749,7 @@ export function Waste() {
               </button>
             </div>
             {linesOutlet.map((line, idx) => (
-              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-stone-100 bg-stone-50 p-3">
                 <select
                   value={line.outlet_inventory_id}
                   onChange={(e) => {
@@ -803,9 +828,11 @@ export function Waste() {
           />
         </div>
 
-        <Button type="submit" disabled={submitting}>
-          {submitting ? 'Posting…' : 'Post waste event'}
-        </Button>
+        <StickyActions>
+          <Button type="submit" disabled={submitting} className="w-full sm:w-auto">
+            {submitting ? 'Posting…' : 'Post waste event'}
+          </Button>
+        </StickyActions>
       </form>
       )}
     </div>

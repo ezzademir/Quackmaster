@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { RefreshCw, AlertTriangle, PackageCheck, CreditCard as Edit2, ClipboardList } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
-import { Button, PageHeader, StatCard, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { aggregateFinishedGoodsHubTotals, hubRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
@@ -406,150 +406,234 @@ export function Inventory() {
       </div>
 
       {loading ? (
-        <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>
+        <div className="flex h-48 items-center justify-center text-sm text-stone-400">Loading…</div>
       ) : (
         <>
           {tab === 'hub' && (
-            <div className="space-y-4">
-              {/* Raw Materials */}
+            <div className="space-y-6">
               <div>
-                <h2 className="mb-3 text-sm font-semibold text-gray-700">Raw Materials</h2>
-                <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <table className="w-full text-sm">
-                    <thead className="border-b border-gray-200 bg-gray-50">
-                      <tr>
-                        <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Material</th>
-                        <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
-                        <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
-                        <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
-                        <th className="hidden md:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reorder</th>
-                        <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                        <th className="hidden xl:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Updated</th>
-                        <th className="w-12 px-4 md:px-6 py-3" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {hubMaterialRows.length === 0 ? (
-                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">
-                          {stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'material')
-                            ? 'No in-stock raw materials. Switch to All lots for empty / audit.'
-                            : 'No raw material stock — receive a purchase order to add stock'}
-                        </td></tr>
-                      ) : (
-                        hubMaterialRows.map((row) => (
-                          <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${row.quantity_on_hand === 0 ? 'bg-red-50/30' : row.quantity_on_hand <= (row.reorder_level ?? 10) ? 'bg-amber-50/30' : ''}`}>
-                            <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.name}</td>
-                            <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
-                            <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
-                            <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
-                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-right text-gray-500 text-xs">{row.reorder_level ?? 10}</td>
-                            <td className="hidden lg:table-cell px-4 md:px-6 py-4"><StockStatus qty={row.quantity_on_hand} reorder={row.reorder_level} /></td>
-                            <td className="hidden xl:table-cell px-4 md:px-6 py-4 text-gray-400 text-xs">{new Date(row.last_updated).toLocaleDateString()}</td>
-                            <td className="px-4 md:px-6 py-4">
-                              <button onClick={() => setAdjustRow(row)} className="text-gray-400 hover:text-blue-600 transition-colors p-1" title="Adjust stock">
-                                <Edit2 size={14} />
-                              </button>
-                            </td>
+                <h2 className="mb-3 text-sm font-semibold text-stone-800">Raw Materials</h2>
+                {hubMaterialRows.length === 0 ? (
+                  <div className="panel py-2">
+                    <EmptyState
+                      title={
+                        stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'material')
+                          ? 'No in-stock raw materials. Switch to All lots for empty / audit.'
+                          : 'No raw material stock — receive a purchase order to add stock'
+                      }
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2 md:hidden">
+                      {hubMaterialRows.map((row) => (
+                        <ListRow
+                          key={row.id}
+                          title={row.name}
+                          meta={`On hand ${row.quantity_on_hand} · Available ${row.available_quantity}`}
+                          aside={
+                            <button
+                              type="button"
+                              onClick={() => setAdjustRow(row)}
+                              className="inline-flex size-10 items-center justify-center rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                              title="Adjust stock"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                          }
+                          body={<StockStatus qty={row.quantity_on_hand} reorder={row.reorder_level} />}
+                        />
+                      ))}
+                    </div>
+                    <div className="panel hidden overflow-x-auto md:block">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Material</th>
+                            <th className="text-right">On Hand</th>
+                            <th className="hidden text-right sm:table-cell">Reserved</th>
+                            <th className="text-right">Available</th>
+                            <th className="hidden text-right md:table-cell">Reorder</th>
+                            <th className="hidden lg:table-cell">Status</th>
+                            <th className="hidden xl:table-cell">Updated</th>
+                            <th className="w-12" />
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        </thead>
+                        <tbody>
+                          {hubMaterialRows.map((row) => (
+                            <tr
+                              key={row.id}
+                              className={
+                                row.quantity_on_hand === 0
+                                  ? 'bg-red-50/30'
+                                  : row.quantity_on_hand <= (row.reorder_level ?? 10)
+                                    ? 'bg-amber-50/30'
+                                    : ''
+                              }
+                            >
+                              <td className="font-medium">{row.name}</td>
+                              <td className="text-right font-medium tabular-nums">{row.quantity_on_hand}</td>
+                              <td className="hidden text-right tabular-nums text-stone-600 sm:table-cell">
+                                {row.reserved_quantity}
+                              </td>
+                              <td className="text-right font-medium tabular-nums">{row.available_quantity}</td>
+                              <td className="hidden text-right tabular-nums text-stone-500 md:table-cell">
+                                {row.reorder_level ?? 10}
+                              </td>
+                              <td className="hidden lg:table-cell">
+                                <StockStatus qty={row.quantity_on_hand} reorder={row.reorder_level} />
+                              </td>
+                              <td className="hidden text-xs text-stone-400 xl:table-cell">
+                                {new Date(row.last_updated).toLocaleDateString()}
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  onClick={() => setAdjustRow(row)}
+                                  className="p-1 text-stone-400 hover:text-brand-800"
+                                  title="Adjust stock"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
 
-              {/* Finished Product */}
               <div>
-                <h2 className="mb-3 text-sm font-semibold text-gray-700">Finished Product</h2>
-                <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <table className="w-full text-sm">
-                    <thead className="border-b border-gray-200 bg-gray-50">
-                      <tr>
-                        <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
-                        <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">SKU</th>
-                        <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Expiry</th>
-                        <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
-                        <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
-                        <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
-                        <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Updated</th>
-                        <th className="w-12 px-4 md:px-6 py-3" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {hubProductRows.length === 0 ? (
-                        <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">
-                          {stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'product')
-                            ? 'No in-stock lots. Switch to All lots for empty / audit.'
-                            : 'No product stock — complete a production run to add product'}
-                        </td></tr>
-                      ) : (
-                        hubProductRows.map((row) => (
-                          <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 md:px-6 py-4 font-mono text-xs sm:text-sm font-medium text-gray-900">{row.lot_label || row.name}</td>
-                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">{skuForDisplay(row.lot_label, row.product_batch, row.recipe_sku) || '—'}</td>
-                            <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-500">{row.expiry_date || '—'}</td>
-                            <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
-                            <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
-                            <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
-                            <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-400 text-xs">{new Date(row.last_updated).toLocaleDateString()}</td>
-                            <td className="px-4 md:px-6 py-4">
-                              <button onClick={() => setAdjustRow(row)} className="text-gray-400 hover:text-blue-600 transition-colors p-1" title="Adjust stock">
-                                <Edit2 size={14} />
-                              </button>
-                            </td>
+                <h2 className="mb-3 text-sm font-semibold text-stone-800">Finished Product</h2>
+                {hubProductRows.length === 0 ? (
+                  <div className="panel py-2">
+                    <EmptyState
+                      title={
+                        stockView === 'in_stock' && datedHubRows.some((r) => r.type === 'product')
+                          ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                          : 'No product stock — complete a production run to add product'
+                      }
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2 md:hidden">
+                      {hubProductRows.map((row) => (
+                        <ListRow
+                          key={row.id}
+                          title={
+                            <span className="font-mono text-xs">{row.lot_label || row.name}</span>
+                          }
+                          meta={`Available ${row.available_quantity} · On hand ${row.quantity_on_hand}`}
+                          aside={
+                            <button
+                              type="button"
+                              onClick={() => setAdjustRow(row)}
+                              className="inline-flex size-10 items-center justify-center rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                              title="Adjust stock"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                          }
+                        />
+                      ))}
+                    </div>
+                    <div className="panel hidden overflow-x-auto md:block">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Lot</th>
+                            <th className="hidden md:table-cell">SKU</th>
+                            <th className="hidden lg:table-cell">Expiry</th>
+                            <th className="text-right">On Hand</th>
+                            <th className="hidden text-right sm:table-cell">Reserved</th>
+                            <th className="text-right">Available</th>
+                            <th className="hidden md:table-cell">Updated</th>
+                            <th className="w-12" />
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        </thead>
+                        <tbody>
+                          {hubProductRows.map((row) => (
+                            <tr key={row.id}>
+                              <td className="font-mono text-xs font-medium">{row.lot_label || row.name}</td>
+                              <td className="hidden text-xs text-stone-600 md:table-cell">
+                                {skuForDisplay(row.lot_label, row.product_batch, row.recipe_sku) || '—'}
+                              </td>
+                              <td className="hidden text-xs text-stone-500 lg:table-cell">{row.expiry_date || '—'}</td>
+                              <td className="text-right font-medium tabular-nums">{row.quantity_on_hand}</td>
+                              <td className="hidden text-right tabular-nums text-stone-600 sm:table-cell">
+                                {row.reserved_quantity}
+                              </td>
+                              <td className="text-right font-medium tabular-nums">{row.available_quantity}</td>
+                              <td className="hidden text-xs text-stone-400 md:table-cell">
+                                {new Date(row.last_updated).toLocaleDateString()}
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  onClick={() => setAdjustRow(row)}
+                                  className="p-1 text-stone-400 hover:text-brand-800"
+                                  title="Adjust stock"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
 
           {tab === 'outlets' && (
             <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700">Filter by Outlet:</label>
-                <select value={selectedOutlet} onChange={(e) => setSelectedOutlet(e.target.value)}
-                  className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="text-sm font-medium text-stone-700">Filter by Outlet:</label>
+                <select
+                  value={selectedOutlet}
+                  onChange={(e) => setSelectedOutlet(e.target.value)}
+                  className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                >
                   <option value="">All outlets</option>
-                  {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
                 </select>
               </div>
-              <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-                <table className="w-full text-sm">
-                  <thead className="border-b border-gray-200 bg-gray-50">
-                    <tr>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Outlet</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot / ingredient</th>
-                      <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">On Hand</th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reserved</th>
-                      <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Available</th>
-                      <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Updated</th>
-                      <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">History</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {outletDisplayRows.length === 0 ? (
-                      <tr><td colSpan={7} className="px-4 md:px-6 py-8 text-center text-gray-400 text-xs sm:text-sm">
-                        {stockView === 'in_stock' && datedOutletRows.length > 0
-                          ? 'No in-stock lots. Switch to All lots for empty / audit.'
-                          : 'No outlet stock yet'}
-                      </td></tr>
-                    ) : (
-                      outletDisplayRows.map((row) => (
-                        <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{row.outlet_name}</td>
-                          <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{row.display_name}</td>
-                          <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">{row.quantity_on_hand}</td>
-                          <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs">{row.reserved_quantity}</td>
-                          <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{row.available_quantity}</td>
-                          <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-400 text-xs">{new Date(row.last_updated).toLocaleDateString()}</td>
-                          <td className="px-4 md:px-6 py-4 text-right">
+              {outletDisplayRows.length === 0 ? (
+                <div className="panel py-2">
+                  <EmptyState
+                    title={
+                      stockView === 'in_stock' && datedOutletRows.length > 0
+                        ? 'No in-stock lots. Switch to All lots for empty / audit.'
+                        : 'No outlet stock yet'
+                    }
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 md:hidden">
+                    {outletDisplayRows.map((row) => (
+                      <ListRow
+                        key={row.id}
+                        title={row.outlet_name}
+                        meta={row.display_name}
+                        body={
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-xs tabular-nums text-stone-700">
+                              On hand {row.quantity_on_hand} · Available {row.available_quantity}
+                            </span>
                             <button
                               type="button"
-                              className="text-xs font-medium text-teal-700 hover:underline"
+                              className="text-xs font-medium text-brand-800 hover:underline"
                               onClick={() => {
                                 setTimelineRow(row);
                                 setTimelineLoading(true);
@@ -569,13 +653,68 @@ export function Inventory() {
                             >
                               Timeline
                             </button>
-                          </td>
+                          </div>
+                        }
+                      />
+                    ))}
+                  </div>
+                  <div className="panel hidden overflow-x-auto md:block">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Outlet</th>
+                          <th>Lot / ingredient</th>
+                          <th className="text-right">On Hand</th>
+                          <th className="hidden text-right sm:table-cell">Reserved</th>
+                          <th className="text-right">Available</th>
+                          <th className="hidden md:table-cell">Updated</th>
+                          <th className="text-right">History</th>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody>
+                        {outletDisplayRows.map((row) => (
+                          <tr key={row.id}>
+                            <td className="font-medium">{row.outlet_name}</td>
+                            <td>{row.display_name}</td>
+                            <td className="text-right font-medium tabular-nums">{row.quantity_on_hand}</td>
+                            <td className="hidden text-right tabular-nums text-stone-600 sm:table-cell">
+                              {row.reserved_quantity}
+                            </td>
+                            <td className="text-right font-medium tabular-nums">{row.available_quantity}</td>
+                            <td className="hidden text-xs text-stone-400 md:table-cell">
+                              {new Date(row.last_updated).toLocaleDateString()}
+                            </td>
+                            <td className="text-right">
+                              <button
+                                type="button"
+                                className="text-xs font-medium text-brand-800 hover:underline"
+                                onClick={() => {
+                                  setTimelineRow(row);
+                                  setTimelineLoading(true);
+                                  const end = new Date();
+                                  const start = new Date();
+                                  start.setDate(start.getDate() - 90);
+                                  void fetchOutletMovements({
+                                    outletId: row.outlet_id,
+                                    from: start,
+                                    to: end,
+                                    outletInventoryId: row.id,
+                                  })
+                                    .then(setTimelineMoves)
+                                    .catch(() => setTimelineMoves([]))
+                                    .finally(() => setTimelineLoading(false));
+                                }}
+                              >
+                                Timeline
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </>

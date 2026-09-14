@@ -13,21 +13,23 @@ export function StatCard({
   sub?: ReactNode;
   tone?: 'default' | 'brand' | 'muted' | 'danger';
 }) {
-  const iconWrap =
+  const valueTone =
     tone === 'brand'
-      ? 'bg-brand-50 text-brand-700'
+      ? 'text-brand-800'
       : tone === 'danger'
-        ? 'bg-red-50 text-red-600'
+        ? 'text-red-700'
         : tone === 'muted'
-          ? 'bg-stone-100 text-stone-500'
-          : 'bg-stone-100 text-stone-600';
+          ? 'text-stone-500'
+          : 'text-stone-900';
 
   return (
     <div className="panel p-4">
-      {icon ? <div className={`mb-2 inline-flex rounded-lg p-2 ${iconWrap}`}>{icon}</div> : null}
-      <p className="text-xl font-bold tabular-nums text-stone-900">{value}</p>
-      <p className="mt-0.5 text-xs font-medium text-stone-700">{label}</p>
-      {sub ? <p className="text-[11px] text-stone-400">{sub}</p> : null}
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-medium text-stone-500">{label}</p>
+        {icon ? <div className="text-stone-400">{icon}</div> : null}
+      </div>
+      <p className={`mt-2 text-2xl font-semibold tabular-nums tracking-tight ${valueTone}`}>{value}</p>
+      {sub ? <p className="mt-1 text-xs text-stone-400">{sub}</p> : null}
     </div>
   );
 }

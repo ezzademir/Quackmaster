@@ -1,4 +1,5 @@
-import { ArrowLeftRight, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
+import { EmptyState, ListRow } from '../../components/ui';
 import { formatSupplyCalendarDate } from './helpers';
 import { StatusBadge } from './StatusBadge';
 import type { OTWithOutlets } from './types';
@@ -10,63 +11,80 @@ export function TransfersTab({
   transfers: OTWithOutlets[];
   onManage: (tx: OTWithOutlets) => void;
 }) {
+  if (transfers.length === 0) {
+    return (
+      <div className="panel py-2">
+        <EmptyState title="No outlet transfers yet" />
+      </div>
+    );
+  }
+
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-      <table className="w-full text-sm">
-        <thead className="border-b border-gray-200 bg-gray-50">
-          <tr>
-            <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Transfer #</th>
-            <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">From</th>
-            <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">To</th>
-            <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Qty</th>
-            <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Dispatch</th>
-            <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Received</th>
-            <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-            <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {transfers.length === 0 ? (
+    <>
+      <div className="space-y-2 md:hidden">
+        {transfers.map((tx) => (
+          <ListRow
+            key={tx.id}
+            title={tx.transfer_number}
+            meta={`${tx.from_outlet?.name ?? '—'} → ${tx.to_outlet?.name ?? '—'} · ${Number(tx.total_quantity).toLocaleString()} qty`}
+            aside={<StatusBadge status={tx.status} />}
+            body={
+              <button
+                type="button"
+                onClick={() => onManage(tx)}
+                className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-700"
+              >
+                Manage <ChevronRight size={14} />
+              </button>
+            }
+          />
+        ))}
+      </div>
+
+      <div className="panel hidden overflow-x-auto md:block">
+        <table className="data-table">
+          <thead>
             <tr>
-              <td colSpan={8} className="px-6 py-12 text-center">
-                <ArrowLeftRight className="mx-auto mb-3 text-gray-300" size={40} />
-                <p className="text-gray-400">No outlet transfers yet</p>
-              </td>
+              <th>Transfer #</th>
+              <th>From</th>
+              <th>To</th>
+              <th className="text-right">Qty</th>
+              <th className="hidden sm:table-cell">Dispatch</th>
+              <th className="hidden md:table-cell">Received</th>
+              <th>Status</th>
+              <th className="text-right">Actions</th>
             </tr>
-          ) : (
-            transfers.map((tx) => (
-              <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{tx.transfer_number}</td>
-                <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{tx.from_outlet?.name ?? '—'}</td>
-                <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{tx.to_outlet?.name ?? '—'}</td>
-                <td className="px-4 md:px-6 py-4 text-right font-semibold text-gray-900 text-xs sm:text-sm">
-                  {Number(tx.total_quantity).toLocaleString()}
-                </td>
-                <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
+          </thead>
+          <tbody>
+            {transfers.map((tx) => (
+              <tr key={tx.id}>
+                <td className="font-medium">{tx.transfer_number}</td>
+                <td>{tx.from_outlet?.name ?? '—'}</td>
+                <td>{tx.to_outlet?.name ?? '—'}</td>
+                <td className="text-right font-medium tabular-nums">{Number(tx.total_quantity).toLocaleString()}</td>
+                <td className="hidden whitespace-nowrap tabular-nums text-stone-500 sm:table-cell">
                   {tx.dispatch_date ? formatSupplyCalendarDate(tx.dispatch_date) : '—'}
                 </td>
-                <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs tabular-nums whitespace-nowrap">
+                <td className="hidden whitespace-nowrap tabular-nums text-stone-500 md:table-cell">
                   {tx.received_date ? formatSupplyCalendarDate(tx.received_date) : '—'}
                 </td>
-                <td className="px-4 md:px-6 py-4">
+                <td>
                   <StatusBadge status={tx.status} />
                 </td>
-                <td className="px-4 md:px-6 py-4">
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onManage(tx)}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                    >
-                      Manage <ChevronRight size={14} />
-                    </button>
-                  </div>
+                <td className="text-right">
+                  <button
+                    type="button"
+                    onClick={() => onManage(tx)}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-brand-800 hover:underline"
+                  >
+                    Manage <ChevronRight size={14} />
+                  </button>
                 </td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

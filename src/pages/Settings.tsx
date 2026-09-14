@@ -186,12 +186,12 @@ export function Settings() {
         }
       />
 
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="font-semibold text-gray-900">SKU vs lot</h2>
-        <p className="mt-1 text-sm text-gray-600">
+      <div className="panel p-5">
+        <h2 className="font-semibold text-stone-900">SKU vs lot</h2>
+        <p className="mt-1 text-sm text-stone-600">
           Two identifiers, one story. Do not invent a third code.
         </p>
-        <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-gray-700">
+        <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-stone-700">
           <li>
             <span className="font-medium">SKU</span> = recipe product code (what you sell, PAR, and FIFO against).
             Current finished-goods SKU is <span className="font-mono text-xs">QUACKTEOW</span>.
@@ -205,7 +205,7 @@ export function Settings() {
             show the lot first; that legacy string is not the label staff should use.
           </li>
         </ul>
-        <p className="mt-3 text-xs text-gray-500">
+        <p className="mt-3 text-xs text-stone-500">
           Set shelf life on the recipe so EXP prints on lot labels. Shortening SKU (optional) only applies to new lots.
         </p>
       </div>
@@ -213,16 +213,16 @@ export function Settings() {
       {isAdmin && (
         <div
           id="qc-audit-settings"
-          className="scroll-mt-24 rounded-xl border border-indigo-200 bg-indigo-50/40 p-6 shadow-sm"
+          className="scroll-mt-24 rounded-xl border border-indigo-200 bg-indigo-50/40 p-6"
         >
-          <h2 className="mb-1 font-semibold text-gray-900 flex flex-wrap items-center gap-2">
+          <h2 className="mb-1 font-semibold text-stone-900 flex flex-wrap items-center gap-2">
             <Shield size={20} className="text-indigo-600" />
             QC audit parameters
             {qcLoading && (
               <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-normal text-indigo-800">Loading…</span>
             )}
           </h2>
-          <p className="mb-5 text-sm text-gray-600">
+          <p className="mb-5 text-sm text-stone-600">
             Thresholds used when completing production runs: yields outside min/max are rejected; deviation from the recipe target yield beyond allowable variance triggers a warning (staff may need admin approval).
           </p>
 
@@ -241,7 +241,7 @@ export function Settings() {
 
           <div className={`grid gap-4 sm:grid-cols-3 ${qcLoading ? 'opacity-70' : ''}`}>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Minimum yield (%)</label>
+              <label className="mb-1 block text-sm font-medium text-stone-700">Minimum yield (%)</label>
               <input
                 type="number"
                 min={0}
@@ -250,12 +250,12 @@ export function Settings() {
                 value={qcMin}
                 onChange={(e) => setQcMin(e.target.value)}
                 disabled={qcLoading}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
+                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
               />
-              <p className="mt-1 text-xs text-gray-500">Below this is rejected</p>
+              <p className="mt-1 text-xs text-stone-500">Below this is rejected</p>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Maximum yield (%)</label>
+              <label className="mb-1 block text-sm font-medium text-stone-700">Maximum yield (%)</label>
               <input
                 type="number"
                 min={0}
@@ -264,12 +264,12 @@ export function Settings() {
                 value={qcMax}
                 onChange={(e) => setQcMax(e.target.value)}
                 disabled={qcLoading}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
+                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
               />
-              <p className="mt-1 text-xs text-gray-500">Above this is rejected</p>
+              <p className="mt-1 text-xs text-stone-500">Above this is rejected</p>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Allowable variance from target (%)</label>
+              <label className="mb-1 block text-sm font-medium text-stone-700">Allowable variance from target (%)</label>
               <input
                 type="number"
                 min={0}
@@ -278,9 +278,9 @@ export function Settings() {
                 value={qcVariance}
                 onChange={(e) => setQcVariance(e.target.value)}
                 disabled={qcLoading}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
+                className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed"
               />
-              <p className="mt-1 text-xs text-gray-500">Beyond recipe target yield triggers warning</p>
+              <p className="mt-1 text-xs text-stone-500">Beyond recipe target yield triggers warning</p>
             </div>
           </div>
 
@@ -293,27 +293,27 @@ export function Settings() {
             >
               {qcSaving ? 'Saving…' : 'Save QC parameters'}
             </button>
-            <span className="text-xs text-gray-500">Admin only · applies to new production run completions</span>
+            <span className="text-xs text-stone-500">Admin only · applies to new production run completions</span>
           </div>
         </div>
       )}
 
       {isAdmin && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="font-semibold text-gray-900">Stock take variance threshold</h2>
-          <p className="mt-1 text-xs text-gray-500">
+        <div className="panel p-5">
+          <h2 className="font-semibold text-stone-900">Stock take variance threshold</h2>
+          <p className="mt-1 text-xs text-stone-500">
             Absolute |counted − system| above this value requires a matching recount before staff/admin can post.
           </p>
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Threshold (units)</label>
+              <label className="mb-1 block text-sm font-medium text-stone-700">Threshold (units)</label>
               <input
                 type="number"
                 min={0}
                 step="0.01"
                 value={stThreshold}
                 onChange={(e) => setStThreshold(e.target.value)}
-                className="w-40 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                className="w-40 rounded-lg border border-stone-300 px-3 py-2 text-sm"
               />
             </div>
             <button
@@ -333,14 +333,14 @@ export function Settings() {
               {stSaving ? 'Saving…' : 'Save threshold'}
             </button>
           </div>
-          {stNotice && <p className="mt-2 text-sm text-gray-600">{stNotice}</p>}
+          {stNotice && <p className="mt-2 text-sm text-stone-600">{stNotice}</p>}
         </div>
       )}
 
       {isAdmin && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="font-semibold text-gray-900">Outlet PAR levels</h2>
-          <p className="mt-1 text-xs text-gray-500">
+        <div className="panel p-5">
+          <h2 className="font-semibold text-stone-900">Outlet PAR levels</h2>
+          <p className="mt-1 text-xs text-stone-500">
             Finished goods: use the <span className="font-medium">SKU</span> as par_key (not the printable lot). Raw materials: use <code className="text-[11px]">rm:&lt;uuid&gt;</code>.
             Suggested reorder = target + safety − available on hand.
           </p>
@@ -348,7 +348,7 @@ export function Settings() {
             <select
               value={parOutletId}
               onChange={(e) => setParOutletId(e.target.value)}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
             >
               {parOutlets.map((o) => (
                 <option key={o.id} value={o.id}>
@@ -362,9 +362,9 @@ export function Settings() {
               <li className="text-gray-400">No PAR rows for this outlet.</li>
             ) : (
               parRows.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-100 px-3 py-2">
+                <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-100 px-3 py-2">
                   <span className="font-mono text-xs text-gray-800">{r.par_key}</span>
-                  <span className="text-gray-600">
+                  <span className="text-stone-600">
                     target {r.target_qty} · safety {r.safety_stock}
                   </span>
                   <button
@@ -385,7 +385,7 @@ export function Settings() {
               value={parKey}
               onChange={(e) => setParKey(e.target.value)}
               placeholder="par_key"
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
             <input
               type="number"
@@ -394,7 +394,7 @@ export function Settings() {
               value={parTarget}
               onChange={(e) => setParTarget(e.target.value)}
               placeholder="Target"
-              className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-28 rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
             <input
               type="number"
@@ -403,7 +403,7 @@ export function Settings() {
               value={parSafety}
               onChange={(e) => setParSafety(e.target.value)}
               placeholder="Safety"
-              className="w-28 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-28 rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
             <button
               type="button"
@@ -431,7 +431,7 @@ export function Settings() {
               Add / update PAR
             </button>
           </div>
-          {parMsg && <p className="mt-2 text-sm text-gray-600">{parMsg}</p>}
+          {parMsg && <p className="mt-2 text-sm text-stone-600">{parMsg}</p>}
         </div>
       )}
 
@@ -439,9 +439,9 @@ export function Settings() {
 
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-2 font-semibold text-gray-900">Accounting / tax exports</h2>
-            <p className="mb-4 text-xs text-gray-500">
+          <div className="panel p-5">
+            <h2 className="mb-2 font-semibold text-stone-900">Accounting / tax exports</h2>
+            <p className="mb-4 text-xs text-stone-500">
               CSV snapshots (first 5k rows per table). Run after migrations so new columns exist.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -459,7 +459,7 @@ export function Settings() {
                   type="button"
                   disabled={exportBusy !== null}
                   onClick={() => void exportTableCsv(table, `${table}_export`)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
                 >
                   <Download size={14} />
                   {exportBusy === table ? 'Exporting…' : label}
@@ -468,12 +468,12 @@ export function Settings() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-2 font-semibold text-gray-900">System Info</h2>
-            <div className="space-y-2 text-xs text-gray-500">
-              <div className="flex justify-between"><span>Version</span><span className="font-medium text-gray-700">1.0.0</span></div>
-              <div className="flex justify-between"><span>Database</span><span className="font-medium text-gray-700">Supabase</span></div>
-              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-gray-700">061 StoreHub sync</span></div>
+          <div className="panel p-5">
+            <h2 className="mb-2 font-semibold text-stone-900">System Info</h2>
+            <div className="space-y-2 text-xs text-stone-500">
+              <div className="flex justify-between"><span>Version</span><span className="font-medium text-stone-700">1.0.0</span></div>
+              <div className="flex justify-between"><span>Database</span><span className="font-medium text-stone-700">Supabase</span></div>
+              <div className="flex justify-between"><span>Latest roadmap migrations</span><span className="font-medium text-stone-700">061 StoreHub sync</span></div>
             </div>
           </div>
         </div>

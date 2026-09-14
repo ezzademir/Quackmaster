@@ -14,7 +14,7 @@ export function PageHeader({
   return (
     <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="min-w-0">
-        <h1 className="text-2xl font-bold text-stone-900">{title}</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-stone-900">{title}</h1>
         {description ? <div className="mt-1 text-sm text-stone-500">{description}</div> : null}
       </div>
       {(actions || filters) && (

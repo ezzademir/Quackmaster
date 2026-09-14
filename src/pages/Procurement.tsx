@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, PackagePlus, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
-import { Button, PageHeader, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, validatePoLinesAgainstSupplierCatalog, formatValidationErrors } from '../utils/validation';
@@ -1341,67 +1341,112 @@ export function Procurement() {
           {tab === 'orders' && (
             <div className="space-y-4">
               <div className="relative max-w-sm">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search orders…"
-                  className="w-full rounded-lg border border-gray-300 pl-9 pr-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search orders…"
+                  className="w-full rounded-lg border border-stone-300 py-2 pl-9 pr-4 text-sm"
+                />
               </div>
-              <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-                <table className="w-full text-sm">
-                  <thead className="border-b border-gray-200 bg-gray-50">
-                    <tr>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Order #</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Supplier</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Date</th>
-                      <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Amount</th>
-                      <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Items</th>
-                      <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {filteredOrders.length === 0 ? (
-                      <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">No purchase orders found</td></tr>
-                    ) : (
-                      filteredOrders.map((order) => (
-                        <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{order.order_number}</td>
-                          <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{(order.supplier as Supplier | null)?.name ?? '—'}</td>
-                          <td className="px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{new Date(order.order_date).toLocaleDateString()}</td>
-                          <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">MYR {order.total_amount?.toFixed(2) ?? '0.00'}</td>
-                          <td className="px-4 md:px-6 py-4"><StatusBadge status={order.status} /></td>
-                          <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{(order.items ?? []).length} line(s)</td>
-                          <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
-                            <div className="flex flex-wrap items-center justify-end gap-2">
+              {filteredOrders.length === 0 ? (
+                <div className="panel py-2">
+                  <EmptyState title="No purchase orders found" />
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 md:hidden">
+                    {filteredOrders.map((order) => (
+                      <ListRow
+                        key={order.id}
+                        title={order.order_number}
+                        meta={`${(order.supplier as Supplier | null)?.name ?? '—'} · ${new Date(order.order_date).toLocaleDateString()} · MYR ${order.total_amount?.toFixed(2) ?? '0.00'}`}
+                        aside={<StatusBadge status={order.status} />}
+                        body={
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setViewPO(order)}
+                              className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-700"
+                            >
+                              Manage <ChevronRight size={14} aria-hidden />
+                            </button>
+                            {isAdmin && purchaseOrderCanRemove(order) && (
                               <button
                                 type="button"
-                                onClick={() => setViewPO(order)}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                                onClick={() => deletePurchaseOrder(order)}
+                                className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700"
                               >
-                                Manage <ChevronRight size={14} aria-hidden />
+                                <Trash2 size={14} aria-hidden />
+                                Delete
                               </button>
-                              {isAdmin && purchaseOrderCanRemove(order) && (
+                            )}
+                          </div>
+                        }
+                      />
+                    ))}
+                  </div>
+                  <div className="panel hidden overflow-x-auto md:block">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Order #</th>
+                          <th>Supplier</th>
+                          <th>Date</th>
+                          <th className="text-right">Amount</th>
+                          <th>Status</th>
+                          <th className="hidden sm:table-cell">Items</th>
+                          <th className="text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredOrders.map((order) => (
+                          <tr key={order.id}>
+                            <td className="font-medium">{order.order_number}</td>
+                            <td>{(order.supplier as Supplier | null)?.name ?? '—'}</td>
+                            <td className="text-stone-500">{new Date(order.order_date).toLocaleDateString()}</td>
+                            <td className="text-right font-medium">
+                              MYR {order.total_amount?.toFixed(2) ?? '0.00'}
+                            </td>
+                            <td>
+                              <StatusBadge status={order.status} />
+                            </td>
+                            <td className="hidden text-stone-500 sm:table-cell">
+                              {(order.items ?? []).length} line(s)
+                            </td>
+                            <td className="text-right">
+                              <div className="flex flex-wrap items-center justify-end gap-2">
                                 <button
                                   type="button"
-                                  onClick={() => deletePurchaseOrder(order)}
-                                  className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-800"
-                                  title={
-                                    purchaseOrderUseCancelRpc(order)
-                                      ? 'Cancel purchase order and reverse hub receipts (admin)'
-                                      : 'Delete purchase order (admin)'
-                                  }
+                                  onClick={() => setViewPO(order)}
+                                  className="inline-flex items-center gap-1 text-xs font-medium text-brand-800 hover:underline"
                                 >
-                                  <Trash2 size={14} aria-hidden />
-                                  Delete
+                                  Manage <ChevronRight size={14} aria-hidden />
                                 </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                                {isAdmin && purchaseOrderCanRemove(order) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => deletePurchaseOrder(order)}
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
+                                    title={
+                                      purchaseOrderUseCancelRpc(order)
+                                        ? 'Cancel purchase order and reverse hub receipts (admin)'
+                                        : 'Delete purchase order (admin)'
+                                    }
+                                  >
+                                    <Trash2 size={14} aria-hidden />
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

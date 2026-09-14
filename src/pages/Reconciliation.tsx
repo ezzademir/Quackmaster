@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Download, AlertTriangle } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, PageHeader } from '../components/ui';
+import { Button, ListRow, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import type { Outlet } from '../types';
 import type { DateRange } from '../utils/dateRange';
@@ -37,14 +37,14 @@ function MovementRow({
   const negative = value < 0;
   const content = (
     <>
-      <span className="text-sm text-gray-700">{label}</span>
-      <span className={`text-sm font-semibold tabular-nums ${negative ? 'text-red-700' : 'text-gray-900'}`}>
+      <span className="text-sm text-stone-700">{label}</span>
+      <span className={`text-sm font-semibold tabular-nums ${negative ? 'text-red-700' : 'text-stone-900'}`}>
         {value >= 0 ? '+' : ''}{fmt(value)}
       </span>
     </>
   );
   const className = `flex items-center justify-between rounded-lg border px-4 py-3 ${
-    emphasize ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'
+    emphasize ? 'border-amber-300 bg-amber-50' : 'border-stone-200 bg-white'
   }`;
   if (to && Math.abs(value) > 0.001) {
     return (
@@ -157,11 +157,11 @@ export function Reconciliation() {
 
       <div className="flex flex-wrap items-end gap-4 panel p-4">
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
+          <label className="mb-1 block text-xs font-medium text-stone-600">Outlet</label>
           <select
             value={outletId}
             onChange={(e) => setOutletId(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
           >
             {outlets.map((o) => (
               <option key={o.id} value={o.id}>{o.name}</option>
@@ -172,23 +172,23 @@ export function Reconciliation() {
           onFilterChange={(range) => setDateRange(range ?? defaultReconcileRange())}
           hint="Reconciliation period (movement business dates)."
         />
-        <label className="flex items-center gap-2 text-sm text-gray-700">
+        <label className="flex items-center gap-2 text-sm text-stone-700">
           <input type="checkbox" checked={includeRm} onChange={(e) => setIncludeRm(e.target.checked)} />
           Include raw materials
         </label>
         <div>
-          <label className="mb-1 block text-xs font-medium text-gray-600">Balance as of</label>
+          <label className="mb-1 block text-xs font-medium text-stone-600">Balance as of</label>
           <input
             type="date"
             value={asOfDate}
             onChange={(e) => setAsOfDate(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
           />
         </div>
         <button
           type="button"
           onClick={() => void load()}
-          className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
+          className="btn-primary"
         >
           Refresh
         </button>
@@ -199,7 +199,7 @@ export function Reconciliation() {
       )}
 
       {loading ? (
-        <div className="flex h-48 items-center justify-center text-sm text-gray-400">Loading reconciliation…</div>
+        <div className="flex h-48 items-center justify-center text-sm text-stone-400">Loading reconciliation…</div>
       ) : result?.success ? (
         <>
           {varianceBad && (
@@ -215,9 +215,9 @@ export function Reconciliation() {
           )}
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-5">
-              <h2 className="text-sm font-semibold text-gray-900">Movement equation</h2>
-              <p className="text-xs text-gray-500">
+            <div className="panel space-y-2 p-5">
+              <h2 className="text-sm font-semibold text-stone-900">Movement equation</h2>
+              <p className="text-xs text-stone-500">
                 Period: {result.period_from} → {result.period_to}
               </p>
               <MovementRow label="Opening (before period)" value={Number(result.opening_qoh ?? 0)} />
@@ -233,40 +233,40 @@ export function Reconciliation() {
             </div>
 
             <div className="space-y-4">
-              <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                <h2 className="text-sm font-semibold text-gray-900">In transit (not in outlet QOH)</h2>
+              <div className="panel p-5">
+                <h2 className="text-sm font-semibold text-stone-900">In transit (not in outlet QOH)</h2>
                 <dl className="mt-3 space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Supply dispatched, awaiting receipt</dt>
+                    <dt className="text-stone-600">Supply dispatched, awaiting receipt</dt>
                     <dd className="font-semibold tabular-nums">{fmt(result.in_transit_supply)}</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Inter-outlet transfer in transit</dt>
+                    <dt className="text-stone-600">Inter-outlet transfer in transit</dt>
                     <dd className="font-semibold tabular-nums">{fmt(result.in_transit_transfer)}</dd>
                   </div>
                 </dl>
               </div>
 
-              <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                <h2 className="text-sm font-semibold text-gray-900">Last stock take</h2>
+              <div className="panel p-5">
+                <h2 className="text-sm font-semibold text-stone-900">Last stock take</h2>
                 {result.last_stock_take && result.last_stock_take !== null && typeof result.last_stock_take === 'object' ? (
                   <dl className="mt-3 space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <dt className="text-gray-600">Count date</dt>
+                      <dt className="text-stone-600">Count date</dt>
                       <dd>{String(result.last_stock_take.count_date ?? '—')}</dd>
                     </div>
                     <div className="flex justify-between">
-                      <dt className="text-gray-600">Total variance</dt>
+                      <dt className="text-stone-600">Total variance</dt>
                       <dd className="font-semibold tabular-nums">{fmt(Number(result.last_stock_take.total_variance ?? 0))}</dd>
                     </div>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-stone-500">
                       <Link to={stockTakeHref} className="text-teal-600 hover:underline">Run stock take</Link>
                       {' · '}
                       <Link to="/inventory" className="text-teal-600 hover:underline">View outlet inventory</Link>
                     </p>
                   </dl>
                 ) : (
-                  <p className="mt-2 text-sm text-gray-500">No stock take recorded for this outlet.</p>
+                  <p className="mt-2 text-sm text-stone-500">No stock take recorded for this outlet.</p>
                 )}
               </div>
 
@@ -284,24 +284,55 @@ export function Reconciliation() {
           </div>
 
           {skuRows.length > 0 && (
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-semibold text-gray-900">By SKU / material</h2>
-              <p className="mt-1 text-xs text-gray-500">
+            <div className="panel p-5">
+              <h2 className="text-sm font-semibold text-stone-900">By SKU / material</h2>
+              <p className="mt-1 text-xs text-stone-500">
                 Per-product equation — click a row to focus. Unexplained variance uses that SKU only (same units).
               </p>
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead className="border-b bg-gray-50 text-left">
+              <div className="mt-3 space-y-2 md:hidden">
+                {skuRows.map((row) => {
+                  const net =
+                    Number(row.supply_in) +
+                    Number(row.transfers_in) +
+                    Number(row.transfers_out) +
+                    Number(row.sales) +
+                    Number(row.waste) +
+                    Number(row.stock_take_adjustments) +
+                    Number(row.reversals);
+                  const bad = Math.abs(Number(row.unexplained_variance)) > 0.001;
+                  return (
+                    <ListRow
+                      key={row.sku_key}
+                      title={row.label}
+                      meta={`${row.kind} · net ${fmt(net)}`}
+                      body={
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs tabular-nums text-stone-600">
+                          <span>Open {fmt(row.opening_qoh)}</span>
+                          <span>Computed {fmt(row.computed_closing)}</span>
+                          <span>Live {fmt(row.live_on_hand)}</span>
+                          <span className={bad ? 'font-semibold text-amber-800' : ''}>
+                            Unexplained {fmt(row.unexplained_variance)}
+                          </span>
+                        </div>
+                      }
+                      onClick={() => setSelectedSku(row)}
+                    />
+                  );
+                })}
+              </div>
+              <div className="mt-3 hidden overflow-x-auto md:block">
+                <table className="data-table min-w-[720px]">
+                  <thead>
                     <tr>
-                      <th className="px-3 py-2 font-medium text-gray-700">Item</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-700">Opening</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-700">Net moves</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-700">Computed</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-700">Live</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-700">Unexplained</th>
+                      <th>Item</th>
+                      <th className="text-right">Opening</th>
+                      <th className="text-right">Net moves</th>
+                      <th className="text-right">Computed</th>
+                      <th className="text-right">Live</th>
+                      <th className="text-right">Unexplained</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y">
+                  <tbody>
                     {skuRows.map((row) => {
                       const net =
                         Number(row.supply_in) +
@@ -318,17 +349,17 @@ export function Reconciliation() {
                           className={`cursor-pointer hover:bg-teal-50/50 ${selectedSku?.sku_key === row.sku_key ? 'bg-teal-50' : ''}`}
                           onClick={() => setSelectedSku(row)}
                         >
-                          <td className="px-3 py-2 font-medium text-gray-900">
+                          <td className="font-medium">
                             {row.label}
-                            <span className="ml-2 text-[10px] uppercase text-gray-400">{row.kind}</span>
+                            <span className="ml-2 text-[10px] uppercase text-stone-400">{row.kind}</span>
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmt(row.opening_qoh)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmt(net)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmt(row.computed_closing)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmt(row.live_on_hand)}</td>
+                          <td className="text-right tabular-nums">{fmt(row.opening_qoh)}</td>
+                          <td className="text-right tabular-nums">{fmt(net)}</td>
+                          <td className="text-right tabular-nums">{fmt(row.computed_closing)}</td>
+                          <td className="text-right tabular-nums">{fmt(row.live_on_hand)}</td>
                           <td
-                            className={`px-3 py-2 text-right tabular-nums font-semibold ${
-                              bad ? 'text-amber-800' : 'text-gray-600'
+                            className={`text-right tabular-nums font-semibold ${
+                              bad ? 'text-amber-800' : 'text-stone-600'
                             }`}
                           >
                             {fmt(row.unexplained_variance)}

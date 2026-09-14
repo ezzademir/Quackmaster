@@ -18,6 +18,7 @@ import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
 import { displayLotFirst, displaySkuSecond, nestedLotLabel, nestedRecipeSku } from '../../utils/lotLabel';
 import { filterByStockView, type StockView } from '../../utils/stockView';
 import { StockViewToggle } from '../StockViewToggle';
+import { StickyActions } from '../ui/StickyActions';
 import { malaysiaCalendarDate } from '../../utils/dateRange';
 
 type RecipeMeta = { id: string; name: string; default_product_batch: string | null };
@@ -1131,10 +1132,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               ) : null}
 
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                <p className="order-2 text-xs text-gray-500 sm:order-1">
+                <p className="order-2 text-xs text-stone-500 sm:order-1">
                   {outletName ? (
                     <>
-                      Outlet: <span className="font-medium text-gray-700">{outletName}</span> ·{' '}
+                      Outlet: <span className="font-medium text-stone-700">{outletName}</span> ·{' '}
                       {countMode === 'sku' && !blindSupervisor
                         ? `${skuGroups.length} SKU${skuGroups.length !== 1 ? 's' : ''}`
                         : `${visibleRows.length} row${visibleRows.length !== 1 ? 's' : ''}`}
@@ -1144,25 +1145,27 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                     </>
                   ) : null}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void handleSubmit()}
-                  disabled={!canSubmit}
-                  className="order-1 min-h-11 w-full shrink-0 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 sm:order-2 sm:min-h-0 sm:w-auto sm:py-2 active:bg-amber-800"
-                >
-                  {submitting ? 'Posting…' : recountPhase ? 'Confirm recount & post' : 'Post stock take'}
-                </button>
+                <StickyActions>
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmit()}
+                    disabled={!canSubmit}
+                    className="btn-primary w-full md:w-auto"
+                  >
+                    {submitting ? 'Posting…' : recountPhase ? 'Confirm recount & post' : 'Post stock take'}
+                  </button>
+                </StickyActions>
               </div>
             </>
           )}
         </div>
 
-        <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="space-y-3 rounded-xl border border-stone-200 bg-white p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-gray-800">Recent sessions</h2>
-            {loadingSessions && <span className="text-xs text-gray-400">Loading…</span>}
+            <h2 className="text-sm font-semibold text-stone-800">Recent sessions</h2>
+            {loadingSessions && <span className="text-xs text-stone-400">Loading…</span>}
           </div>
-          <p className="text-xs leading-relaxed text-gray-500">
+          <p className="text-xs leading-relaxed text-stone-500">
             {outletId ? 'Filtered to the selected outlet. ' : 'All outlets (latest 100). '}
             {blindSupervisor
               ? 'Your posted sessions appear here for reference. Admin or staff can export CSV from Inventory → Outlet stock take.'
@@ -1170,16 +1173,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           </p>
           <ul className="max-h-[min(28rem,55vh)] space-y-2 overflow-y-auto overscroll-y-contain text-sm sm:max-h-[28rem]">
             {sessions.length === 0 ? (
-              <li className="text-gray-400">No sessions yet.</li>
+              <li className="text-stone-400">No sessions yet.</li>
             ) : (
               sessions.map((s) => (
                 <li
                   key={s.id}
-                  className="flex flex-col gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:py-2"
+                  className="flex flex-col gap-2 rounded-lg border border-stone-100 bg-stone-50/80 px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:py-2"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="break-words font-medium text-gray-900">{s.outlet?.name ?? 'Outlet'}</p>
-                    <p className="mt-0.5 break-words text-xs text-gray-500">
+                    <p className="break-words font-medium text-stone-900">{s.outlet?.name ?? 'Outlet'}</p>
+                    <p className="mt-0.5 break-words text-xs text-stone-500">
                       {s.count_date} · posted {new Date(s.posted_at).toLocaleString()}
                       {s.notes ? ` · ${s.notes}` : ''}
                     </p>
@@ -1189,7 +1192,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       type="button"
                       onClick={() => void exportSession(s.id)}
                       disabled={exportingId === s.id}
-                      className="inline-flex min-h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 sm:min-h-0 sm:w-auto sm:justify-center sm:py-1.5"
+                      className="inline-flex min-h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50 sm:min-h-0 sm:w-auto sm:py-1.5"
                     >
                       <Download size={14} className="shrink-0" aria-hidden />
                       {exportingId === s.id ? '…' : 'CSV'}

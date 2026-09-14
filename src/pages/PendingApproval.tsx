@@ -72,21 +72,21 @@ export function PendingApproval() {
 
   return (
     <div className="mobile-auth-shell">
-      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 shadow-lg text-center">
+      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8  text-center">
         <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="mx-auto mb-6 h-16 w-16" />
 
         <h1 className="text-2xl font-bold text-stone-900 mb-2">Awaiting Approval</h1>
-        <p className="text-sm text-gray-600 mb-6">
+        <p className="text-sm text-stone-600 mb-6">
           Your account is pending admin review. You'll have full access once approved.
         </p>
 
-        <div className="rounded-lg bg-gray-50 p-4 mb-6 text-left space-y-2">
+        <div className="rounded-lg bg-stone-50 p-4 mb-6 text-left space-y-2">
           <div className="flex justify-between text-sm">
-            <span className="text-gray-600">Name</span>
-            <span className="font-medium text-gray-900">{profile?.full_name}</span>
+            <span className="text-stone-600">Name</span>
+            <span className="font-medium text-stone-900">{profile?.full_name}</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-gray-600">Status</span>
+            <span className="text-stone-600">Status</span>
             <div className="flex items-center gap-2">
               {approval?.status === 'pending' && (
                 <>
@@ -108,19 +108,19 @@ export function PendingApproval() {
           </div>
           {approval?.requested_at && (
             <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Requested</span>
-              <span className="text-gray-900">{new Date(approval.requested_at).toLocaleDateString()}</span>
+              <span className="text-stone-600">Requested</span>
+              <span className="text-stone-900">{new Date(approval.requested_at).toLocaleDateString()}</span>
             </div>
           )}
           {approval?.reviewed_at && (
             <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Reviewed</span>
-              <span className="text-gray-900">{new Date(approval.reviewed_at).toLocaleDateString()}</span>
+              <span className="text-stone-600">Reviewed</span>
+              <span className="text-stone-900">{new Date(approval.reviewed_at).toLocaleDateString()}</span>
             </div>
           )}
           {approval?.rejection_reason && (
             <div className="rounded bg-red-50 p-2 text-sm">
-              <p className="text-gray-600">Reason:</p>
+              <p className="text-stone-600">Reason:</p>
               <p className="text-red-700 font-medium">{approval.rejection_reason}</p>
             </div>
           )}
@@ -134,7 +134,7 @@ export function PendingApproval() {
 
         <button
           onClick={handleSignOut}
-          className="w-full flex items-center justify-center gap-2 rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors"
+          className="w-full flex items-center justify-center gap-2 rounded-lg bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-200 transition-colors"
         >
           <LogOut size={16} />
           Sign Out
