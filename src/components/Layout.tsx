@@ -44,7 +44,7 @@ const supervisorBottomNav = [
   { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
 ];
 
-const posCompareNav = [{ path: '/pos-compare', label: 'SHPOS vs QMERP', icon: BarChart3, exact: true }];
+const posCompareNav = [{ path: '/pos-compare', label: 'POS compare', icon: BarChart3, exact: true }];
 
 const findNav = [{ path: '/genealogy', label: 'Lot trace', icon: GitBranch, exact: true }];
 
