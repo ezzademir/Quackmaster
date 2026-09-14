@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Search, RefreshCw, Shield } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { Button, PageHeader } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import {
@@ -160,7 +160,7 @@ export function Ledger() {
 
       <div className="flex flex-wrap gap-3">
         <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
           <input
             value={searchInput}
             onChange={(e) => {
@@ -168,7 +168,7 @@ export function Ledger() {
               setPage(0);
             }}
             placeholder="Search user, entity, module, action…"
-            className="w-72 rounded-lg border border-gray-300 pl-9 pr-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-72 rounded-lg border border-stone-300 pl-9 pr-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         </div>
         <select
@@ -177,7 +177,7 @@ export function Ledger() {
             setFilterOperation(e.target.value);
             setPage(0);
           }}
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          className="rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         >
           <option value="">All operations</option>
           {['insert', 'update', 'delete', 'event'].map((op) => (
@@ -192,7 +192,7 @@ export function Ledger() {
             setFilterModule(e.target.value);
             setPage(0);
           }}
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          className="rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         >
           <option value="">All modules</option>
           {MODULE_OPTIONS.map((m) => (
@@ -208,107 +208,130 @@ export function Ledger() {
             setPage(0);
           }}
           placeholder="Entity type (e.g. hub_inventory)"
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="w-full text-sm">
-          <thead className="border-b border-gray-200 bg-gray-50">
-            <tr>
-              <th className="whitespace-nowrap px-4 py-3 text-left font-semibold text-gray-700">Time</th>
-              <th className="min-w-[9rem] px-4 py-3 text-left font-semibold text-gray-700">Who</th>
-              <th className="px-4 py-3 text-left font-semibold text-gray-700">Operation</th>
-              <th className="hidden md:table-cell px-4 py-3 text-left font-semibold text-gray-700">Scope</th>
-              <th className="min-w-[11rem] px-4 py-3 text-left font-semibold text-gray-700">Purpose</th>
-              <th className="min-w-[14rem] px-4 py-3 text-left font-semibold text-gray-700">Values</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
-                  No ledger rows found
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => {
-                const prof = row.user_id ? profileMap.get(row.user_id) : undefined;
-                const name = actorDisplayName(prof, row.user_email);
-                const sub = actorSubtitle(prof, row.user_email);
-                const purpose = ledgerPurposeLine(row);
-                const valueLines = ledgerChangeBullets(row);
+      {rows.length === 0 ? (
+        <div className="panel py-2">
+          <EmptyState title="No ledger rows found" />
+        </div>
+      ) : (
+        <>
+          <div className="space-y-2 md:hidden">
+            {rows.map((row) => {
+              const prof = row.user_id ? profileMap.get(row.user_id) : undefined;
+              const name = actorDisplayName(prof, row.user_email);
+              const purpose = ledgerPurposeLine(row);
+              const valueLines = ledgerChangeBullets(row);
+              return (
+                <ListRow
+                  key={row.id}
+                  title={purpose}
+                  meta={`${prettyTime(row.created_at)} · ${name} · ${row.operation}`}
+                  body={
+                    <ul className="list-inside list-disc space-y-0.5 text-xs text-stone-700">
+                      {valueLines.map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  }
+                />
+              );
+            })}
+          </div>
 
-                return (
-                  <tr key={row.id} className="align-top hover:bg-gray-50 transition-colors">
-                    <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-500">{prettyTime(row.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-gray-900">{name}</div>
-                      {sub ? <div className="text-xs text-gray-500">{sub}</div> : null}
-                      {!row.user_id && !row.user_email?.trim() ? (
-                        <div className="mt-0.5 text-xs text-amber-700">No actor recorded</div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          OP_COLORS[row.operation] ?? 'bg-gray-100 text-gray-700'
-                        }`}
-                      >
-                        {row.operation}
-                      </span>
-                      <div className="mt-1 text-xs capitalize text-gray-600">{row.action}</div>
-                    </td>
-                    <td className="hidden md:table-cell px-4 py-3 text-xs text-gray-700">
-                      <div className="font-medium text-gray-900">{row.module}</div>
-                      <div>{row.entity_type}</div>
-                      <div className="font-mono text-[11px] text-gray-400" title={row.entity_id}>
-                        {truncateId(row.entity_id, 12)}
-                      </div>
-                      {row.reference_id ? (
-                        <div className="mt-0.5 text-[11px] text-gray-500">
-                          Ref: <span className="font-mono">{truncateId(row.reference_id, 12)}</span>
+          <div className="panel hidden overflow-x-auto md:block">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th className="whitespace-nowrap">Time</th>
+                  <th className="min-w-[9rem]">Who</th>
+                  <th>Operation</th>
+                  <th className="hidden md:table-cell">Scope</th>
+                  <th className="min-w-[11rem]">Purpose</th>
+                  <th className="min-w-[14rem]">Values</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const prof = row.user_id ? profileMap.get(row.user_id) : undefined;
+                  const name = actorDisplayName(prof, row.user_email);
+                  const sub = actorSubtitle(prof, row.user_email);
+                  const purpose = ledgerPurposeLine(row);
+                  const valueLines = ledgerChangeBullets(row);
+
+                  return (
+                    <tr key={row.id} className="align-top">
+                      <td className="whitespace-nowrap text-xs text-stone-500">{prettyTime(row.created_at)}</td>
+                      <td>
+                        <div className="font-medium">{name}</div>
+                        {sub ? <div className="text-xs text-stone-500">{sub}</div> : null}
+                        {!row.user_id && !row.user_email?.trim() ? (
+                          <div className="mt-0.5 text-xs text-amber-700">No actor recorded</div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            OP_COLORS[row.operation] ?? 'bg-stone-100 text-stone-700'
+                          }`}
+                        >
+                          {row.operation}
+                        </span>
+                        <div className="mt-1 text-xs capitalize text-stone-600">{row.action}</div>
+                      </td>
+                      <td className="hidden md:table-cell text-xs text-stone-700">
+                        <div className="font-medium">{row.module}</div>
+                        <div>{row.entity_type}</div>
+                        <div className="font-mono text-[11px] text-stone-400" title={row.entity_id}>
+                          {truncateId(row.entity_id, 12)}
                         </div>
-                      ) : null}
-                    </td>
-                    <td className="max-w-xs px-4 py-3 text-xs text-gray-800">
-                      <p className="font-medium leading-snug">{purpose}</p>
-                    </td>
-                    <td className="max-w-lg px-4 py-3">
-                      <ul className="list-inside list-disc space-y-0.5 text-xs text-gray-700">
-                        {valueLines.map((line, i) => (
-                          <li key={i}>{line}</li>
-                        ))}
-                      </ul>
-                      <TechnicalPayload row={row} />
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                        {row.reference_id ? (
+                          <div className="mt-0.5 text-[11px] text-stone-500">
+                            Ref: <span className="font-mono">{truncateId(row.reference_id, 12)}</span>
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="max-w-xs text-xs">
+                        <p className="font-medium leading-snug">{purpose}</p>
+                      </td>
+                      <td className="max-w-lg">
+                        <ul className="list-inside list-disc space-y-0.5 text-xs text-stone-700">
+                          {valueLines.map((line, i) => (
+                            <li key={i}>{line}</li>
+                          ))}
+                        </ul>
+                        <TechnicalPayload row={row} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-gray-500">
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-stone-500">
         <p>Showing {rows.length} entries per page</p>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => setPage(Math.max(0, page - 1))}
             disabled={page === 0}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-gray-50 transition-colors"
+            className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-stone-50 transition-colors"
           >
             Previous
           </button>
-          <span className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm font-medium">
+          <span className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-1.5 text-sm font-medium">
             Page {page + 1}
           </span>
           <button
             type="button"
             onClick={() => setPage(page + 1)}
             disabled={rows.length < PAGE_SIZE}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-gray-50 transition-colors"
+            className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40 hover:bg-stone-50 transition-colors"
           >
             Next
           </button>

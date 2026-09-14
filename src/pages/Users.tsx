@@ -16,6 +16,7 @@ import {
   Search,
   PanelRightClose,
 } from 'lucide-react';
+import { EmptyState, ListRow } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
@@ -628,14 +629,14 @@ export function Users() {
           <div className="relative max-w-md w-full">
             <Search
               size={18}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400"
             />
             <input
               type="search"
               placeholder="Search email or name…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 py-2.5 pl-10 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-lg border border-stone-300 py-2.5 pl-10 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               aria-label="Search users"
             />
           </div>
@@ -668,14 +669,14 @@ export function Users() {
           </div>
         )}
 
-        <div className="mb-6 flex flex-wrap gap-4 border-b border-gray-200">
+        <div className="mb-6 flex flex-wrap gap-4 border-b border-stone-200">
           <button
             type="button"
             onClick={() => setActiveTab('approved')}
             className={`px-4 py-3 font-medium transition-colors ${
               activeTab === 'approved'
                 ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-gray-600 hover:text-gray-900'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
           >
             Registered ({filteredUsers.length}
@@ -687,7 +688,7 @@ export function Users() {
             className={`px-4 py-3 font-medium transition-colors ${
               activeTab === 'pending'
                 ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-gray-600 hover:text-gray-900'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
           >
             Pending ({filteredPending.length}
@@ -699,7 +700,7 @@ export function Users() {
             className={`px-4 py-3 font-medium transition-colors ${
               activeTab === 'rejected'
                 ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-gray-600 hover:text-gray-900'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
           >
             Rejected ({filteredRejected.length}
@@ -707,46 +708,66 @@ export function Users() {
           </button>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          {activeTab === 'approved' &&
-            (filteredUsers.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No registered users match your search</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
+        {activeTab === 'approved' &&
+          (filteredUsers.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState title="No registered users match your search" />
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2 md:hidden">
+                {filteredUsers.map((user) => {
+                  const outletLabel =
+                    user.role?.toLowerCase()?.trim() === 'supervisor'
+                      ? outletNameById.get(user.assigned_outlet_id ?? '') ?? '—'
+                      : '—';
+                  return (
+                    <ListRow
+                      key={user.id}
+                      title={user.email}
+                      meta={`${user.full_name || 'N/A'} · ${user.role} · ${outletLabel}`}
+                      aside={
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNameDraft(user.full_name ?? '');
+                            const rl = String(user.role).toLowerCase().trim();
+                            setRoleDraft(
+                              rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
+                            );
+                            setOutletDraft(user.assigned_outlet_id ?? '');
+                            setDrawer({ open: true, tab: 'approved', user });
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors"
+                        >
+                          Manage
+                        </button>
+                      }
+                    />
+                  );
+                })}
+              </div>
+              <div className="panel hidden overflow-x-auto md:block">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Email
-                      </th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Name
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Role
-                      </th>
-                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Outlet
-                      </th>
-                      <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Status
-                      </th>
-                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Login
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">
-                        Actions
-                      </th>
+                      <th>Email</th>
+                      <th className="hidden sm:table-cell">Name</th>
+                      <th>Role</th>
+                      <th className="hidden lg:table-cell">Outlet</th>
+                      <th className="hidden md:table-cell">Status</th>
+                      <th className="hidden lg:table-cell">Login</th>
+                      <th className="text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredUsers.map((user) => (
-                      <tr key={user.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">{user.email}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">
+                      <tr key={user.id}>
+                        <td className="text-xs sm:text-sm">{user.email}</td>
+                        <td className="hidden sm:table-cell text-xs sm:text-sm">
                           {user.full_name || 'N/A'}
                         </td>
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm">
+                        <td className="text-xs sm:text-sm">
                           <span
                             className={`px-2 py-1 rounded-full text-xs font-medium ${
                               String(user.role).toLowerCase().trim() === 'admin'
@@ -759,16 +780,16 @@ export function Users() {
                             {user.role}
                           </span>
                         </td>
-                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-700">
+                        <td className="hidden lg:table-cell text-xs">
                           {user.role?.toLowerCase()?.trim() === 'supervisor'
                             ? outletNameById.get(user.assigned_outlet_id ?? '') ?? '—'
                             : '—'}
                         </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs">{statusCell(user)}</td>
-                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">
+                        <td className="hidden md:table-cell text-xs">{statusCell(user)}</td>
+                        <td className="hidden lg:table-cell text-xs text-stone-600">
                           {user.last_login ? new Date(user.last_login).toLocaleDateString() : 'N/A'}
                         </td>
-                        <td className="px-4 md:px-6 py-4 text-right">
+                        <td className="text-right">
                           <button
                             type="button"
                             onClick={() => {
@@ -790,46 +811,78 @@ export function Users() {
                   </tbody>
                 </table>
               </div>
-            ))}
+            </>
+          ))}
 
-          {activeTab === 'pending' &&
-            (filteredPending.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No pending approvals match your search</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
+        {activeTab === 'pending' &&
+          (filteredPending.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState title="No pending approvals match your search" />
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2 md:hidden">
+                {filteredPending.map((user) => (
+                  <ListRow
+                    key={user.id}
+                    title={user.email}
+                    meta={`${user.full_name || 'N/A'} · ${new Date(user.requested_at).toLocaleDateString()}`}
+                    body={
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDrawer({ open: true, tab: 'pending', user })}
+                          className="inline-flex items-center gap-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-800 hover:bg-stone-100 transition-colors"
+                        >
+                          Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApproveUser(user.id)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-green-50 px-3 py-1.5 text-sm font-medium text-green-600 hover:bg-green-100 transition-colors"
+                        >
+                          <Check size={14} />
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRejectUser(user.id)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-red-50 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-100 transition-colors"
+                        >
+                          <X size={14} />
+                          Reject
+                        </button>
+                      </div>
+                    }
+                  />
+                ))}
+              </div>
+              <div className="panel hidden overflow-x-auto md:block">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Email
-                      </th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Name
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Requested
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">
-                        Actions
-                      </th>
+                      <th>Email</th>
+                      <th className="hidden sm:table-cell">Name</th>
+                      <th>Requested</th>
+                      <th className="text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredPending.map((user) => (
-                      <tr key={user.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">{user.email}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">
+                      <tr key={user.id}>
+                        <td className="text-xs sm:text-sm">{user.email}</td>
+                        <td className="hidden sm:table-cell text-xs sm:text-sm">
                           {user.full_name || 'N/A'}
                         </td>
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-600">
+                        <td className="text-xs sm:text-sm text-stone-600">
                           {new Date(user.requested_at).toLocaleDateString()}
                         </td>
-                        <td className="px-4 md:px-6 py-4 text-right">
+                        <td className="text-right">
                           <div className="flex flex-wrap justify-end gap-2">
                             <button
                               type="button"
                               onClick={() => setDrawer({ open: true, tab: 'pending', user })}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-50 text-gray-800 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium"
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-stone-50 text-stone-800 rounded-lg hover:bg-stone-100 transition-colors text-xs font-medium"
                             >
                               Details
                             </button>
@@ -856,57 +909,68 @@ export function Users() {
                   </tbody>
                 </table>
               </div>
-            ))}
+            </>
+          ))}
 
-          {activeTab === 'rejected' &&
-            (filteredRejected.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No rejected registrations match your search</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
+        {activeTab === 'rejected' &&
+          (filteredRejected.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState title="No rejected registrations match your search" />
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2 md:hidden">
+                {filteredRejected.map((row) => (
+                  <ListRow
+                    key={`${row.registration_id ?? row.id}-rej`}
+                    title={row.email}
+                    meta={`${row.full_name || 'N/A'} · ${
+                      row.reviewed_at ? new Date(row.reviewed_at).toLocaleDateString() : '—'
+                    }`}
+                    aside={
+                      <button
+                        type="button"
+                        onClick={() => setDrawer({ open: true, tab: 'rejected', row })}
+                        className="inline-flex items-center gap-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-800 hover:bg-stone-100 transition-colors"
+                      >
+                        Details
+                      </button>
+                    }
+                  />
+                ))}
+              </div>
+              <div className="panel hidden overflow-x-auto md:block">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Email
-                      </th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Name
-                      </th>
-                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Reason
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Reviewed
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">
-                        Actions
-                      </th>
+                      <th>Email</th>
+                      <th className="hidden sm:table-cell">Name</th>
+                      <th className="hidden lg:table-cell">Reason</th>
+                      <th>Reviewed</th>
+                      <th className="text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRejected.map((row) => (
-                      <tr
-                        key={`${row.registration_id ?? row.id}-rej`}
-                        className="border-b border-gray-200 hover:bg-gray-50 transition-colors"
-                      >
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">{row.email}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">
+                      <tr key={`${row.registration_id ?? row.id}-rej`}>
+                        <td className="text-xs sm:text-sm">{row.email}</td>
+                        <td className="hidden sm:table-cell text-xs sm:text-sm">
                           {row.full_name || 'N/A'}
                         </td>
                         <td
-                          className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-600 max-w-xs truncate"
+                          className="hidden lg:table-cell text-xs text-stone-600 max-w-xs truncate"
                           title={row.rejection_reason ?? ''}
                         >
                           {row.rejection_reason || '—'}
                         </td>
-                        <td className="px-4 md:px-6 py-4 text-xs text-gray-600">
+                        <td className="text-xs text-stone-600">
                           {row.reviewed_at ? new Date(row.reviewed_at).toLocaleDateString() : '—'}
                         </td>
-                        <td className="px-4 md:px-6 py-4 text-right">
+                        <td className="text-right">
                           <button
                             type="button"
                             onClick={() => setDrawer({ open: true, tab: 'rejected', row })}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-50 text-gray-800 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-stone-50 text-stone-800 rounded-lg hover:bg-stone-100 transition-colors text-xs font-medium"
                           >
                             Details
                           </button>
@@ -916,8 +980,8 @@ export function Users() {
                   </tbody>
                 </table>
               </div>
-            ))}
-        </div>
+            </>
+          ))}
       </div>
 
       {/* Detail drawer */}
@@ -929,13 +993,13 @@ export function Users() {
             className="fixed inset-0 z-40 bg-black/30 md:bg-black/20"
             onClick={() => setDrawer({ open: false })}
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-gray-200 bg-white shadow-xl max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:top-[env(safe-area-inset-top,0px)]">
-            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-              <h2 className="text-lg font-semibold text-gray-900">User details</h2>
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-stone-200 bg-white max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:top-[env(safe-area-inset-top,0px)]">
+            <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3">
+              <h2 className="text-lg font-semibold text-stone-900">User details</h2>
               <button
                 type="button"
                 onClick={() => setDrawer({ open: false })}
-                className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"
+                className="rounded-lg p-2 text-stone-500 hover:bg-stone-100"
               >
                 <PanelRightClose size={20} />
               </button>

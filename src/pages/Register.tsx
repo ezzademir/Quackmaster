@@ -113,7 +113,7 @@ export function Register() {
           <p className="mt-1 text-sm text-stone-500">Join Quackmaster ERP</p>
         </div>
 
-        <div className="rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
+        <div className="rounded-2xl border border-stone-200 bg-white p-8 ">
           {submitted ? (
             <div className="space-y-4">
               <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">
@@ -142,49 +142,49 @@ export function Register() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Full Name</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Full Name</label>
               <input
                 type="text"
                 required
                 value={form.full_name}
                 onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Email address</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Email address</label>
               <input
                 type="email"
                 autoComplete="email"
                 required
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Password</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Password</label>
               <input
                 type="password"
                 autoComplete="new-password"
                 required
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Confirm Password</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Confirm Password</label>
               <input
                 type="password"
                 autoComplete="new-password"
                 required
                 value={form.confirm}
                 onChange={(e) => setForm({ ...form, confirm: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
@@ -197,7 +197,7 @@ export function Register() {
             </button>
           </form>
 
-              <p className="mt-5 text-center text-sm text-gray-500">
+              <p className="mt-5 text-center text-sm text-stone-500">
                 Already have an account?{' '}
                 <Link to="/login" className="font-medium text-brand-800 hover:text-brand-900">
                   Sign in
