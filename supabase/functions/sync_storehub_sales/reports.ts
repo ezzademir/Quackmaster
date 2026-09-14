@@ -11,9 +11,9 @@ import type {
   ShTxn,
   ViewBy,
 } from "./types.ts";
+import { posVsQmerpSoldStatus, qtyEq } from "./posQmerpStatus.ts";
 
 const TZ = "Asia/Kuala_Lumpur";
-const QTY_EPS = 0.0001;
 
 const AVAILABLE: ReportId[] = [
   "sold_vs_supplied",
@@ -86,11 +86,6 @@ function bucketKey(isoDate: string, hour: string, viewBy: ViewBy): string {
 function num(v: unknown): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
-}
-
-function qtyEq(a: number | null, b: number | null): boolean {
-  if (a == null || b == null) return false;
-  return Math.abs(a - b) < QTY_EPS;
 }
 
 /** StoreHub-ingested journals only. Null / manual / anything else is "manual/other". */
@@ -351,19 +346,12 @@ function mergeKeys(
     if (posOnly) {
       status = "pos_only";
     } else if (split) {
-      // Match SHPOS to StoreHub-ingested only (manual never closes a gap).
+      // Match SHPOS to all posted QMERP sold. StoreHub vs manual stay in split columns.
       const posQty = havePos ? p!.qty : 0;
-      const shQty = sh ?? 0;
       if (!havePos) {
         status = "extra_in_dashboard";
-      } else if (qtyEq(posQty, shQty)) {
-        status = "match";
-      } else if (posQty > 0 && shQty === 0) {
-        status = "missing_in_dashboard";
-      } else if (posQty === 0 && shQty > 0) {
-        status = "extra_in_dashboard";
       } else {
-        status = "qty_mismatch";
+        status = posVsQmerpSoldStatus(posQty, allDash);
       }
     } else if (havePos && haveDash) {
       status = qtyEq(p!.qty, d) ? "match" : "qty_mismatch";
@@ -609,12 +597,6 @@ async function loadDispatchedSupplyLines(
   return { rows, periodOrders, periodAllOutletQty };
 }
 
-function soldVsSuppliedStatus(posQty: number, soldQty: number): DiffStatus {
-  if (qtyEq(posQty, soldQty)) return "match";
-  if (posQty > 0 && soldQty === 0) return "missing_in_dashboard";
-  if (posQty === 0 && soldQty > 0) return "extra_in_dashboard";
-  return "qty_mismatch";
-}
 
 async function soldVsSuppliedReport(opts: {
   admin: SupabaseClient;
@@ -800,9 +782,9 @@ async function soldVsSuppliedReport(opts: {
           dashManualQty: dayMan,
           suppliedQty: daySupplied,
           leftoverQty: daySupplied - dayDashQty,
-          posVsSold: dayPosQty - daySh,
+          posVsSold: dayPosQty - dayDashQty,
           lots: dayLots,
-          status: soldVsSuppliedStatus(dayPosQty, daySh),
+          status: posVsQmerpSoldStatus(dayPosQty, dayDashQty),
         });
       }
     }
@@ -816,11 +798,10 @@ async function soldVsSuppliedReport(opts: {
       dashManualQty,
       suppliedQty,
       leftoverQty,
-      // POS vs StoreHub-ingested sold — manual journals do not count as a POS gap.
-      posVsSold: posQty - dashStorehubQty,
+      posVsSold: posQty - dashQty,
       lots,
       days: days.length ? days : undefined,
-      status: soldVsSuppliedStatus(posQty, dashStorehubQty),
+      status: posVsQmerpSoldStatus(posQty, dashQty),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
 
@@ -840,7 +821,7 @@ async function soldVsSuppliedReport(opts: {
     .map(([name, qty]) => `${name} ${qty.toLocaleString()}`);
   const noticeParts = [
     "QMERP supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
-    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare SHPOS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
+    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare SHPOS to all posted Outlet Sales — keyed manuals close a gap. StoreHub vs manual columns stay for ingest coverage.",
     "Lots are ERP-only; StoreHub tickets have no batch numbers.",
     "On a multi-day period, expand a product to see which Malaysia days differ. Daily leftover is that day's dispatch minus that day's sold — not on-hand stock.",
   ];
@@ -871,7 +852,7 @@ async function soldVsSuppliedReport(opts: {
       { key: "dashQty", label: "QMERP sold (all)" },
       { key: "suppliedQty", label: "QMERP supplied" },
       { key: "leftoverQty", label: "Leftover" },
-      { key: "posVsSold", label: "POS vs StoreHub sold" },
+      { key: "posVsSold", label: "POS vs sold" },
       { key: "status", label: "Status" },
     ],
   });
@@ -1016,7 +997,7 @@ export async function handleReport(opts: {
         : SPLIT_SOLD_COLUMNS,
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
-        : "SHPOS sold = completed POS tickets (MY calendar; cancels & returns out). QMERP sold (StoreHub) = journals with source=storehub. QMERP sold (manual) = null/manual/other. QMERP sold (all) = both — so TTDI-style 923 vs 1498 is explained by the manual column. Match status compares SHPOS to StoreHub-ingested only.",
+        : "SHPOS sold = completed POS tickets (MY calendar; cancels & returns out). QMERP sold (StoreHub) = journals with source=storehub. QMERP sold (manual) = null/manual/other. QMERP sold (all) = both. Match status compares SHPOS to all posted QMERP sold so keyed manuals close a gap.",
     });
   }
 

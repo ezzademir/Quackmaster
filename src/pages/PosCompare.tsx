@@ -98,10 +98,10 @@ const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
 
 /** Plain-language help for status chips (title tooltip). */
 const STATUS_HELP: Record<StorehubDiffStatus, string> = {
-  match: 'SHPOS sold matches QMERP sold from StoreHub ingest for this row.',
-  qty_mismatch: 'SHPOS sold and QMERP StoreHub-ingested sold both exist but the unit counts differ.',
+  match: 'SHPOS sold matches all posted QMERP sold (StoreHub ingest + manual) for this row.',
+  qty_mismatch: 'SHPOS sold and QMERP sold (all) both exist but the unit counts differ.',
   missing_in_dashboard:
-    'SHPOS has sales here, but QMERP has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
+    'SHPOS has sales here, but QMERP has no posted Outlet Sales for this row. Key the missing qty in Outlet Sales.',
   extra_in_dashboard:
     'QMERP has posted sales here (often manual or StoreHub ingest) with no matching SHPOS tickets in this period.',
   pos_only: 'This report has no QMERP journal side — POS tickets only.',
@@ -776,9 +776,9 @@ export function PosCompare() {
               value={String(gapCount)}
               sub={
                 tally
-                  ? `${result.totals.match} SHPOS vs StoreHub sold match · leftover is not a gap`
+                  ? `${result.totals.match} SHPOS vs QMERP sold match · leftover is not a gap`
                   : hasSplit
-                    ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−SHPOS`
+                    ? `${result.totals.match} match (vs all posted sold) · StoreHub/manual are split columns`
                     : `${result.totals.match} match · ${result.totals.pos_only} SHPOS only`
               }
             />
@@ -1048,7 +1048,7 @@ function TallyTable({
           )}
           <th className="text-right">QMERP supplied</th>
           <th className="text-right">Leftover</th>
-          <th className="text-right">{showSplit ? 'POS vs StoreHub' : 'POS vs sold'}</th>
+          <th className="text-right">POS vs sold</th>
           <th>Status</th>
         </tr>
       </thead>
