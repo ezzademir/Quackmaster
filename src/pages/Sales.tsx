@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ban, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard, StickyActions, Tabs } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
@@ -1046,9 +1046,11 @@ export function Sales() {
           />
         </div>
 
-        <Button type="submit" disabled={submitting || batchesLoading || !outletId}>
-          {submitting ? 'Posting…' : 'Post journal'}
-        </Button>
+        <StickyActions>
+          <Button type="submit" disabled={submitting || batchesLoading || !outletId} className="w-full sm:w-auto">
+            {submitting ? 'Posting…' : 'Post journal'}
+          </Button>
+        </StickyActions>
       </form>
       )}
 
@@ -1056,42 +1058,101 @@ export function Sales() {
       <div>
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-gray-700">Recent journals</h2>
-            <p className="mt-0.5 max-w-md text-xs text-gray-500">
+            <h2 className="text-sm font-semibold text-stone-800">Recent journals</h2>
+            <p className="mt-0.5 max-w-md text-xs text-stone-500">
               Posted sales for{' '}
-              <span className="font-medium text-gray-600">
+              <span className="font-medium text-stone-600">
                 {outlets.find((o) => o.id === outletId)?.name ?? 'this outlet'}
               </span>
               . Voided sales are hidden unless you include them.
             </p>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
-            <label className="inline-flex items-center gap-2 text-xs text-gray-600">
+            <label className="inline-flex items-center gap-2 text-xs text-stone-600">
               <input
                 type="checkbox"
                 checked={includeVoided}
                 onChange={(e) => setIncludeVoided(e.target.checked)}
-                className="rounded border-gray-300"
+                className="rounded border-stone-300"
               />
               Include voided
             </label>
-            <p className="max-w-xs text-xs text-gray-500 sm:text-right">
+            <p className="max-w-xs text-xs text-stone-500 sm:text-right">
               Same outlet and business-date filter as the overview. Loads {HISTORY_PAGE_SIZE} at a time; use{' '}
-              <strong className="font-medium text-gray-600">Next</strong> below for older journals.
+              <span className="font-medium text-stone-600">Next</span> below for older journals.
             </p>
           </div>
         </div>
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white text-sm">
-          <table className="w-full">
-            <thead className="border-b bg-gray-50">
+
+        {/* Mobile cards */}
+        <div className="space-y-2 md:hidden">
+          {history.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState
+                title={includeVoided ? 'No sales in this period' : 'No posted sales for this outlet'}
+              />
+            </div>
+          ) : (
+            history.map((h) => {
+              const voided = isVoidedSalesStatus(h.status);
+              return (
+                <ListRow
+                  key={h.id}
+                  muted={voided}
+                  title={
+                    <span className="inline-flex flex-wrap items-center gap-2">
+                      <span className="tabular-nums">{h.business_date}</span>
+                      {voided ? (
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+                          Voided
+                        </span>
+                      ) : null}
+                    </span>
+                  }
+                  meta={h.notes?.trim() || undefined}
+                  body={
+                    h.lines.length === 0 ? (
+                      <span className="text-stone-400">—</span>
+                    ) : (
+                      <ul className={`space-y-1 font-mono text-xs ${voided ? 'line-through text-stone-500' : ''}`}>
+                        {h.lines.map((ln, i) => (
+                          <li key={`${h.id}-${i}-${ln.product_batch}`}>
+                            <span className="font-semibold">{ln.quantity_sold}</span>
+                            <span className="mx-1 text-stone-400">×</span>
+                            <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  }
+                  aside={
+                    <button
+                      type="button"
+                      onClick={() => void loadJournalIntoModal(h.id)}
+                      disabled={recentJournalBusy}
+                      className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                    >
+                      <Eye size={14} aria-hidden /> View
+                    </button>
+                  }
+                />
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="panel hidden overflow-x-auto md:block">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="px-4 py-2 text-left font-medium text-stone-600">Date</th>
-                <th className="px-4 py-2 text-left font-medium text-stone-600 min-w-[12rem]">Qty sold</th>
-                <th className="px-4 py-2 text-left font-medium text-stone-600">Notes</th>
-                <th className="px-4 py-2 text-right font-medium text-stone-600">Actions</th>
+                <th>Date</th>
+                <th className="min-w-[12rem]">Qty sold</th>
+                <th>Notes</th>
+                <th className="text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody>
               {history.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-6 text-center text-stone-400">
@@ -1102,41 +1163,41 @@ export function Sales() {
                 history.map((h) => {
                   const voided = isVoidedSalesStatus(h.status);
                   return (
-                  <tr key={h.id} className={voided ? 'bg-gray-50 text-gray-500' : undefined}>
-                    <td className="whitespace-nowrap px-4 py-2 align-top">
+                  <tr key={h.id} className={voided ? 'bg-stone-50 text-stone-500' : undefined}>
+                    <td className="whitespace-nowrap align-top">
                       <div className="flex flex-wrap items-center gap-2">
                         <span>{h.business_date}</span>
                         {voided ? (
-                          <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
                             Voided
                           </span>
                         ) : null}
                       </div>
                     </td>
-                    <td className="px-4 py-2 align-top">
+                    <td className="align-top">
                       {h.lines.length === 0 ? (
-                        <span className="text-gray-400">—</span>
+                        <span className="text-stone-400">—</span>
                       ) : (
-                        <ul className={`space-y-1 font-mono text-xs sm:text-sm ${voided ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
+                        <ul className={`space-y-1 font-mono text-sm ${voided ? 'text-stone-500 line-through' : 'text-stone-800'}`}>
                           {h.lines.map((ln, i) => (
                             <li key={`${h.id}-${i}-${ln.product_batch}`}>
                               <span className="font-semibold">{ln.quantity_sold}</span>
-                              <span className="mx-1 text-gray-400">×</span>
+                              <span className="mx-1 text-stone-400">×</span>
                               <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
                             </li>
                           ))}
                         </ul>
                       )}
                     </td>
-                    <td className="max-w-[10rem] px-4 py-2 align-top text-gray-600 sm:max-w-xs">
+                    <td className="max-w-xs align-top text-stone-600">
                       {h.notes ?? '—'}
                     </td>
-                    <td className="px-4 py-2 text-right align-top">
+                    <td className="text-right align-top">
                       <button
                         type="button"
                         onClick={() => void loadJournalIntoModal(h.id)}
                         disabled={recentJournalBusy}
-                        className="inline-flex items-center gap-1 rounded-lg border border-stone-300 px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
                       >
                         <Eye size={14} aria-hidden /> View
                       </button>
@@ -1147,27 +1208,28 @@ export function Sales() {
               )}
             </tbody>
           </table>
+        </div>
+
           {history.length > 0 && historyHasMore ? (
-            <div className="flex flex-col items-center gap-2 border-t border-gray-100 bg-gray-50/80 px-4 py-3 sm:flex-row sm:justify-center">
-              <button
+            <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={() => void handleLoadMoreHistory()}
                 disabled={historyLoadingMore}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-50"
               >
                 {historyLoadingMore ? 'Loading…' : 'Next'}
-              </button>
-              <p className="text-xs text-gray-500">
+              </Button>
+              <p className="text-xs text-stone-500">
                 Showing {history.length} journal{history.length === 1 ? '' : 's'}
                 {historyHasMore ? ' · more available' : ''}
               </p>
             </div>
           ) : history.length > 0 ? (
-            <div className="border-t border-gray-100 bg-gray-50/50 px-4 py-2 text-center text-xs text-gray-500">
+            <p className="mt-3 text-center text-xs text-stone-500">
               Showing all {history.length} loaded journal{history.length === 1 ? '' : 's'}
-            </div>
+            </p>
           ) : null}
-        </div>
       </div>
       )}
 
