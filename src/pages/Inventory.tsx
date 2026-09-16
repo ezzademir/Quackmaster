@@ -114,8 +114,8 @@ function AdjustModal({
           <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
         <div>
-          <p className="text-sm font-medium text-gray-700">{row.name}</p>
-          <p className="text-xs text-gray-400">
+          <p className="text-sm font-medium text-stone-700">{row.name}</p>
+          <p className="text-xs text-stone-400">
             Current on hand: {row.quantity_on_hand} {row.unit}
             {row.reserved_quantity > 0 && (
               <> · Reserved: {row.reserved_quantity} · Available: {row.available_quantity}</>
@@ -123,18 +123,18 @@ function AdjustModal({
           </p>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">New Quantity ({row.unit})</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">New Quantity ({row.unit})</label>
           <input type="number" min="0" step="0.001" value={qty} onChange={(e) => setQty(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Reason</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Reason</label>
           <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Adjustment reason…"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
         </div>
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <button onClick={handleSave} disabled={saving} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
           {saving ? 'Saving…' : 'Apply Adjustment'}
         </button>
@@ -730,23 +730,23 @@ export function Inventory() {
 
       {timelineRow && (
         <Modal isOpen onClose={() => setTimelineRow(null)} title={`Movements · ${timelineRow.display_name}`} size="lg">
-          <p className="mb-3 text-xs text-gray-500">
+          <p className="mb-3 text-xs text-stone-500">
             {timelineRow.outlet_name} · last 90 days · on hand {timelineRow.quantity_on_hand} · newest first
           </p>
           {timelineLoading ? (
-            <p className="text-sm text-gray-400">Loading…</p>
+            <p className="text-sm text-stone-400">Loading…</p>
           ) : timelineMoves.length === 0 ? (
-            <p className="text-sm text-gray-400">No movements recorded for this line in the period.</p>
+            <p className="text-sm text-stone-400">No movements recorded for this line in the period.</p>
           ) : (
             <div className="max-h-[24rem] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 border-b bg-gray-50 text-left">
+              <table className="data-table">
+                <thead className="sticky top-0 bg-white">
                   <tr>
-                    <th className="px-2 py-1.5 font-medium text-gray-700">Date</th>
-                    <th className="px-2 py-1.5 font-medium text-gray-700">Type</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-gray-700">Qty</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-gray-700">QoH after</th>
-                    <th className="px-2 py-1.5 font-medium text-gray-700">Ref</th>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th className="text-right">Qty</th>
+                    <th className="text-right">QoH after</th>
+                    <th>Ref</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -759,16 +759,16 @@ export function Inventory() {
                     )
                     .map((m) => (
                     <tr key={m.id}>
-                      <td className="px-2 py-1.5 tabular-nums text-gray-700">{m.business_date}</td>
-                      <td className="px-2 py-1.5 text-gray-800">{m.movement_type}</td>
-                      <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${m.signed_qty < 0 ? 'text-red-700' : 'text-gray-900'}`}>
+                      <td className="px-2 py-1.5 tabular-nums text-stone-700">{m.business_date}</td>
+                      <td className="px-2 py-1.5 text-stone-800">{m.movement_type}</td>
+                      <td className={`px-2 py-1.5 text-right tabular-nums font-medium ${m.signed_qty < 0 ? 'text-red-700' : 'text-stone-900'}`}>
                         {m.signed_qty >= 0 ? '+' : ''}
                         {m.signed_qty}
                       </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-gray-600">
+                      <td className="px-2 py-1.5 text-right tabular-nums text-stone-600">
                         {m.qoh_after != null ? m.qoh_after : '—'}
                       </td>
-                      <td className="px-2 py-1.5 font-mono text-[10px] text-gray-400">
+                      <td className="px-2 py-1.5 font-mono text-[10px] text-stone-400">
                         {m.reference_type}:{m.reference_id.slice(0, 8)}
                       </td>
                     </tr>

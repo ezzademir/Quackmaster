@@ -72,7 +72,7 @@ export function Login() {
           <p className="mt-1 text-sm text-stone-500">Sign in to your account</p>
         </div>
 
-        <div className="rounded-2xl border border-stone-200 bg-white p-8 ">
+        <div className="rounded-2xl border border-stone-200 bg-white p-8">
           {resetSuccess && (
             <div className="mb-5 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
               Password updated successfully. Sign in with your new password.

@@ -112,23 +112,23 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
     else void load();
   }
 
-  if (loading) return <div className="py-8 text-center text-sm text-gray-400">Loading planning…</div>;
+  if (loading) return <div className="py-8 text-center text-sm text-stone-400">Loading planning…</div>;
 
   return (
     <div className="space-y-6">
       {message && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{message}</p>}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-gray-900">Production resources</h3>
+        <div className="panel p-5">
+          <h3 className="text-sm font-semibold text-stone-900">Production resources</h3>
           <ul className="mt-3 space-y-2 text-sm">
             {resources.length === 0 ? (
-              <li className="text-gray-400">No resources yet.</li>
+              <li className="text-stone-400">No resources yet.</li>
             ) : (
               resources.map((r) => (
-                <li key={r.id} className="flex justify-between rounded-lg border border-gray-100 px-3 py-2">
-                  <span className="font-medium text-gray-900">{r.name}</span>
-                  <span className="tabular-nums text-gray-600">{r.daily_capacity_units}/day</span>
+                <li key={r.id} className="flex justify-between rounded-lg border border-stone-100 px-3 py-2">
+                  <span className="font-medium text-stone-900">{r.name}</span>
+                  <span className="tabular-nums text-stone-600">{r.daily_capacity_units}/day</span>
                 </li>
               ))
             )}
@@ -139,7 +139,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                 value={resName}
                 onChange={(e) => setResName(e.target.value)}
                 placeholder="Resource name"
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
               />
               <input
                 type="number"
@@ -148,7 +148,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                 value={resCap}
                 onChange={(e) => setResCap(e.target.value)}
                 placeholder="Daily capacity"
-                className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                className="w-32 rounded-lg border border-stone-300 px-3 py-2 text-sm"
               />
               <button type="button" onClick={() => void addResource()} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white">
                 Add
@@ -157,11 +157,11 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
           )}
         </div>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-gray-900">Schedule planned batch</h3>
+        <div className="panel p-5">
+          <h3 className="text-sm font-semibold text-stone-900">Schedule planned batch</h3>
           {isAdmin ? (
             <div className="mt-3 grid gap-2">
-              <select value={pbRecipe} onChange={(e) => setPbRecipe(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm">
+              <select value={pbRecipe} onChange={(e) => setPbRecipe(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm">
                 <option value="">Recipe…</option>
                 {recipes.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -169,7 +169,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                   </option>
                 ))}
               </select>
-              <select value={pbResource} onChange={(e) => setPbResource(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm">
+              <select value={pbResource} onChange={(e) => setPbResource(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm">
                 <option value="">Resource (optional)…</option>
                 {resources.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -177,45 +177,45 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                   </option>
                 ))}
               </select>
-              <input type="datetime-local" value={pbStart} onChange={(e) => setPbStart(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-              <input type="number" min={0} step="0.01" value={pbQty} onChange={(e) => setPbQty(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+              <input type="datetime-local" value={pbStart} onChange={(e) => setPbStart(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              <input type="number" min={0} step="0.01" value={pbQty} onChange={(e) => setPbQty(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm" />
               <button type="button" onClick={() => void addBatch()} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white">
                 Create draft plan
               </button>
             </div>
           ) : (
-            <p className="mt-2 text-sm text-gray-500">Admin can create plans; staff can view and start released batches.</p>
+            <p className="mt-2 text-sm text-stone-500">Admin can create plans; staff can view and start released batches.</p>
           )}
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead className="border-b bg-gray-50 text-left">
+      <div className="panel overflow-x-auto">
+        <table className="data-table min-w-[640px]">
+          <thead>
             <tr>
-              <th className="px-4 py-2 font-semibold text-gray-700">When</th>
-              <th className="px-4 py-2 font-semibold text-gray-700">Recipe</th>
-              <th className="px-4 py-2 font-semibold text-gray-700">Resource</th>
-              <th className="px-4 py-2 text-right font-semibold text-gray-700">Qty</th>
-              <th className="px-4 py-2 font-semibold text-gray-700">Status</th>
-              <th className="px-4 py-2 font-semibold text-gray-700">Actions</th>
+              <th>When</th>
+              <th>Recipe</th>
+              <th>Resource</th>
+              <th className="text-right">Qty</th>
+              <th>Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {batches.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={6} className="px-4 py-8 text-center text-stone-400">
                   No planned batches.
                 </td>
               </tr>
             ) : (
               batches.map((b) => (
-                <tr key={b.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 tabular-nums text-gray-700">{new Date(b.planned_start).toLocaleString()}</td>
-                  <td className="px-4 py-2 font-medium text-gray-900">{b.recipe?.name ?? '—'}</td>
-                  <td className="px-4 py-2 text-gray-600">{b.resource?.name ?? '—'}</td>
+                <tr key={b.id} className="hover:bg-stone-50">
+                  <td className="px-4 py-2 tabular-nums text-stone-700">{new Date(b.planned_start).toLocaleString()}</td>
+                  <td className="px-4 py-2 font-medium text-stone-900">{b.recipe?.name ?? '—'}</td>
+                  <td className="px-4 py-2 text-stone-600">{b.resource?.name ?? '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{b.planned_quantity}</td>
-                  <td className="px-4 py-2 capitalize text-gray-700">{b.status}</td>
+                  <td className="px-4 py-2 capitalize text-stone-700">{b.status}</td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap gap-1">
                       {isAdmin && b.status === 'draft' && (

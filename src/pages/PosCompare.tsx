@@ -91,20 +91,20 @@ function fmtRm(n: number | null | undefined): string {
 const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
   match: 'Match',
   qty_mismatch: 'Qty differs',
-  missing_in_dashboard: 'Missing in QMERP',
-  extra_in_dashboard: 'Only in QMERP',
-  pos_only: 'SHPOS only',
+  missing_in_dashboard: 'Missing in Outlet Sales',
+  extra_in_dashboard: 'Only in Outlet Sales',
+  pos_only: 'POS only',
 };
 
 /** Plain-language help for status chips (title tooltip). */
 const STATUS_HELP: Record<StorehubDiffStatus, string> = {
-  match: 'SHPOS sold matches QMERP sold from StoreHub ingest for this row.',
-  qty_mismatch: 'SHPOS sold and QMERP StoreHub-ingested sold both exist but the unit counts differ.',
+  match: 'POS sold matches Outlet sold from StoreHub ingest for this row.',
+  qty_mismatch: 'POS sold and Outlet StoreHub-ingested sold both exist but the unit counts differ.',
   missing_in_dashboard:
-    'SHPOS has sales here, but QMERP has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
+    'POS has sales here, but Outlet Sales has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
   extra_in_dashboard:
-    'QMERP has posted sales here (often manual or StoreHub ingest) with no matching SHPOS tickets in this period.',
-  pos_only: 'This report has no QMERP journal side — POS tickets only.',
+    'Outlet Sales has posted sales here (often manual or StoreHub ingest) with no matching POS tickets in this period.',
+  pos_only: 'This report has no Outlet Sales journal side — POS tickets only.',
 };
 
 const STATUS_CLASS: Record<StorehubDiffStatus, string> = {
@@ -443,7 +443,7 @@ export function PosCompare() {
                       <option key={r.id} value={r.id} disabled={!r.available}>
                         {r.label}
                         {r.available ? '' : ' (not in API)'}
-                        {r.posOnly ? ' · SHPOS only' : ''}
+                        {r.posOnly ? ' · POS only' : ''}
                       </option>
                     ))}
                   </optgroup>
@@ -453,7 +453,7 @@ export function PosCompare() {
             <label className="w-full min-w-0 text-sm sm:w-auto">
               <span className="mb-1 block text-xs text-stone-500">Store</span>
               <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className={fieldClass}>
-                <option value="">{tally ? 'All QMERP outlets' : 'All mapped stores'}</option>
+                <option value="">{tally ? 'All outlets' : 'All mapped stores'}</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -641,9 +641,9 @@ export function PosCompare() {
               tally
                 ? selectedIds.length === 0
                   ? 'Next: click Finished goods (or tick products), set the Malaysia period, then Compare.'
-                  : 'Next: set the Malaysia period if needed, then click Compare. QMERP sold should be keyed in Outlet Sales; SHPOS sold is live POS. Leftover is hub dispatch minus those manuals. Expand a product to see days when the period is longer than one day.'
+                  : 'Next: set the Malaysia period if needed, then click Compare. Outlet sold should be keyed in Outlet Sales; POS sold is live POS. Leftover is hub dispatch minus those manuals. Expand a product to see days when the period is longer than one day.'
                 : reportId === 'sales_over_time'
-                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual QMERP sold is what staff keyed; historical StoreHub ingest still appears in the split.'
+                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual Outlet sold is what staff keyed; historical StoreHub ingest still appears in the split.'
                   : 'Next: choose a report, set the period, then Compare. Gaps show POS vs what is posted in Outlet Sales.'
             }
             action={
@@ -695,7 +695,7 @@ export function PosCompare() {
             <StatCard
               icon={<Package size={18} />}
               tone="brand"
-              label="SHPOS sold"
+              label="POS sold"
               value={fmtQty(result.totals.posQty)}
               sub={result.snapshot ? 'On hand now' : 'Units on completed POS tickets'}
             />
@@ -703,19 +703,19 @@ export function PosCompare() {
               <>
                 <StatCard
                   icon={<Scale size={18} />}
-                  label="QMERP sold (StoreHub)"
+                  label="Outlet sold (StoreHub)"
                   value={fmtQty(shSold)}
                   sub="source = storehub"
                 />
                 <StatCard
                   icon={<Scale size={18} />}
-                  label="QMERP sold (manual)"
+                  label="Outlet sold (manual)"
                   value={fmtQty(manSold)}
                   sub="null / manual / other"
                 />
                 <StatCard
                   icon={<Scale size={18} />}
-                  label="QMERP sold (all)"
+                  label="Outlet sold (all)"
                   value={fmtQty(result.totals.dashQty)}
                   sub="StoreHub + manual posted"
                 />
@@ -723,14 +723,14 @@ export function PosCompare() {
             ) : tally ? (
               <StatCard
                 icon={<Scale size={18} />}
-                label="QMERP sold (all)"
+                label="Outlet sold (all)"
                 value={fmtQty(result.totals.dashQty)}
                 sub="Manual Outlet Sales units"
               />
             ) : (
               <StatCard
                 icon={<CircleDollarSign size={18} />}
-                label="SHPOS RM"
+                label="POS RM"
                 value={fmtRm(result.totals.posRm)}
                 sub="POS only"
               />
@@ -738,7 +738,7 @@ export function PosCompare() {
             {!hasSplit && (
             <StatCard
               icon={tally ? <Truck size={18} /> : <Scale size={18} />}
-              label={tally ? 'QMERP supplied' : 'QMERP sold (all)'}
+              label={tally ? 'Outlet supplied' : 'Outlet sold (all)'}
               value={
                 result.posOnly
                   ? '—'
@@ -756,7 +756,7 @@ export function PosCompare() {
             {tally && (
               <StatCard
                 icon={<Truck size={18} />}
-                label="QMERP supplied"
+                label="Outlet supplied"
                 value={fmtQty(result.totals.suppliedQty)}
                 sub="Dispatched to outlet (supply date)"
               />
@@ -764,7 +764,7 @@ export function PosCompare() {
             {hasSplit && !tally && (
               <StatCard
                 icon={<CircleDollarSign size={18} />}
-                label="SHPOS RM"
+                label="POS RM"
                 value={fmtRm(result.totals.posRm)}
                 sub="POS only"
               />
@@ -776,10 +776,10 @@ export function PosCompare() {
               value={String(gapCount)}
               sub={
                 tally
-                  ? `${result.totals.match} SHPOS vs StoreHub sold match · leftover is not a gap`
+                  ? `${result.totals.match} POS vs StoreHub sold match · leftover is not a gap`
                   : hasSplit
-                    ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−SHPOS`
-                    : `${result.totals.match} match · ${result.totals.pos_only} SHPOS only`
+                    ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−POS`
+                    : `${result.totals.match} match · ${result.totals.pos_only} POS only`
               }
             />
           </div>
@@ -795,7 +795,7 @@ export function PosCompare() {
             </div>
           ) : (
             <div className="panel overflow-x-auto">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 px-4 py-2">
+              <div className="flex flex-col gap-2 border-b border-stone-100 px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-4">
                 <p className="text-sm font-medium text-stone-800">
                   {selected?.label ?? 'Report'}
                   <span className="ml-2 font-normal text-stone-400">
@@ -879,7 +879,7 @@ function PeriodTable({
   onDrill: (row: StorehubReportRow) => void;
 }) {
   return (
-    <table className={`data-table ${showSplit ? 'min-w-[52rem]' : 'min-w-[40rem]'}`}>
+    <table className={`data-table data-table-sticky-col ${showSplit ? 'min-w-[48rem]' : 'min-w-[36rem]'}`}>
       <thead>
         <tr>
           <th>
@@ -888,16 +888,16 @@ function PeriodTable({
               <span className="ml-2 font-normal text-stone-400">· click bucket for days</span>
             ) : null}
           </th>
-          <th className="text-right">SHPOS sold</th>
-          <th className="text-right">SHPOS RM</th>
+          <th className="text-right">POS sold</th>
+          <th className="text-right">POS RM</th>
           {showSplit ? (
             <>
-              <th className="text-right">QMERP sold (StoreHub)</th>
-              <th className="text-right">QMERP sold (manual)</th>
-              <th className="text-right">QMERP sold (all)</th>
+              <th className="text-right">Outlet sold (StoreHub)</th>
+              <th className="text-right">Outlet sold (manual)</th>
+              <th className="text-right">Outlet sold (all)</th>
             </>
           ) : (
-            <th className="text-right">QMERP sold (all)</th>
+            <th className="text-right">Outlet sold (all)</th>
           )}
           <th>Status</th>
         </tr>
@@ -1032,21 +1032,21 @@ function TallyTable({
   showSplit: boolean;
 }) {
   return (
-    <table className={`data-table ${showSplit ? 'min-w-[64rem]' : 'min-w-[52rem]'}`}>
+    <table className={`data-table data-table-sticky-col ${showSplit ? 'min-w-[60rem]' : 'min-w-[48rem]'}`}>
       <thead>
         <tr>
           <th>Product</th>
-          <th className="text-right">SHPOS sold</th>
+          <th className="text-right">POS sold</th>
           {showSplit ? (
             <>
-              <th className="text-right">QMERP sold (StoreHub)</th>
-              <th className="text-right">QMERP sold (manual)</th>
-              <th className="text-right">QMERP sold (all)</th>
+              <th className="text-right">Outlet sold (StoreHub)</th>
+              <th className="text-right">Outlet sold (manual)</th>
+              <th className="text-right">Outlet sold (all)</th>
             </>
           ) : (
-            <th className="text-right">QMERP sold (all)</th>
+            <th className="text-right">Outlet sold (all)</th>
           )}
-          <th className="text-right">QMERP supplied</th>
+          <th className="text-right">Outlet supplied</th>
           <th className="text-right">Leftover</th>
           <th className="text-right">{showSplit ? 'POS vs StoreHub' : 'POS vs sold'}</th>
           <th>Status</th>

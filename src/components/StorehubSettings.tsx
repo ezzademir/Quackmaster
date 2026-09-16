@@ -156,10 +156,10 @@ export function StorehubSettings() {
   const mappedProductCount = Object.values(productSku).filter((v) => v.trim()).length;
 
   return (
-    <div className="rounded-xl border border-teal-200 bg-teal-50/30 p-5 shadow-sm space-y-4">
+    <div className="rounded-xl border border-teal-200 bg-teal-50/30 p-5 space-y-4">
       <div>
-        <h2 className="font-semibold text-gray-900">StoreHub POS maps</h2>
-        <p className="mt-1 text-sm text-gray-600">
+        <h2 className="font-semibold text-stone-900">StoreHub POS maps</h2>
+        <p className="mt-1 text-sm text-stone-600">
           Map StoreHub stores and products for <span className="font-medium text-stone-800">POS compare</span>{' '}
           comparisons. Outlet Sales stays manual for all outlets — POS does not post journals or deduct stock.
           Secrets live on the Edge Function, not in this app.
@@ -180,7 +180,7 @@ export function StorehubSettings() {
       </div>
 
       {lastRun && (
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-stone-500">
           Historical ingest run {new Date(lastRun.started_at).toLocaleString('en-MY')}: {lastRun.sales_ingested}{' '}
           posted, {lastRun.failed} failed
           {lastRun.error ? ` — ${lastRun.error}` : ''}. New sales are keyed in Outlet Sales.
@@ -215,7 +215,7 @@ export function StorehubSettings() {
         >
           {busy === 'save' ? 'Saving…' : 'Save maps'}
         </button>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-stone-500">
           {mappedStoreCount} store{mappedStoreCount === 1 ? '' : 's'} and {mappedProductCount} product
           {mappedProductCount === 1 ? '' : 's'} mapped.
         </p>
@@ -223,15 +223,15 @@ export function StorehubSettings() {
 
       {stores.length > 0 && (
         <div>
-          <h3 className="mb-2 text-sm font-medium text-gray-800">Stores → outlets</h3>
+          <h3 className="mb-2 text-sm font-medium text-stone-800">Stores → outlets</h3>
           <ul className="space-y-2">
             {stores.map((s) => (
               <li key={s.id} className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="min-w-[8rem] font-medium text-gray-800">{s.name}</span>
+                <span className="min-w-[8rem] font-medium text-stone-800">{s.name}</span>
                 <select
                   value={storeOutlet[s.id] ?? ''}
                   onChange={(e) => setStoreOutlet((prev) => ({ ...prev, [s.id]: e.target.value }))}
-                  className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+                  className="rounded-lg border border-stone-300 px-2 py-1.5 text-sm"
                 >
                   <option value="">— not mapped —</option>
                   {outlets.map((o) => (
@@ -248,28 +248,28 @@ export function StorehubSettings() {
 
       {products.length > 0 && (
         <div>
-          <h3 className="mb-2 text-sm font-medium text-gray-800">Products → Quackmaster SKU</h3>
-          <p className="mb-2 text-xs text-gray-500">Use the recipe SKU (e.g. QUACKTEOW), not the printable lot code.</p>
-          <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+          <h3 className="mb-2 text-sm font-medium text-stone-800">Products → Quackmaster SKU</h3>
+          <p className="mb-2 text-xs text-stone-500">Use the recipe SKU (e.g. QUACKTEOW), not the printable lot code.</p>
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-stone-200 bg-white">
             <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-gray-50 text-left">
+              <thead className="sticky top-0 bg-stone-50 text-left">
                 <tr>
-                  <th className="px-3 py-2 font-medium text-gray-600">StoreHub</th>
-                  <th className="px-3 py-2 font-medium text-gray-600">POS SKU</th>
-                  <th className="px-3 py-2 font-medium text-gray-600">Quackmaster SKU</th>
+                  <th className="px-3 py-2 font-medium text-stone-600">StoreHub</th>
+                  <th className="px-3 py-2 font-medium text-stone-600">POS SKU</th>
+                  <th className="px-3 py-2 font-medium text-stone-600">Quackmaster SKU</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {products.map((p) => (
                   <tr key={p.id}>
-                    <td className="px-3 py-1.5 text-gray-800">{p.name || p.id}</td>
-                    <td className="px-3 py-1.5 font-mono text-gray-500">{p.sku || '—'}</td>
+                    <td className="px-3 py-1.5 text-stone-800">{p.name || p.id}</td>
+                    <td className="px-3 py-1.5 font-mono text-stone-500">{p.sku || '—'}</td>
                     <td className="px-3 py-1.5">
                       <input
                         value={productSku[p.id] ?? ''}
                         onChange={(e) => setProductSku((prev) => ({ ...prev, [p.id]: e.target.value }))}
                         placeholder="QUACKTEOW"
-                        className="w-full rounded border border-gray-200 px-2 py-1 font-mono"
+                        className="w-full rounded border border-stone-200 px-2 py-1 font-mono"
                       />
                     </td>
                   </tr>
@@ -282,14 +282,14 @@ export function StorehubSettings() {
 
       {events.length > 0 && (
         <div>
-          <h3 className="mb-2 text-sm font-medium text-gray-800">Historical failed / needs review</h3>
+          <h3 className="mb-2 text-sm font-medium text-stone-800">Historical failed / needs review</h3>
           <ul className="max-h-48 space-y-1 overflow-y-auto text-xs">
             {events.map((ev) => (
-              <li key={ev.id} className="rounded border border-gray-200 bg-white px-3 py-2">
-                <span className="font-semibold uppercase text-gray-700">{ev.status}</span>
+              <li key={ev.id} className="rounded border border-stone-200 bg-white px-3 py-2">
+                <span className="font-semibold uppercase text-stone-700">{ev.status}</span>
                 {ev.invoice_number ? ` · ${ev.invoice_number}` : ''}
                 {ev.error ? ` · ${ev.error}` : ''}
-                <span className="mt-0.5 block text-gray-400">{new Date(ev.created_at).toLocaleString('en-MY')}</span>
+                <span className="mt-0.5 block text-stone-400">{new Date(ev.created_at).toLocaleString('en-MY')}</span>
               </li>
             ))}
           </ul>

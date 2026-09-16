@@ -16,7 +16,7 @@ import {
   Search,
   PanelRightClose,
 } from 'lucide-react';
-import { EmptyState, ListRow } from '../components/ui';
+import { Button, EmptyState, ListRow } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
@@ -599,8 +599,8 @@ export function Users() {
     }
     return (
       <div className="flex items-center gap-1">
-        <Clock size={14} className="text-gray-400" />
-        <span className="text-gray-600">Never</span>
+        <Clock size={14} className="text-stone-400" />
+        <span className="text-stone-600">Never</span>
       </div>
     );
   }
@@ -608,7 +608,7 @@ export function Users() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="text-gray-500">Loading users...</div>
+        <div className="text-stone-500">Loading users...</div>
       </div>
     );
   }
@@ -623,7 +623,7 @@ export function Users() {
             <h1 className="text-2xl font-bold text-stone-900 sm:text-3xl">User Management</h1>
             <p className="mt-2 text-sm text-stone-600 sm:text-base">
               Approve registrations, roles, and passwords. See{' '}
-              <span className="font-medium text-gray-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
+              <span className="font-medium text-stone-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
             </p>
           </div>
           <div className="relative max-w-md w-full">
@@ -636,7 +636,7 @@ export function Users() {
               placeholder="Search email or name…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg border border-stone-300 py-2.5 pl-10 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-lg border border-stone-300 py-2.5 pl-10 pr-3 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               aria-label="Search users"
             />
           </div>
@@ -1008,17 +1008,17 @@ export function Users() {
               {drawer.tab === 'approved' && drawerApproved && (
                 <div className="space-y-5">
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Email</p>
-                    <p className="mt-1 text-gray-900">{drawerApproved.email}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Email</p>
+                    <p className="mt-1 text-stone-900">{drawerApproved.email}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">User ID</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">User ID</p>
                     <div className="mt-1 flex items-center gap-2">
-                      <code className="break-all text-xs text-gray-700">{drawerApproved.id}</code>
+                      <code className="break-all text-xs text-stone-700">{drawerApproved.id}</code>
                       <button
                         type="button"
                         onClick={() => copyToClipboard(drawerApproved.id)}
-                        className="rounded p-1 text-gray-500 hover:bg-gray-100"
+                        className="rounded p-1 text-stone-500 hover:bg-stone-100"
                         title="Copy"
                       >
                         <Copy size={16} />
@@ -1026,25 +1026,26 @@ export function Users() {
                     </div>
                   </div>
                   <div>
-                    <label className="text-xs font-medium uppercase text-gray-500">Display name</label>
+                    <label className="text-xs font-medium uppercase text-stone-500">Display name</label>
                     <input
                       type="text"
                       value={nameDraft}
                       onChange={(e) => setNameDraft(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
                     />
-                    <button
+                    <Button
                       type="button"
+                      variant="primary"
                       disabled={nameSaving}
                       onClick={() => void handleSaveDisplayName(drawerApproved.id)}
-                      className="mt-2 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                      className="mt-2 px-3 py-1.5 text-xs"
                     >
                       {nameSaving ? 'Saving…' : 'Save name'}
-                    </button>
+                    </Button>
                   </div>
                   <div>{statusCell(drawerApproved)}</div>
-                  <div className="space-y-2 border-t border-gray-100 pt-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Password</p>
+                  <div className="space-y-2 border-t border-stone-100 pt-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Password</p>
                     <button
                       type="button"
                       onClick={() => {
@@ -1052,7 +1053,7 @@ export function Users() {
                         setSendEmailModalOpen(true);
                       }}
                       disabled={drawerApproved.email === 'Unknown'}
-                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50 disabled:opacity-50"
                     >
                       <Mail size={16} />
                       Send password reset email
@@ -1066,7 +1067,7 @@ export function Users() {
                         setTempPassMessage('');
                         setTempPassModalOpen(true);
                       }}
-                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50"
                     >
                       <KeyRound size={16} />
                       Set temporary password
@@ -1083,8 +1084,8 @@ export function Users() {
                       Require new password on next sign-in
                     </button>
                   </div>
-                  <div className="border-t border-gray-100 pt-4 space-y-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <div className="border-t border-stone-100 pt-4 space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
                       Role &amp; outlet
                     </p>
                     {authUser?.id !== drawerApproved.id ? (
@@ -1094,7 +1095,7 @@ export function Users() {
                           onChange={(e) =>
                             setRoleDraft(e.target.value as 'admin' | 'staff' | 'supervisor')
                           }
-                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+                          className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900"
                         >
                           <option value="staff">Staff</option>
                           <option value="admin">Admin</option>
@@ -1104,7 +1105,7 @@ export function Users() {
                           <select
                             value={outletDraft}
                             onChange={(e) => setOutletDraft(e.target.value)}
-                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+                            className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900"
                           >
                             <option value="">Select outlet…</option>
                             {outlets.map((o) => (
@@ -1125,7 +1126,7 @@ export function Users() {
                         </button>
                       </>
                     ) : (
-                      <p className="text-xs text-gray-500">You cannot change your own role here.</p>
+                      <p className="text-xs text-stone-500">You cannot change your own role here.</p>
                     )}
                   </div>
                 </div>
@@ -1134,16 +1135,16 @@ export function Users() {
               {drawer.open && drawer.tab === 'pending' && (
                 <div className="space-y-4">
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Email</p>
-                    <p className="mt-1 text-gray-900">{drawer.user.email}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Email</p>
+                    <p className="mt-1 text-stone-900">{drawer.user.email}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Name</p>
-                    <p className="mt-1 text-gray-900">{drawer.user.full_name || '—'}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Name</p>
+                    <p className="mt-1 text-stone-900">{drawer.user.full_name || '—'}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Requested</p>
-                    <p className="mt-1 text-gray-700">
+                    <p className="text-xs font-medium uppercase text-stone-500">Requested</p>
+                    <p className="mt-1 text-stone-700">
                       {new Date(drawer.user.requested_at).toLocaleString()}
                     </p>
                   </div>
@@ -1171,24 +1172,24 @@ export function Users() {
               {drawer.open && drawer.tab === 'rejected' && (
                 <div className="space-y-4">
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Email</p>
-                    <p className="mt-1 text-gray-900">{drawer.row.email}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Email</p>
+                    <p className="mt-1 text-stone-900">{drawer.row.email}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Name</p>
-                    <p className="mt-1 text-gray-900">{drawer.row.full_name || '—'}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Name</p>
+                    <p className="mt-1 text-stone-900">{drawer.row.full_name || '—'}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Reviewed</p>
-                    <p className="mt-1 text-gray-700">
+                    <p className="text-xs font-medium uppercase text-stone-500">Reviewed</p>
+                    <p className="mt-1 text-stone-700">
                       {drawer.row.reviewed_at
                         ? new Date(drawer.row.reviewed_at).toLocaleString()
                         : '—'}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Reason</p>
-                    <p className="mt-1 text-gray-700 whitespace-pre-wrap">
+                    <p className="text-xs font-medium uppercase text-stone-500">Reason</p>
+                    <p className="mt-1 text-stone-700 whitespace-pre-wrap">
                       {drawer.row.rejection_reason || '—'}
                     </p>
                   </div>
@@ -1205,7 +1206,7 @@ export function Users() {
         onClose={() => !resetLoading && setResetModalOpen(false)}
       >
         <div className="w-full max-w-sm">
-          <p className="text-gray-600 mb-6">
+          <p className="text-stone-600 mb-6">
             {selectedUser &&
               `Require ${selectedUser.email} to choose a new password before using the app? They can still sign in with their current password once, then must update it.`}
           </p>
@@ -1221,19 +1222,20 @@ export function Users() {
           )}
 
           <div className="flex gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => setResetModalOpen(false)}
               disabled={resetLoading}
-              className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium disabled:opacity-50"
+              className="flex-1"
             >
               Cancel
-            </button>
+            </Button>
             <button
               type="button"
               onClick={() => void handleForcePasswordReset()}
               disabled={resetLoading}
-              className="flex-1 px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50"
+              className="flex-1 rounded-lg bg-amber-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
             >
               {resetLoading ? 'Processing…' : 'Confirm'}
             </button>
@@ -1247,9 +1249,9 @@ export function Users() {
         onClose={() => !sendEmailLoading && setSendEmailModalOpen(false)}
       >
         <div className="w-full max-w-md space-y-4">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-stone-600">
             Supabase will email <strong>{sendEmailTarget?.email}</strong> a link to set a new password. Ensure{' '}
-            <code className="rounded bg-gray-100 px-1 text-xs">{getPasswordRecoveryRedirectUrl()}</code> is allowed in
+            <code className="rounded bg-stone-100 px-1 text-xs">{getPasswordRecoveryRedirectUrl()}</code> is allowed in
             Dashboard → Authentication → URL configuration.
           </p>
           {sendEmailMessage && (
@@ -1264,26 +1266,27 @@ export function Users() {
             </div>
           )}
           <div className="flex gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => {
                 setSendEmailModalOpen(false);
                 setSendEmailTarget(null);
                 setSendEmailMessage('');
               }}
               disabled={sendEmailLoading}
-              className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="flex-1"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => void handleConfirmSendResetEmail()}
               disabled={sendEmailLoading}
-              className="flex-1 rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="flex-1"
             >
               {sendEmailLoading ? 'Sending…' : 'Send email'}
-            </button>
+            </Button>
           </div>
         </div>
       </Modal>
@@ -1294,28 +1297,28 @@ export function Users() {
         onClose={() => !tempPassLoading && setTempPassModalOpen(false)}
       >
         <div className="w-full max-w-md space-y-4">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-stone-600">
             Sets Auth password for <strong>{tempPassUser?.email}</strong> via secure Edge Function. User will be required
             to pick a new password on next sign-in. Minimum {MIN_PASSWORD_LENGTH} characters.
           </p>
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">New password</label>
+            <label className="mb-1 block text-xs font-medium text-stone-700">New password</label>
             <input
               type="password"
               autoComplete="new-password"
               value={tempPassNew}
               onChange={(e) => setTempPassNew(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">Confirm</label>
+            <label className="mb-1 block text-xs font-medium text-stone-700">Confirm</label>
             <input
               type="password"
               autoComplete="new-password"
               value={tempPassConfirm}
               onChange={(e) => setTempPassConfirm(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
           </div>
           {tempPassMessage && (
@@ -1328,26 +1331,27 @@ export function Users() {
             </div>
           )}
           <div className="flex gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => {
                 setTempPassModalOpen(false);
                 setTempPassUser(null);
                 setTempPassMessage('');
               }}
               disabled={tempPassLoading}
-              className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="flex-1"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => void handleConfirmTempPassword()}
               disabled={tempPassLoading}
-              className="flex-1 rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
+              className="flex-1"
             >
               {tempPassLoading ? 'Saving…' : 'Set password'}
-            </button>
+            </Button>
           </div>
         </div>
       </Modal>

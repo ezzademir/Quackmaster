@@ -76,8 +76,40 @@
     @apply rounded-xl border border-stone-200 bg-white;
   }
 
+  .detail-meta {
+    @apply grid gap-4 rounded-lg border border-stone-100 bg-stone-50 p-4;
+  }
+
   .data-table {
     @apply w-full text-sm;
+  }
+
+  .data-table-sticky-col th:first-child,
+  .data-table-sticky-col td:first-child {
+    @apply sticky left-0 z-[1] border-r border-stone-100 bg-white;
+  }
+
+  .data-table-sticky-col thead th:first-child {
+    @apply z-[2] bg-white;
+  }
+
+  .data-table-sticky-col tbody tr:hover td:first-child {
+    @apply bg-stone-50;
+  }
+
+  .data-table-sticky-col tbody tr.bg-amber-50\/60 > td:first-child,
+  .data-table-sticky-col tbody tr.bg-amber-50\/40 > td:first-child {
+    @apply bg-amber-50;
+  }
+
+  .data-table-sticky-col tbody tr.bg-stone-50\/80 > td:first-child,
+  .data-table-sticky-col tbody tr.bg-stone-50\/60 > td:first-child {
+    @apply bg-stone-50;
+  }
+
+  .data-table-sticky-col tbody tr.bg-amber-50\/60:hover > td:first-child,
+  .data-table-sticky-col tbody tr.bg-amber-50\/40:hover > td:first-child {
+    @apply bg-amber-50;
   }
 
   .data-table thead {
