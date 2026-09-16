@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, CircleDollarSign, HelpCircle, Package, Scale, Truck } from 'lucide-react';
+import { AlertTriangle, Archive, ChevronRight, CircleDollarSign, HelpCircle, Package, Scale, Truck } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
 import { Button, EmptyState, PageHeader, StatCard } from '../components/ui';
 import { supabase } from '../utils/supabase';
@@ -96,7 +96,7 @@ const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
   pos_only: 'POS only',
 };
 
-/** Plain-language help for status chips (title tooltip). */
+/** Plain-language help for status chips (title tooltip). Period reports match vs StoreHub ingest. */
 const STATUS_HELP: Record<StorehubDiffStatus, string> = {
   match: 'POS sold matches Outlet sold from StoreHub ingest for this row.',
   qty_mismatch: 'POS sold and Outlet StoreHub-ingested sold both exist but the unit counts differ.',
@@ -104,6 +104,15 @@ const STATUS_HELP: Record<StorehubDiffStatus, string> = {
     'POS has sales here, but Outlet Sales has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
   extra_in_dashboard:
     'Outlet Sales has posted sales here (often manual or StoreHub ingest) with no matching POS tickets in this period.',
+  pos_only: 'This report has no Outlet Sales journal side — POS tickets only.',
+};
+
+/** Sold vs supplied: Gaps compare POS to posted Outlet sold (all journals). */
+const TALLY_STATUS_HELP: Record<StorehubDiffStatus, string> = {
+  match: 'POS sold matches posted Outlet sold for this row.',
+  qty_mismatch: 'POS sold and posted Outlet sold both exist but the unit counts differ.',
+  missing_in_dashboard: 'POS has sales here, but Outlet Sales has no posted journal for this row.',
+  extra_in_dashboard: 'Outlet Sales has posted sales here with no matching POS tickets in this period.',
   pos_only: 'This report has no Outlet Sales journal side — POS tickets only.',
 };
 
@@ -128,11 +137,17 @@ function gapKeys(rows: StorehubReportRow[]): string[] {
   return rows.filter(tallyRowHasGap).map((r) => r.key);
 }
 
-function StatusChip({ status }: { status: StorehubDiffStatus }) {
+function StatusChip({
+  status,
+  help = STATUS_HELP,
+}: {
+  status: StorehubDiffStatus;
+  help?: Record<StorehubDiffStatus, string>;
+}) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[status]}`}
-      title={STATUS_HELP[status]}
+      title={help[status]}
     >
       {STATUS_LABEL[status]}
       <HelpCircle size={11} className="opacity-70" aria-hidden />
@@ -672,9 +687,10 @@ export function PosCompare() {
             <details className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-600">
               <summary className="cursor-pointer font-medium text-stone-800">What do the status chips mean?</summary>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-600">
-                {(Object.keys(STATUS_HELP) as StorehubDiffStatus[]).map((k) => (
+                {(Object.keys(tally ? TALLY_STATUS_HELP : STATUS_HELP) as StorehubDiffStatus[]).map((k) => (
                   <li key={k}>
-                    <span className="font-medium">{STATUS_LABEL[k]}:</span> {STATUS_HELP[k]}
+                    <span className="font-medium">{STATUS_LABEL[k]}:</span>{' '}
+                    {(tally ? TALLY_STATUS_HELP : STATUS_HELP)[k]}
                   </li>
                 ))}
               </ul>
@@ -682,16 +698,25 @@ export function PosCompare() {
           )}
 
           {(() => {
-            const hasSplit =
-              showSplitSold &&
-              !result.posOnly &&
-              (result.totals.dashStorehubQty != null ||
-                result.totals.dashManualQty != null ||
-                result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null));
+            const ingestActive = (result.totals.dashStorehubQty ?? 0) > 0;
+            const hasSplit = tally
+              ? ingestActive
+              : showSplitSold &&
+                !result.posOnly &&
+                (result.totals.dashStorehubQty != null ||
+                  result.totals.dashManualQty != null ||
+                  result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null));
             const shSold = result.totals.dashStorehubQty ?? null;
             const manSold = result.totals.dashManualQty ?? null;
+            const gridCols = tally
+              ? hasSplit
+                ? 'lg:grid-cols-3 xl:grid-cols-7'
+                : 'lg:grid-cols-5'
+              : hasSplit
+                ? 'lg:grid-cols-3 xl:grid-cols-6'
+                : 'lg:grid-cols-4';
             return (
-          <div className={`grid grid-cols-2 gap-3 ${hasSplit || tally ? 'lg:grid-cols-3 xl:grid-cols-6' : 'lg:grid-cols-4'}`}>
+          <div className={`grid grid-cols-2 gap-3 ${gridCols}`}>
             <StatCard
               icon={<Package size={18} />}
               tone="brand"
@@ -723,9 +748,9 @@ export function PosCompare() {
             ) : tally ? (
               <StatCard
                 icon={<Scale size={18} />}
-                label="Outlet sold (all)"
+                label="Outlet sold"
                 value={fmtQty(result.totals.dashQty)}
-                sub="Manual Outlet Sales units"
+                sub="Posted Outlet Sales units"
               />
             ) : (
               <StatCard
@@ -735,39 +760,40 @@ export function PosCompare() {
                 sub="POS only"
               />
             )}
-            {!hasSplit && (
-            <StatCard
-              icon={tally ? <Truck size={18} /> : <Scale size={18} />}
-              label={tally ? 'Outlet supplied' : 'Outlet sold (all)'}
-              value={
-                result.posOnly
-                  ? '—'
-                  : fmtQty(tally ? result.totals.suppliedQty : result.totals.dashQty)
-              }
-              sub={
-                result.posOnly
-                  ? 'Not stored in journals'
-                  : tally
-                    ? 'Dispatched to outlet (supply date)'
-                    : 'Manual Outlet Sales units'
-              }
-            />
-            )}
-            {tally && (
-              <StatCard
-                icon={<Truck size={18} />}
-                label="Outlet supplied"
-                value={fmtQty(result.totals.suppliedQty)}
-                sub="Dispatched to outlet (supply date)"
-              />
-            )}
-            {hasSplit && !tally && (
-              <StatCard
-                icon={<CircleDollarSign size={18} />}
-                label="POS RM"
-                value={fmtRm(result.totals.posRm)}
-                sub="POS only"
-              />
+            {tally ? (
+              <>
+                <StatCard
+                  icon={<Truck size={18} />}
+                  label="Outlet supplied"
+                  value={fmtQty(result.totals.suppliedQty)}
+                  sub="Dispatched to outlet (supply date)"
+                />
+                <StatCard
+                  icon={<Archive size={18} />}
+                  label="Leftover"
+                  value={fmtQty(result.totals.leftoverQty)}
+                  sub="Dispatch minus Outlet sold · not a POS gap"
+                />
+              </>
+            ) : (
+              <>
+                {!hasSplit && (
+                  <StatCard
+                    icon={<Scale size={18} />}
+                    label="Outlet sold (all)"
+                    value={result.posOnly ? '—' : fmtQty(result.totals.dashQty)}
+                    sub={result.posOnly ? 'Not stored in journals' : 'Manual Outlet Sales units'}
+                  />
+                )}
+                {hasSplit && (
+                  <StatCard
+                    icon={<CircleDollarSign size={18} />}
+                    label="POS RM"
+                    value={fmtRm(result.totals.posRm)}
+                    sub="POS only"
+                  />
+                )}
+              </>
             )}
             <StatCard
               icon={<AlertTriangle size={18} />}
@@ -776,7 +802,7 @@ export function PosCompare() {
               value={String(gapCount)}
               sub={
                 tally
-                  ? `${result.totals.match} POS vs StoreHub sold match · leftover is not a gap`
+                  ? `${result.totals.match} match · POS vs Outlet sold`
                   : hasSplit
                     ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−POS`
                     : `${result.totals.match} match · ${result.totals.pos_only} POS only`
@@ -836,7 +862,7 @@ export function PosCompare() {
                   expanded={expanded}
                   onToggle={toggleExpand}
                   gapsOnly={rowFilter === 'gaps'}
-                  showSplit={result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null)}
+                  showSplit={(result.totals.dashStorehubQty ?? 0) > 0}
                 />
               ) : (
                 <PeriodTable
@@ -1044,11 +1070,11 @@ function TallyTable({
               <th className="text-right">Outlet sold (all)</th>
             </>
           ) : (
-            <th className="text-right">Outlet sold (all)</th>
+            <th className="text-right">Outlet sold</th>
           )}
           <th className="text-right">Outlet supplied</th>
           <th className="text-right">Leftover</th>
-          <th className="text-right">{showSplit ? 'POS vs StoreHub' : 'POS vs sold'}</th>
+          <th className="text-right">POS vs Outlet sold</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -1083,7 +1109,7 @@ function TallyTable({
                 </td>
                 <TallyQtyCells row={row} showSplit={showSplit} />
                 <td>
-                  <StatusChip status={row.status} />
+                  <StatusChip status={row.status} help={TALLY_STATUS_HELP} />
                 </td>
               </tr>
               {open &&
@@ -1099,7 +1125,7 @@ function TallyTable({
                       <td className="pl-8 text-sm font-medium">{day.label}</td>
                       <TallyQtyCells row={day} showSplit={showSplit} muted />
                       <td>
-                        <StatusChip status={day.status} />
+                        <StatusChip status={day.status} help={TALLY_STATUS_HELP} />
                       </td>
                     </tr>
                     <TallyLotRows

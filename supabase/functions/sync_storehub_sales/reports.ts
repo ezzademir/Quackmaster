@@ -800,9 +800,9 @@ async function soldVsSuppliedReport(opts: {
           dashManualQty: dayMan,
           suppliedQty: daySupplied,
           leftoverQty: daySupplied - dayDashQty,
-          posVsSold: dayPosQty - daySh,
+          posVsSold: dayPosQty - dayDashQty,
           lots: dayLots,
-          status: soldVsSuppliedStatus(dayPosQty, daySh),
+          status: soldVsSuppliedStatus(dayPosQty, dayDashQty),
         });
       }
     }
@@ -816,11 +816,10 @@ async function soldVsSuppliedReport(opts: {
       dashManualQty,
       suppliedQty,
       leftoverQty,
-      // POS vs StoreHub-ingested sold — manual journals do not count as a POS gap.
-      posVsSold: posQty - dashStorehubQty,
+      posVsSold: posQty - dashQty,
       lots,
       days: days.length ? days : undefined,
-      status: soldVsSuppliedStatus(posQty, dashStorehubQty),
+      status: soldVsSuppliedStatus(posQty, dashQty),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
 
@@ -840,7 +839,7 @@ async function soldVsSuppliedReport(opts: {
     .map(([name, qty]) => `${name} ${qty.toLocaleString()}`);
   const noticeParts = [
     "Outlet supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
-    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare POS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
+    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and Gaps compare POS to that same Outlet sold total — manual journals close a POS gap. Leftover is not a gap.",
     "Lots are ERP-only; StoreHub tickets have no batch numbers.",
     "On a multi-day period, expand a product to see which Malaysia days differ. Daily leftover is that day's dispatch minus that day's sold — not on-hand stock.",
   ];
@@ -871,7 +870,7 @@ async function soldVsSuppliedReport(opts: {
       { key: "dashQty", label: "Outlet sold (all)" },
       { key: "suppliedQty", label: "Outlet supplied" },
       { key: "leftoverQty", label: "Leftover" },
-      { key: "posVsSold", label: "POS vs StoreHub sold" },
+      { key: "posVsSold", label: "POS vs Outlet sold" },
       { key: "status", label: "Status" },
     ],
   });
