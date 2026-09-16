@@ -687,35 +687,33 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
       return (
         <div
           key={r.id}
-          className={`rounded-xl border bg-white p-3 shadow-sm ${
-            bad ? 'border-red-200 bg-red-50/40' : 'border-gray-200'
-          }`}
+          className={bad ? 'rounded-xl border border-red-200 bg-red-50/40 p-3' : 'panel p-3'}
         >
-          <div className="min-w-0 border-b border-gray-100 pb-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{inventoryColTitle}</p>
-            <p className="mt-0.5 font-medium leading-snug text-gray-900">{r.item_label}</p>
-            {r.item_detail ? <p className="mt-1 text-xs leading-relaxed text-gray-500">{r.item_detail}</p> : null}
-            {updatedLabel ? <p className="mt-1 text-xs text-gray-400">Updated {updatedLabel}</p> : null}
+          <div className="min-w-0 border-b border-stone-100 pb-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">{inventoryColTitle}</p>
+            <p className="mt-0.5 font-medium leading-snug text-stone-900">{r.item_label}</p>
+            {r.item_detail ? <p className="mt-1 text-xs leading-relaxed text-stone-500">{r.item_detail}</p> : null}
+            {updatedLabel ? <p className="mt-1 text-xs text-stone-400">Updated {updatedLabel}</p> : null}
           </div>
           {!blind ? (
             <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
               <div>
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">SKU</dt>
-                <dd className="tabular-nums text-gray-800">{displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}</dd>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-400">SKU</dt>
+                <dd className="tabular-nums text-stone-800">{displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}</dd>
               </div>
               <div>
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">System QoH</dt>
-                <dd className="tabular-nums text-right text-gray-900">{r.quantity_on_hand}</dd>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-400">System QoH</dt>
+                <dd className="tabular-nums text-right text-stone-900">{r.quantity_on_hand}</dd>
               </div>
               <div>
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Reserved</dt>
-                <dd className="tabular-nums text-right text-gray-600">{r.reserved_quantity}</dd>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-400">Reserved</dt>
+                <dd className="tabular-nums text-right text-stone-600">{r.reserved_quantity}</dd>
               </div>
               <div>
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Variance</dt>
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-stone-400">Variance</dt>
                 <dd
                   className={`tabular-nums text-right ${
-                    v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'
+                    v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-stone-600'
                   }`}
                 >
                   {v === null ? '—' : v}
@@ -724,7 +722,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             </dl>
           ) : null}
           <div className="mt-3">
-            <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor={`count-${r.id}`}>
+            <label className="mb-1 block text-xs font-medium text-stone-600" htmlFor={`count-${r.id}`}>
               Counted quantity
             </label>
             <input
@@ -739,12 +737,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 const val = e.target.value;
                 setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, countedStr: val } : x)));
               }}
-              className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-right text-base tabular-nums focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:text-sm"
+              className="min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2 text-right text-base tabular-nums focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 sm:min-h-0 sm:text-sm"
             />
           </div>
           <div className="mt-3">
-            <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor={`remark-${r.id}`}>
-              Line remark <span className="font-normal text-gray-400">(optional)</span>
+            <label className="mb-1 block text-xs font-medium text-stone-600" htmlFor={`remark-${r.id}`}>
+              Line remark <span className="font-normal text-stone-400">(optional)</span>
             </label>
             <input
               id={`remark-${r.id}`}
@@ -755,7 +753,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               }}
               placeholder="Optional"
               autoComplete="off"
-              className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:text-xs"
+              className="min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2 text-base focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 sm:min-h-0 sm:text-xs"
             />
           </div>
         </div>
@@ -772,20 +770,20 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         return c < (r.reserved_quantity ?? 0);
       })();
       return (
-        <tr key={r.id} className={bad ? 'bg-red-50/40' : 'hover:bg-gray-50'}>
-          <td className="px-3 py-2 text-gray-900">
+        <tr key={r.id} className={bad ? 'bg-red-50/40' : 'hover:bg-stone-50'}>
+          <td className="px-3 py-2 text-stone-900">
             <div className="font-medium">{r.item_label}</div>
-            {r.item_detail ? <div className="text-xs text-gray-500">{r.item_detail}</div> : null}
-            {updatedLabel ? <div className="text-xs text-gray-400">Updated {updatedLabel}</div> : null}
+            {r.item_detail ? <div className="text-xs text-stone-500">{r.item_detail}</div> : null}
+            {updatedLabel ? <div className="text-xs text-stone-400">Updated {updatedLabel}</div> : null}
           </td>
           {!blind ? (
-            <td className="hidden sm:table-cell px-3 py-2 text-gray-600 text-xs">
+            <td className="hidden sm:table-cell px-3 py-2 text-stone-600 text-xs">
               {r.raw_material_id ? '—' : displaySkuSecond(r.lot_label, r.product_batch, r.recipe_sku) || '—'}
             </td>
           ) : null}
           {!blind ? <td className="px-3 py-2 text-right tabular-nums">{r.quantity_on_hand}</td> : null}
           {!blind ? (
-            <td className="hidden md:table-cell px-3 py-2 text-right tabular-nums text-gray-600">{r.reserved_quantity}</td>
+            <td className="hidden md:table-cell px-3 py-2 text-right tabular-nums text-stone-600">{r.reserved_quantity}</td>
           ) : null}
           <td className="px-3 py-2 text-right">
             <input
@@ -799,11 +797,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 const val = e.target.value;
                 setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, countedStr: val } : x)));
               }}
-              className="w-full max-w-[7rem] rounded-lg border border-gray-300 px-2 py-1.5 text-right text-sm tabular-nums md:w-24 md:rounded md:py-1"
+              className="w-full max-w-[7rem] rounded-lg border border-stone-300 px-2 py-1.5 text-right text-sm tabular-nums md:w-24 md:rounded md:py-1"
             />
           </td>
           {!blind ? (
-            <td className={`px-3 py-2 text-right tabular-nums ${v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'}`}>
+            <td className={`px-3 py-2 text-right tabular-nums ${v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-stone-600'}`}>
               {v === null ? '—' : v}
             </td>
           ) : null}
@@ -816,7 +814,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               }}
               placeholder="Optional"
               autoComplete="off"
-              className="w-full min-w-[6rem] rounded-lg border border-gray-300 px-2 py-1.5 text-xs md:rounded md:py-1"
+              className="w-full min-w-[6rem] rounded-lg border border-stone-300 px-2 py-1.5 text-xs md:rounded md:py-1"
             />
           </td>
         </tr>
@@ -825,24 +823,24 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
 
   const renderTableShell = (bodyRows: DraftRow[], blind: boolean) => (
     <>
-      <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-gray-200 md:block">
+      <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-stone-200 md:block">
         <table className={`w-full text-sm ${blind ? 'min-w-[420px]' : 'min-w-[640px]'}`}>
-          <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
+          <thead className="sticky top-0 z-10 border-b border-stone-200 bg-stone-50">
             <tr>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">{inventoryColTitle}</th>
+              <th className="px-3 py-2 text-left font-semibold text-stone-700">{inventoryColTitle}</th>
               {!blind ? (
-                <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-gray-700">SKU</th>
+                <th className="hidden sm:table-cell px-3 py-2 text-left font-semibold text-stone-700">SKU</th>
               ) : null}
-              {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th> : null}
+              {!blind ? <th className="px-3 py-2 text-right font-semibold text-stone-700">System QoH</th> : null}
               {!blind ? (
-                <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-gray-700">Reserved</th>
+                <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-stone-700">Reserved</th>
               ) : null}
-              <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
-              {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th> : null}
-              <th className="min-w-[8rem] px-3 py-2 text-left font-semibold text-gray-700">Line remark</th>
+              <th className="px-3 py-2 text-right font-semibold text-stone-700">Counted</th>
+              {!blind ? <th className="px-3 py-2 text-right font-semibold text-stone-700">Variance</th> : null}
+              <th className="min-w-[8rem] px-3 py-2 text-left font-semibold text-stone-700">Line remark</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">{renderInventoryRows(bodyRows, blind)}</tbody>
+          <tbody className="divide-y divide-stone-100">{renderInventoryRows(bodyRows, blind)}</tbody>
         </table>
       </div>
       <div className="max-h-[min(28rem,55vh)] space-y-3 overflow-y-auto overscroll-y-contain md:hidden">
@@ -866,10 +864,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
-          <h2 className="text-sm font-semibold text-gray-800">New count</h2>
+        <div className="panel space-y-4 p-4 sm:p-5">
+          <h2 className="text-sm font-semibold text-stone-800">New count</h2>
           {lockedOutletId ? (
-            <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+            <div className="flex gap-1 rounded-lg border border-stone-200 bg-stone-50 p-1">
               {(
                 [
                   ['ingredients', 'Ingredients'],
@@ -881,7 +879,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   type="button"
                   onClick={() => setSupervisorTab(id)}
                   className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    supervisorTab === id ? 'bg-white text-amber-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                    supervisorTab === id ? 'bg-white text-amber-900' : 'text-stone-600 hover:text-stone-900'
                   }`}
                 >
                   {label}
@@ -889,7 +887,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               ))}
             </div>
           ) : (
-            <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+            <div className="flex gap-1 rounded-lg border border-stone-200 bg-stone-50 p-1">
               {(
                 [
                   ['lot', 'By lot'],
@@ -904,7 +902,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                     setRecountPhase(false);
                   }}
                   className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    countMode === id ? 'bg-white text-amber-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                    countMode === id ? 'bg-white text-amber-900' : 'text-stone-600 hover:text-stone-900'
                   }`}
                 >
                   {label}
@@ -914,16 +912,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:items-end">
             <div className="min-w-0">
-              <label className="mb-1 block text-xs font-medium text-gray-600">Outlet</label>
+              <label className="mb-1 block text-xs font-medium text-stone-600">Outlet</label>
               {lockedOutletId ? (
-                <p className="min-h-11 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-base leading-snug text-gray-800 sm:min-h-0 sm:py-2 sm:text-sm">
+                <p className="min-h-11 w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5 text-base leading-snug text-stone-800 sm:min-h-0 sm:py-2 sm:text-sm">
                   {(outletName || outlets.find((o) => o.id === lockedOutletId)?.name) ?? 'Your outlet'}
                 </p>
               ) : (
                 <select
                   value={outletId}
                   onChange={(e) => setOutletId(e.target.value)}
-                  className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:py-2 sm:text-sm"
+                  className="min-h-11 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-base focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 sm:min-h-0 sm:py-2 sm:text-sm"
                 >
                   <option value="">Select outlet…</option>
                   {outlets.map((o) => (
@@ -935,23 +933,23 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               )}
             </div>
             <div className="min-w-0">
-              <label className="mb-1 block text-xs font-medium text-gray-600">Count date</label>
+              <label className="mb-1 block text-xs font-medium text-stone-600">Count date</label>
               <input
                 type="date"
                 value={countDate}
                 onChange={(e) => setCountDate(e.target.value)}
-                className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
+                className="min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-base focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
               />
             </div>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-600">Session notes (optional)</label>
+            <label className="mb-1 block text-xs font-medium text-stone-600">Session notes (optional)</label>
             <input
               value={sessionNotes}
               onChange={(e) => setSessionNotes(e.target.value)}
               placeholder="e.g. Year-end count, cycle count Aisle 2…"
               autoComplete="off"
-              className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:py-2 sm:text-sm"
+              className="min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-base focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 sm:min-h-0 sm:py-2 sm:text-sm"
             />
           </div>
 
@@ -974,9 +972,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           )}
 
           {loadingInv ? (
-            <div className="py-8 text-center text-sm text-gray-400">Loading inventory…</div>
+            <div className="py-8 text-center text-sm text-stone-400">Loading inventory…</div>
           ) : !outletId ? (
-            <p className="text-sm text-gray-500">Choose an outlet to load rows.</p>
+            <p className="text-sm text-stone-500">Choose an outlet to load rows.</p>
           ) : (countMode === 'sku' && !blindSupervisor ? skuGroups.length === 0 : visibleRows.length === 0) ? (
             <div className="space-y-1 text-sm text-amber-800">
               <p>
@@ -989,7 +987,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                     : 'No outlet inventory rows — receive stock before running a stock take.'}
               </p>
               {lockedOutletId && supervisorTab === 'ingredients' && supervisorRecipeCatalog.length > 0 ? (
-                <p className="text-xs text-gray-600">
+                <p className="text-xs text-stone-600">
                   Recipe catalog loaded ({supervisorRecipeCatalog.length} recipes); rows appear when hub supply creates ingredient lines.
                 </p>
               ) : null}
@@ -999,11 +997,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               {lockedOutletId ? (
                 <div className="space-y-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-gray-800">
+                    <h3 className="text-sm font-semibold text-stone-800">
                       {supervisorTab === 'ingredients' ? 'Ingredients' : 'Finished goods'}
                     </h3>
                     {supervisorTab === 'ingredients' && supervisorRecipeCatalog.length > 0 ? (
-                      <p className="mt-0.5 text-xs text-gray-500">
+                      <p className="mt-0.5 text-xs text-stone-500">
                         Recipe catalog loaded ({supervisorRecipeCatalog.length} recipes) — usage hints shown per line where known.
                       </p>
                     ) : null}
@@ -1012,29 +1010,29 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 </div>
               ) : countMode === 'sku' ? (
                 <div className="space-y-3">
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-stone-500">
                     Enter one counted total per SKU / ingredient. On post, quantities are allocated to lots FIFO by expiry.
                   </p>
-                  <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-gray-200 md:block">
+                  <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-stone-200 md:block">
                     <table className="w-full min-w-[520px] text-sm">
-                      <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
+                      <thead className="sticky top-0 z-10 border-b border-stone-200 bg-stone-50">
                         <tr>
-                          <th className="px-3 py-2 text-left font-semibold text-gray-700">SKU / ingredient</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Lots</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th>
-                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Remark</th>
+                          <th className="px-3 py-2 text-left font-semibold text-stone-700">SKU / ingredient</th>
+                          <th className="px-3 py-2 text-right font-semibold text-stone-700">Lots</th>
+                          <th className="px-3 py-2 text-right font-semibold text-stone-700">System QoH</th>
+                          <th className="px-3 py-2 text-right font-semibold text-stone-700">Counted</th>
+                          <th className="px-3 py-2 text-right font-semibold text-stone-700">Variance</th>
+                          <th className="px-3 py-2 text-left font-semibold text-stone-700">Remark</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-100">
+                      <tbody className="divide-y divide-stone-100">
                         {skuGroups.map((g) => {
                           const c = parseCount(skuCounted[g.key] ?? '');
                           const v = c === null ? null : c - g.system_qoh;
                           return (
-                            <tr key={g.key} className="hover:bg-gray-50">
-                              <td className="px-3 py-2 font-medium text-gray-900">{g.label}</td>
-                              <td className="px-3 py-2 text-right tabular-nums text-gray-600">{g.lots.length}</td>
+                            <tr key={g.key} className="hover:bg-stone-50">
+                              <td className="px-3 py-2 font-medium text-stone-900">{g.label}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-stone-600">{g.lots.length}</td>
                               <td className="px-3 py-2 text-right tabular-nums">{g.system_qoh}</td>
                               <td className="px-3 py-2 text-right">
                                 <input
@@ -1047,12 +1045,12 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                                     setSkuCounted((prev) => ({ ...prev, [g.key]: val }));
                                     setRecountPhase(false);
                                   }}
-                                  className="w-24 rounded border border-gray-300 px-2 py-1 text-right text-sm tabular-nums"
+                                  className="w-24 rounded border border-stone-300 px-2 py-1 text-right text-sm tabular-nums"
                                 />
                               </td>
                               <td
                                 className={`px-3 py-2 text-right tabular-nums ${
-                                  v != null && Math.abs(v) > varianceThreshold ? 'font-semibold text-amber-800' : 'text-gray-600'
+                                  v != null && Math.abs(v) > varianceThreshold ? 'font-semibold text-amber-800' : 'text-stone-600'
                                 }`}
                               >
                                 {v === null ? '—' : v}
@@ -1061,7 +1059,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                                 <input
                                   value={skuRemarks[g.key] ?? ''}
                                   onChange={(e) => setSkuRemarks((prev) => ({ ...prev, [g.key]: e.target.value }))}
-                                  className="w-full min-w-[6rem] rounded border border-gray-300 px-2 py-1 text-xs"
+                                  className="w-full min-w-[6rem] rounded border border-stone-300 px-2 py-1 text-xs"
                                   placeholder="Optional"
                                 />
                               </td>
@@ -1076,9 +1074,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       const c = parseCount(skuCounted[g.key] ?? '');
                       const v = c === null ? null : c - g.system_qoh;
                       return (
-                        <div key={g.key} className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
-                          <p className="font-medium text-gray-900">{g.label}</p>
-                          <p className="text-xs text-gray-500">
+                        <div key={g.key} className="panel p-3">
+                          <p className="font-medium text-stone-900">{g.label}</p>
+                          <p className="text-xs text-stone-500">
                             {g.lots.length} lot(s) · System {g.system_qoh}
                             {v != null ? ` · Var ${v}` : ''}
                           </p>
@@ -1091,7 +1089,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                               setSkuCounted((prev) => ({ ...prev, [g.key]: e.target.value }));
                               setRecountPhase(false);
                             }}
-                            className="mt-2 min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-right"
+                            className="mt-2 min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2 text-right"
                           />
                         </div>
                       );
@@ -1100,7 +1098,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-stone-500">
                     One row per lot, sorted by expiry then lot (FEFO). When In stock is on, only visible lines are posted.
                   </p>
                   {renderTableShell(visibleRows, false)}
@@ -1115,8 +1113,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                   </p>
                   {linesNeedingRecount().map((n) => (
                     <div key={n.key} className="flex flex-wrap items-center gap-2 text-sm">
-                      <span className="min-w-[8rem] flex-1 font-medium text-gray-800">{n.label}</span>
-                      <span className="text-xs text-gray-500">First: {n.first}</span>
+                      <span className="min-w-[8rem] flex-1 font-medium text-stone-800">{n.label}</span>
+                      <span className="text-xs text-stone-500">First: {n.first}</span>
                       <input
                         type="number"
                         min={0}
@@ -1160,7 +1158,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           )}
         </div>
 
-        <div className="space-y-3 rounded-xl border border-stone-200 bg-white p-4 sm:p-5">
+        <div className="panel space-y-3 p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-stone-800">Recent sessions</h2>
             {loadingSessions && <span className="text-xs text-stone-400">Loading…</span>}

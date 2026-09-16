@@ -113,10 +113,10 @@ export function Register() {
           <p className="mt-1 text-sm text-stone-500">Join Quackmaster ERP</p>
         </div>
 
-        <div className="rounded-2xl border border-stone-200 bg-white p-8 ">
+        <div className="rounded-2xl border border-stone-200 bg-white p-8">
           {submitted ? (
             <div className="space-y-4">
-              <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">
+              <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
                 <p className="font-medium mb-1">Registration submitted!</p>
                 <p>Your account is pending admin approval. You'll receive an email once your request is reviewed.</p>
               </div>

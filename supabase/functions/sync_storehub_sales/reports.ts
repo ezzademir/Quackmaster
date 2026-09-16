@@ -121,11 +121,11 @@ function splitJournalMaps(
 
 const SPLIT_SOLD_COLUMNS = [
   { key: "label", label: "Row" },
-  { key: "posQty", label: "SHPOS sold" },
-  { key: "posRm", label: "SHPOS RM" },
-  { key: "dashStorehubQty", label: "QMERP sold (StoreHub)" },
-  { key: "dashManualQty", label: "QMERP sold (manual)" },
-  { key: "dashQty", label: "QMERP sold (all)" },
+  { key: "posQty", label: "POS sold" },
+  { key: "posRm", label: "POS RM" },
+  { key: "dashStorehubQty", label: "Outlet sold (StoreHub)" },
+  { key: "dashManualQty", label: "Outlet sold (manual)" },
+  { key: "dashQty", label: "Outlet sold (all)" },
   { key: "status", label: "Status" },
 ];
 
@@ -315,9 +315,9 @@ function finish(rows: ReportRow[], extra: Partial<ReportResult> & Pick<ReportRes
     error: extra.error ?? null,
     columns: extra.columns ?? [
       { key: "label", label: "Row" },
-      { key: "posQty", label: "POS qty" },
+      { key: "posQty", label: "POS sold" },
       { key: "posRm", label: "POS RM" },
-      { key: "dashQty", label: "QMERP qty" },
+      { key: "dashQty", label: "Outlet sold" },
       { key: "status", label: "Status" },
     ],
     rows,
@@ -351,7 +351,7 @@ function mergeKeys(
     if (posOnly) {
       status = "pos_only";
     } else if (split) {
-      // Match SHPOS to StoreHub-ingested only (manual never closes a gap).
+      // Match POS to StoreHub-ingested only (manual never closes a gap).
       const posQty = havePos ? p!.qty : 0;
       const shQty = sh ?? 0;
       if (!havePos) {
@@ -839,8 +839,8 @@ async function soldVsSuppliedReport(opts: {
     .sort((a, b) => b[1] - a[1])
     .map(([name, qty]) => `${name} ${qty.toLocaleString()}`);
   const noticeParts = [
-    "QMERP supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
-    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare SHPOS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
+    "Outlet supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
+    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare POS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
     "Lots are ERP-only; StoreHub tickets have no batch numbers.",
     "On a multi-day period, expand a product to see which Malaysia days differ. Daily leftover is that day's dispatch minus that day's sold — not on-hand stock.",
   ];
@@ -852,8 +852,8 @@ async function soldVsSuppliedReport(opts: {
   if (unmappedParts.length) {
     noticeParts.push(
       opts.storeScoped
-        ? `Also dispatched to unmapped outlets (no SHPOS): ${unmappedParts.join(" · ")}.`
-        : `Includes outlets with no StoreHub map: ${unmappedParts.join(" · ")}. Those have QMERP dispatch but no SHPOS tickets.`,
+        ? `Also dispatched to unmapped outlets (no POS): ${unmappedParts.join(" · ")}.`
+        : `Includes outlets with no StoreHub map: ${unmappedParts.join(" · ")}. Those have Outlet dispatch but no POS tickets.`,
     );
   }
 
@@ -865,11 +865,11 @@ async function soldVsSuppliedReport(opts: {
     notice: noticeParts.join(" "),
     columns: [
       { key: "label", label: "Product" },
-      { key: "posQty", label: "SHPOS sold" },
-      { key: "dashStorehubQty", label: "QMERP sold (StoreHub)" },
-      { key: "dashManualQty", label: "QMERP sold (manual)" },
-      { key: "dashQty", label: "QMERP sold (all)" },
-      { key: "suppliedQty", label: "QMERP supplied" },
+      { key: "posQty", label: "POS sold" },
+      { key: "dashStorehubQty", label: "Outlet sold (StoreHub)" },
+      { key: "dashManualQty", label: "Outlet sold (manual)" },
+      { key: "dashQty", label: "Outlet sold (all)" },
+      { key: "suppliedQty", label: "Outlet supplied" },
       { key: "leftoverQty", label: "Leftover" },
       { key: "posVsSold", label: "POS vs StoreHub sold" },
       { key: "status", label: "Status" },
@@ -1016,7 +1016,7 @@ export async function handleReport(opts: {
         : SPLIT_SOLD_COLUMNS,
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
-        : "SHPOS sold = completed POS tickets (MY calendar; cancels & returns out). QMERP sold (StoreHub) = journals with source=storehub. QMERP sold (manual) = null/manual/other. QMERP sold (all) = both — so TTDI-style 923 vs 1498 is explained by the manual column. Match status compares SHPOS to StoreHub-ingested only.",
+        : "POS sold = completed POS tickets (MY calendar; cancels & returns out). Outlet sold (StoreHub) = journals with source=storehub. Outlet sold (manual) = null/manual/other. Outlet sold (all) = both — so TTDI-style 923 vs 1498 is explained by the manual column. Match status compares POS to StoreHub-ingested only.",
     });
   }
 
@@ -1100,7 +1100,7 @@ export async function handleReport(opts: {
       posOnly: false,
       notice:
         report === "sales_by_category"
-          ? "Category comes from the StoreHub catalog. QMERP qty is posted outlet sales rolled up by recipe SKU."
+          ? "Category comes from the StoreHub catalog. Outlet sold is posted outlet sales rolled up by recipe SKU."
           : "Both sides are recipe SKU (e.g. QUACKTEOW). Map StoreHub products in Settings. Add-ons stay missing until they are sold as an Outlet sales SKU.",
     });
   }
@@ -1264,7 +1264,7 @@ export async function handleReport(opts: {
         rows.length > 500
           ? `Showing first 500 of ${rows.length} rows. Narrow the date range.`
           : report === "returns"
-          ? "QMERP column is whether a return was flagged for review (qty stays 0 until FIFO reverse exists)."
+          ? "Outlet Sales column is whether a return was flagged for review (qty stays 0 until FIFO reverse exists)."
           : "Match is on StoreHub refId = sales journal idempotency key. Qty is units on the ticket vs journal lines.",
     });
   }

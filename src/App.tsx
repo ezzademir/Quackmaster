@@ -110,7 +110,7 @@ function LayoutShell() {
 function ProfileLoadError({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="flex min-h-dvh h-dvh max-h-dvh items-center justify-center overflow-y-auto bg-stone-50 auth-safe-padding">
-      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 shadow-sm text-center">
+      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 text-center">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 text-xl font-bold text-white">
           Q
         </div>
@@ -122,7 +122,7 @@ function ProfileLoadError({ onSignOut }: { onSignOut: () => void }) {
         <button
           type="button"
           onClick={onSignOut}
-          className="w-full rounded-lg border border-gray-200 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          className="btn-secondary w-full"
         >
           Sign out
         </button>

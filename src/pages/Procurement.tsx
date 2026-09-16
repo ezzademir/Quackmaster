@@ -29,13 +29,13 @@ interface SupplierScoreRow {
 // ---- Helpers ----
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    draft: 'bg-gray-100 text-gray-700',
+    draft: 'bg-stone-100 text-stone-700',
     ordered: 'bg-blue-100 text-blue-700',
     partial: 'bg-amber-100 text-amber-700',
     received: 'bg-emerald-100 text-emerald-700',
   };
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[status] ?? 'bg-gray-100 text-gray-700'}`}>
+    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[status] ?? 'bg-stone-100 text-stone-700'}`}>
       {status}
     </span>
   );
@@ -181,12 +181,12 @@ function SupplierModal({
 
   const field = (label: string, key: keyof typeof form, type = 'text') => (
     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
+      <label className="mb-1 block text-sm font-medium text-stone-700">{label}</label>
       <input
         type={type}
         value={form[key]}
         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
       />
     </div>
   );
@@ -204,25 +204,25 @@ function SupplierModal({
         {field('Country', 'country')}
         {field('Payment Terms', 'payment_terms')}
         <div className="sm:col-span-2">
-          <label className="mb-2 block text-sm font-medium text-gray-700">Raw materials this supplier sells</label>
-          <p className="mb-2 text-xs text-gray-500">
+          <label className="mb-2 block text-sm font-medium text-stone-700">Raw materials this supplier sells</label>
+          <p className="mb-2 text-xs text-stone-500">
             Only checked materials appear when creating a purchase order for this supplier.
           </p>
-          <div className="max-h-52 space-y-1.5 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+          <div className="max-h-52 space-y-1.5 overflow-y-auto rounded-lg border border-stone-200 bg-stone-50/60 p-3">
             {sortedMaterials.length === 0 ? (
-              <p className="text-sm text-gray-400">No raw materials defined yet — add them under Raw Materials.</p>
+              <p className="text-sm text-stone-400">No raw materials defined yet — add them under Raw Materials.</p>
             ) : (
               sortedMaterials.map((m) => (
                 <label key={m.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-white">
                   <input
                     type="checkbox"
-                    className="rounded border-gray-300"
+                    className="rounded border-stone-300"
                     checked={selectedMaterialIds.has(m.id)}
                     onChange={() => toggleMaterialLink(m.id)}
                   />
                   <span>
-                    <span className="font-medium text-gray-900">{m.name}</span>{' '}
-                    <span className="text-gray-500">({m.unit_of_measure})</span>
+                    <span className="font-medium text-stone-900">{m.name}</span>{' '}
+                    <span className="text-stone-500">({m.unit_of_measure})</span>
                   </span>
                 </label>
               ))
@@ -252,9 +252,9 @@ function SupplierModal({
           )}
         </div>
         <div className="flex gap-3">
-          <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+          <Button variant="secondary" onClick={onClose}>
             Cancel
-          </button>
+          </Button>
           <button onClick={handleSave} disabled={saving || deleting} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -349,31 +349,31 @@ function MaterialModal({
       {error && <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="space-y-4">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Name *</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Name *</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Description</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Description</label>
           <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
         </div>
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Unit *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Unit *</label>
             <input value={form.unit_of_measure} onChange={(e) => setForm({ ...form, unit_of_measure: e.target.value })}
               placeholder="kg, L, pcs…"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Cost Price (MYR)</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Cost Price (MYR)</label>
             <input type="number" min="0" step="0.01" value={form.cost_price} onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Reorder Level</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Reorder Level</label>
             <input type="number" min="0" step="0.01" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
         </div>
       </div>
@@ -399,7 +399,7 @@ function MaterialModal({
           )}
         </div>
         <div className="flex gap-3">
-          <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <button onClick={handleSave} disabled={saving || deleting} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -702,7 +702,7 @@ function NewPOModal({
       <div className="space-y-5">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Supplier *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Supplier *</label>
             <select
               value={supplier_id}
               onChange={(e) => {
@@ -718,7 +718,7 @@ function NewPOModal({
                   }),
                 );
               }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             >
               <option value="">Select supplier…</option>
               {suppliers.map((s) => (
@@ -733,48 +733,48 @@ function NewPOModal({
                   No linked materials for this supplier. Use Purchase Orders → Suppliers → Manage supplier and tick raw materials before ordering.
                 </p>
               ) : (
-                <p className="mt-2 text-xs text-gray-500">
+                <p className="mt-2 text-xs text-stone-500">
                   {catalogMaterials.length} material{catalogMaterials.length !== 1 ? 's' : ''} linked to this supplier.
                 </p>
               )
             ) : null}
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Order Date</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Order Date</label>
             <input type="date" value={order_date} onChange={(e) => setOrderDate(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Expected Delivery</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Expected Delivery</label>
             <input type="date" value={expected_delivery_date} onChange={(e) => setExpectedDelivery(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>
             <input value={notes} onChange={(e) => setNotes(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
         </div>
 
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Line Items</h3>
+            <h3 className="text-sm font-semibold text-stone-900">Line Items</h3>
             <button onClick={addLine} className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800">
               <Plus size={14} /> Add Line
             </button>
           </div>
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <div className="overflow-x-auto rounded-lg border border-stone-200">
             <table className="w-full text-sm">
-              <thead className="border-b border-gray-200 bg-gray-50">
+              <thead className="border-b border-stone-200 bg-stone-50">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Material</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Unit Price (MYR)</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Total</th>
+                  <th className="px-3 py-2 text-left font-semibold text-stone-700">Material</th>
+                  <th className="px-3 py-2 text-right font-semibold text-stone-700">Qty</th>
+                  <th className="px-3 py-2 text-right font-semibold text-stone-700">Unit Price (MYR)</th>
+                  <th className="px-3 py-2 text-right font-semibold text-stone-700">Total</th>
                   <th className="w-8 px-2 py-2" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-stone-100">
                 {lines.map((line, i) => (
                   <tr key={i}>
                     <td className="px-3 py-2">
@@ -782,7 +782,7 @@ function NewPOModal({
                         value={line.raw_material_id}
                         onChange={(e) => updateLine(i, 'raw_material_id', e.target.value)}
                         disabled={!supplier_id}
-                        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none disabled:bg-gray-100"
+                        className="w-full rounded border border-stone-300 px-2 py-1.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 disabled:bg-stone-100"
                       >
                         <option value="">
                           {!supplier_id ? 'Choose supplier first' : catalogMaterials.length === 0 ? 'No materials linked' : 'Select…'}
@@ -796,27 +796,27 @@ function NewPOModal({
                     </td>
                     <td className="px-3 py-2">
                       <input type="number" min="0" step="0.01" value={line.quantity_ordered} onChange={(e) => updateLine(i, 'quantity_ordered', e.target.value)}
-                        className="w-24 rounded border border-gray-300 px-2 py-1.5 text-right text-sm focus:border-blue-500 focus:outline-none" />
+                        className="w-24 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
                     <td className="px-3 py-2">
                       <input type="number" min="0" step="0.01" value={line.unit_price} onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
-                        className="w-28 rounded border border-gray-300 px-2 py-1.5 text-right text-sm focus:border-blue-500 focus:outline-none" />
+                        className="w-28 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
-                    <td className="px-3 py-2 text-right font-medium text-gray-900">
+                    <td className="px-3 py-2 text-right font-medium text-stone-900">
                       {((parseFloat(line.quantity_ordered) || 0) * (parseFloat(line.unit_price) || 0)).toFixed(2)}
                     </td>
                     <td className="px-2 py-2">
-                      <button onClick={() => removeLine(i)} className="text-gray-300 hover:text-red-500 transition-colors">
+                      <button onClick={() => removeLine(i)} className="text-stone-300 hover:text-red-500 transition-colors">
                         <Trash2 size={14} />
                       </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
-              <tfoot className="border-t border-gray-200 bg-gray-50">
+              <tfoot className="border-t border-stone-200 bg-stone-50">
                 <tr>
-                  <td colSpan={3} className="px-3 py-2 text-right text-sm font-semibold text-gray-900">Total</td>
-                  <td className="px-3 py-2 text-right text-sm font-bold text-gray-900">MYR {total.toFixed(2)}</td>
+                  <td colSpan={3} className="px-3 py-2 text-right text-sm font-semibold text-stone-900">Total</td>
+                  <td className="px-3 py-2 text-right text-sm font-bold text-stone-900">MYR {total.toFixed(2)}</td>
                   <td />
                 </tr>
               </tfoot>
@@ -825,7 +825,7 @@ function NewPOModal({
         </div>
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <button
           type="button"
           onClick={handleSave}
@@ -982,43 +982,43 @@ function PODetailModal({
         </div>
       )}
       <div className="space-y-5">
-        <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-3">
-          <div><p className="text-xs text-gray-500">Supplier</p><p className="font-semibold text-gray-900">{po.supplier?.name ?? '—'}</p></div>
-          <div><p className="text-xs text-gray-500">Status</p><StatusBadge status={po.status} /></div>
-          <div><p className="text-xs text-gray-500">Order Date</p><p className="font-semibold text-gray-900">{new Date(po.order_date).toLocaleDateString()}</p></div>
-          <div><p className="text-xs text-gray-500">Expected Delivery</p><p className="font-semibold text-gray-900">{po.expected_delivery_date ? new Date(po.expected_delivery_date).toLocaleDateString() : '—'}</p></div>
-          <div><p className="text-xs text-gray-500">Total Amount</p><p className="font-semibold text-gray-900">MYR {po.total_amount?.toFixed(2) ?? '0.00'}</p></div>
-          {po.notes && <div className="sm:col-span-3"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{po.notes}</p></div>}
+        <div className="detail-meta sm:grid-cols-3">
+          <div><p className="text-xs text-stone-500">Supplier</p><p className="font-semibold text-stone-900">{po.supplier?.name ?? '—'}</p></div>
+          <div><p className="text-xs text-stone-500">Status</p><StatusBadge status={po.status} /></div>
+          <div><p className="text-xs text-stone-500">Order Date</p><p className="font-semibold text-stone-900">{new Date(po.order_date).toLocaleDateString()}</p></div>
+          <div><p className="text-xs text-stone-500">Expected Delivery</p><p className="font-semibold text-stone-900">{po.expected_delivery_date ? new Date(po.expected_delivery_date).toLocaleDateString() : '—'}</p></div>
+          <div><p className="text-xs text-stone-500">Total Amount</p><p className="font-semibold text-stone-900">MYR {po.total_amount?.toFixed(2) ?? '0.00'}</p></div>
+          {po.notes && <div className="sm:col-span-3"><p className="text-xs text-stone-500">Notes</p><p className="text-sm text-stone-900">{po.notes}</p></div>}
         </div>
 
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="w-full text-sm">
-            <thead className="border-b border-gray-200 bg-gray-50">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="px-4 py-2 text-left font-semibold text-gray-700">Material</th>
-                <th className="px-4 py-2 text-right font-semibold text-gray-700">Ordered</th>
-                <th className="px-4 py-2 text-right font-semibold text-gray-700">Received</th>
-                <th className="px-4 py-2 text-right font-semibold text-gray-700">Unit Price</th>
-                <th className="px-4 py-2 text-right font-semibold text-gray-700">Total</th>
+                <th>Material</th>
+                <th className="text-right">Ordered</th>
+                <th className="text-right">Received</th>
+                <th className="text-right">Unit Price</th>
+                <th className="text-right">Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {(po.items ?? []).map((item) => (
                 <tr key={item.id}>
-                  <td className="px-4 py-2 font-medium text-gray-900">{item.material?.name ?? '—'}<span className="ml-1 text-xs text-gray-400">({item.material?.unit_of_measure})</span></td>
-                  <td className="px-4 py-2 text-right text-gray-700">{item.quantity_ordered}</td>
-                  <td className="px-4 py-2 text-right">
+                  <td className="font-medium">{item.material?.name ?? '—'}<span className="ml-1 text-xs text-stone-400">({item.material?.unit_of_measure})</span></td>
+                  <td className="text-right">{item.quantity_ordered}</td>
+                  <td className="text-right">
                     {po.status !== 'received' ? (
                       <input type="number" min="0" max={item.quantity_ordered} step="0.01"
                         value={receivedQtys[item.id] ?? '0'}
                         onChange={(e) => setReceivedQtys({ ...receivedQtys, [item.id]: e.target.value })}
-                        className="w-20 rounded border border-gray-300 px-2 py-1 text-right text-sm focus:border-blue-500 focus:outline-none" />
+                        className="w-20 rounded border border-stone-300 px-2 py-1 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     ) : (
                       <span>{item.quantity_received}</span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-right text-gray-700">MYR {item.unit_price.toFixed(2)}</td>
-                  <td className="px-4 py-2 text-right font-medium text-gray-900">MYR {(item.line_total ?? item.quantity_ordered * item.unit_price).toFixed(2)}</td>
+                  <td className="text-right">MYR {item.unit_price.toFixed(2)}</td>
+                  <td className="text-right font-medium">MYR {(item.line_total ?? item.quantity_ordered * item.unit_price).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
@@ -1030,30 +1030,28 @@ function PODetailModal({
         <div className="flex flex-wrap gap-2">
           {po.status === 'draft' && (
             <button type="button" onClick={() => changeStatus('ordered')} disabled={saving}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors">
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60">
               Mark as Ordered
             </button>
           )}
           {(po.status === 'ordered' || po.status === 'partial') && (
             <button type="button" onClick={handleMarkReceived} disabled={saving}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors">
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-60">
               {saving ? 'Processing…' : 'Mark Received & Update Stock'}
             </button>
           )}
           {po.status === 'draft' && onEdit && (
-            <button type="button" onClick={onEdit} disabled={saving}
-              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors">
+            <Button type="button" variant="secondary" onClick={onEdit} disabled={saving}>
               Edit order
-            </button>
+            </Button>
           )}
           {purchaseOrderCanRemove(po) && onDelete && (
-            <button type="button" onClick={onDelete} disabled={saving}
-              className="rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors">
+            <Button type="button" variant="danger" onClick={onDelete} disabled={saving}>
               {purchaseOrderUseCancelRpc(po) ? 'Cancel & delete order' : 'Delete order'}
-            </button>
+            </Button>
           )}
         </div>
-        <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
+        <Button type="button" variant="secondary" onClick={onClose}>Close</Button>
       </div>
     </Modal>
   );
@@ -1334,7 +1332,7 @@ export function Procurement() {
       </div>
 
       {loading ? (
-        <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>
+        <div className="flex h-48 items-center justify-center text-stone-400 text-sm">Loading…</div>
       ) : (
         <>
           {/* Purchase Orders Tab */}
@@ -1454,30 +1452,30 @@ export function Procurement() {
           {tab === 'suppliers' && (
             <div className="space-y-6">
               {supplierScores.filter((s) => (s.completed_orders ?? 0) > 0).length > 0 && (
-                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-5 shadow-sm">
-                  <h2 className="mb-1 text-sm font-semibold text-gray-900">Supplier performance</h2>
-                  <p className="mb-4 text-xs text-gray-600">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-5">
+                  <h2 className="mb-1 text-sm font-semibold text-stone-900">Supplier performance</h2>
+                  <p className="mb-4 text-xs text-stone-600">
                     OTIF and fill-rate from completed or partial purchase order history.
                   </p>
-                  <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                  <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
                     <table className="w-full text-sm">
-                      <thead className="border-b border-gray-200 bg-gray-50">
+                      <thead className="border-b border-stone-200 bg-stone-50">
                         <tr>
-                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Supplier</th>
-                          <th className="px-4 py-3 text-right font-semibold text-gray-700">Completed POs</th>
-                          <th className="px-4 py-3 text-right font-semibold text-gray-700">OTIF rate</th>
-                          <th className="px-4 py-3 text-right font-semibold text-gray-700">Avg fill rate</th>
+                          <th className="px-4 py-3 text-left font-semibold text-stone-700">Supplier</th>
+                          <th className="px-4 py-3 text-right font-semibold text-stone-700">Completed POs</th>
+                          <th className="px-4 py-3 text-right font-semibold text-stone-700">OTIF rate</th>
+                          <th className="px-4 py-3 text-right font-semibold text-stone-700">Avg fill rate</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-100">
+                      <tbody className="divide-y divide-stone-100">
                         {supplierScores
                           .filter((s) => (s.completed_orders ?? 0) > 0)
                           .map((s) => {
                             const otif = s.otif_rate != null ? Number(s.otif_rate) : null;
                             const fill = s.avg_fill_rate != null ? Number(s.avg_fill_rate) : null;
                             return (
-                              <tr key={s.supplier_id} className="hover:bg-gray-50/80">
-                                <td className="px-4 py-3 font-medium text-gray-900">{s.supplier_name}</td>
+                              <tr key={s.supplier_id} className="hover:bg-stone-50/80">
+                                <td className="px-4 py-3 font-medium text-stone-900">{s.supplier_name}</td>
                                 <td className="px-4 py-3 text-right tabular-nums">{s.completed_orders ?? 0}</td>
                                 <td className="px-4 py-3 text-right tabular-nums">
                                   {otif != null && Number.isFinite(otif) ? `${(otif * 100).toFixed(0)}%` : '—'}
@@ -1493,29 +1491,29 @@ export function Procurement() {
                   </div>
                 </div>
               )}
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+            <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
               <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
+                <thead className="border-b border-stone-200 bg-stone-50">
                   <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Name</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Contact</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Email</th>
-                    <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Phone</th>
-                    <th className="hidden xl:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Payment Terms</th>
-                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Name</th>
+                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Contact</th>
+                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Email</th>
+                    <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Phone</th>
+                    <th className="hidden xl:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Payment Terms</th>
+                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-stone-100">
                   {suppliers.length === 0 ? (
-                    <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-400">No suppliers yet</td></tr>
+                    <tr><td colSpan={6} className="px-6 py-12 text-center text-stone-400">No suppliers yet</td></tr>
                   ) : (
                     suppliers.map((s) => (
-                      <tr key={s.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-sm">{s.name}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.contact_person ?? '—'}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.email ?? '—'}</td>
-                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.phone ?? '—'}</td>
-                        <td className="hidden xl:table-cell px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{s.payment_terms ?? '—'}</td>
+                      <tr key={s.id} className="hover:bg-stone-50 transition-colors">
+                        <td className="px-4 md:px-6 py-4 font-medium text-stone-900 text-sm">{s.name}</td>
+                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.contact_person ?? '—'}</td>
+                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.email ?? '—'}</td>
+                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.phone ?? '—'}</td>
+                        <td className="hidden xl:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.payment_terms ?? '—'}</td>
                         <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
                           <button
                             type="button"
@@ -1539,34 +1537,34 @@ export function Procurement() {
 
           {/* Raw Materials Tab */}
           {tab === 'materials' && (
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+            <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
               <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
+                <thead className="border-b border-stone-200 bg-stone-50">
                   <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Name</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Unit</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Cost Price</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Reorder</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Description</th>
-                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actions</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Name</th>
+                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Unit</th>
+                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Cost Price</th>
+                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Reorder</th>
+                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Description</th>
+                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-stone-100">
                   {materials.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="px-4 md:px-6 py-12 text-center">
-                        <PackagePlus className="mx-auto mb-3 text-gray-300" size={40} />
-                        <p className="text-gray-400">No raw materials yet</p>
+                        <PackagePlus className="mx-auto mb-3 text-stone-300" size={40} />
+                        <p className="text-stone-400">No raw materials yet</p>
                       </td>
                     </tr>
                   ) : (
                     materials.map((m) => (
-                      <tr key={m.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-sm">{m.name}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-600 text-xs sm:text-sm">{m.unit_of_measure}</td>
-                        <td className="px-4 md:px-6 py-4 text-right text-gray-900 text-xs sm:text-sm">MYR {m.cost_price != null ? m.cost_price.toFixed(2) : '—'}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-600 text-xs sm:text-sm">{m.reorder_level ?? 10}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm max-w-xs truncate">{m.description ?? '—'}</td>
+                      <tr key={m.id} className="hover:bg-stone-50 transition-colors">
+                        <td className="px-4 md:px-6 py-4 font-medium text-stone-900 text-sm">{m.name}</td>
+                        <td className="px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{m.unit_of_measure}</td>
+                        <td className="px-4 md:px-6 py-4 text-right text-stone-900 text-xs sm:text-sm">MYR {m.cost_price != null ? m.cost_price.toFixed(2) : '—'}</td>
+                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-stone-600 text-xs sm:text-sm">{m.reorder_level ?? 10}</td>
+                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-stone-500 text-xs sm:text-sm max-w-xs truncate">{m.description ?? '—'}</td>
                         <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
                           <button
                             type="button"

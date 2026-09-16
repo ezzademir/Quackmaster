@@ -72,7 +72,7 @@ export function PendingApproval() {
 
   return (
     <div className="mobile-auth-shell">
-      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8  text-center">
+      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 text-center">
         <img src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`} alt="Quackmaster" className="mx-auto mb-6 h-16 w-16" />
 
         <h1 className="text-2xl font-bold text-stone-900 mb-2">Awaiting Approval</h1>
@@ -134,7 +134,7 @@ export function PendingApproval() {
 
         <button
           onClick={handleSignOut}
-          className="w-full flex items-center justify-center gap-2 rounded-lg bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-200 transition-colors"
+          className="btn-secondary w-full"
         >
           <LogOut size={16} />
           Sign Out

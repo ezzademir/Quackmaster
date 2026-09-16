@@ -106,9 +106,9 @@ function OutletModal({
 
   const field = (label: string, key: keyof typeof form, type = 'text') => (
     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
+      <label className="mb-1 block text-sm font-medium text-stone-700">{label}</label>
       <input type={type} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+        className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
     </div>
   );
 
@@ -121,15 +121,15 @@ function OutletModal({
         {field('Address', 'address')}
         {field('City', 'city')}
         {field('Country', 'country')}
-        <div className="sm:col-span-2 border-t border-gray-100 pt-4">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">Manager Info</p>
+        <div className="sm:col-span-2 border-t border-stone-100 pt-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-stone-400">Manager Info</p>
         </div>
         {field('Manager Name', 'manager_name')}
         {field('Manager Phone', 'manager_phone')}
         {field('Manager Email', 'manager_email', 'email')}
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <button onClick={handleSave} disabled={saving} className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-60 transition-colors">
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -300,9 +300,9 @@ function NewSupplyOrderModal({
           Hub product stock available: <strong>{hubProductQty} units</strong>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Outlet *</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Outlet *</label>
           <select value={outlet_id} onChange={(e) => setOutletId(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20">
             <option value="">Select outlet…</option>
             {outlets.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.location_code})</option>)}
           </select>
@@ -329,24 +329,24 @@ function NewSupplyOrderModal({
           )}
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Supply date *</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Supply date *</label>
           <input type="date" value={supply_date} onChange={(e) => setSupplyDate(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-          <p className="mt-1 text-xs text-gray-500">Shown in the supply orders list; unchanged when the order is later dispatched.</p>
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
+          <p className="mt-1 text-xs text-stone-500">Shown in the supply orders list; unchanged when the order is later dispatched.</p>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Quantity *</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Quantity *</label>
           <input type="number" min="0" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           {allocationPreview != null && allocationPreview.length > 0 && (
-            <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">FEFO allocation preview</p>
-              <p className="mt-1 text-xs text-gray-500">Uses hub batches sorted by expiry date first (FEFO), then oldest last_updated.</p>
+            <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">FEFO allocation preview</p>
+              <p className="mt-1 text-xs text-stone-500">Uses hub batches sorted by expiry date first (FEFO), then oldest last_updated.</p>
               <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm">
                 {allocationPreview.map((line, i) => (
-                  <li key={`${line.hubInventoryId}-${i}`} className="flex justify-between gap-3 border-b border-gray-100 pb-1 text-gray-700 last:border-0">
+                  <li key={`${line.hubInventoryId}-${i}`} className="flex justify-between gap-3 border-b border-stone-100 pb-1 text-stone-700 last:border-0">
                     <span className="truncate font-medium">{line.lot_label || line.product_batch}</span>
-                    <span className="flex-shrink-0 font-semibold tabular-nums text-gray-900">{line.quantity}</span>
+                    <span className="flex-shrink-0 font-semibold tabular-nums text-stone-900">{line.quantity}</span>
                   </li>
                 ))}
               </ul>
@@ -359,13 +359,13 @@ function NewSupplyOrderModal({
           )}
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
         </div>
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <button onClick={handleSave} disabled={saving} className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-60 transition-colors">
           {saving ? 'Processing…' : 'Create Order'}
         </button>
@@ -477,14 +477,14 @@ function NewRawMaterialSupplyModal({
           finished-goods supply orders.
         </div>
         {!anyRmStock && (
-          <p className="text-sm text-gray-600">No raw material stock recorded at hub. Receive purchases or adjust hub inventory first.</p>
+          <p className="text-sm text-stone-600">No raw material stock recorded at hub. Receive purchases or adjust hub inventory first.</p>
         )}
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Outlet *</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Outlet *</label>
           <select
             value={outlet_id}
             onChange={(e) => setOutletId(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
           >
             <option value="">Select outlet…</option>
             {outlets.map((o) => (
@@ -495,26 +495,26 @@ function NewRawMaterialSupplyModal({
           </select>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Supply date *</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Supply date *</label>
           <input
             type="date"
             value={supply_date}
             onChange={(e) => setSupplyDate(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Quantities</label>
-          <p className="mb-2 text-xs text-gray-500">Enter quantity to ship per hub ingredient row (only non-zero rows are included).</p>
-          <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-gray-200">
+          <label className="mb-1 block text-sm font-medium text-stone-700">Quantities</label>
+          <p className="mb-2 text-xs text-stone-500">Enter quantity to ship per hub ingredient row (only non-zero rows are included).</p>
+          <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-stone-200">
             {hubRmLines.length === 0 ? (
-              <p className="p-4 text-sm text-gray-500">No hub ingredient rows.</p>
+              <p className="p-4 text-sm text-stone-500">No hub ingredient rows.</p>
             ) : (
               hubRmLines.map((line) => (
-                <div key={line.id} className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-2 last:border-0">
+                <div key={line.id} className="flex flex-wrap items-center gap-2 border-b border-stone-100 px-3 py-2 last:border-0">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-900">{line.label}</p>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-sm font-medium text-stone-900">{line.label}</p>
+                    <p className="text-xs text-stone-500">
                       Hub avail {line.available.toFixed(2)} {line.unit || ''}
                     </p>
                   </div>
@@ -526,7 +526,7 @@ function NewRawMaterialSupplyModal({
                     value={qtyByHubId[line.id] ?? ''}
                     disabled={line.available <= 1e-9}
                     onChange={(e) => setQtyByHubId((p) => ({ ...p, [line.id]: e.target.value }))}
-                    className="w-28 rounded-lg border border-gray-300 px-2 py-1 text-sm tabular-nums disabled:opacity-50"
+                    className="w-28 rounded-lg border border-stone-300 px-2 py-1 text-sm tabular-nums disabled:opacity-50"
                   />
                 </div>
               ))
@@ -534,22 +534,22 @@ function NewRawMaterialSupplyModal({
           </div>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
           />
         </div>
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button
+        <Button
           onClick={onClose}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          variant="secondary"
         >
           Cancel
-        </button>
+        </Button>
         <button
           onClick={() => void handleSave()}
           disabled={saving || !anyRmStock}
@@ -696,32 +696,32 @@ function SODetailModal({
   return (
     <Modal isOpen onClose={onClose} title={`Supply Order: ${so.supply_order_number}`} size="md">
       <div className="space-y-4">
-        <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
-          <div><p className="text-xs text-gray-500">Outlet</p><p className="font-semibold text-gray-900">{so.outlet?.name ?? '—'}</p></div>
-          <div><p className="text-xs text-gray-500">Location</p><p className="font-semibold text-gray-900">{so.outlet?.location_code ?? '—'}</p></div>
-          <div><p className="text-xs text-gray-500">Status</p><StatusBadge status={so.status} /></div>
-          <div><p className="text-xs text-gray-500">Quantity</p><p className="font-semibold text-gray-900">{so.total_quantity} units</p></div>
-          <div><p className="text-xs text-gray-500">Supply date</p><p className="font-semibold text-gray-900">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</p></div>
-          <div><p className="text-xs text-gray-500">Dispatched on</p><p className="font-semibold text-gray-900">{showDispatchedOn ? formatSupplyCalendarDate(so.dispatch_date) : '—'}</p></div>
-          {so.received_date && <div><p className="text-xs text-gray-500">Received date</p><p className="font-semibold text-gray-900">{formatSupplyCalendarDate(so.received_date)}</p></div>}
-          {so.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{so.notes}</p></div>}
+        <div className="detail-meta sm:grid-cols-2">
+          <div><p className="text-xs text-stone-500">Outlet</p><p className="font-semibold text-stone-900">{so.outlet?.name ?? '—'}</p></div>
+          <div><p className="text-xs text-stone-500">Location</p><p className="font-semibold text-stone-900">{so.outlet?.location_code ?? '—'}</p></div>
+          <div><p className="text-xs text-stone-500">Status</p><StatusBadge status={so.status} /></div>
+          <div><p className="text-xs text-stone-500">Quantity</p><p className="font-semibold text-stone-900">{so.total_quantity} units</p></div>
+          <div><p className="text-xs text-stone-500">Supply date</p><p className="font-semibold text-stone-900">{formatSupplyCalendarDate(so.supply_date ?? so.dispatch_date)}</p></div>
+          <div><p className="text-xs text-stone-500">Dispatched on</p><p className="font-semibold text-stone-900">{showDispatchedOn ? formatSupplyCalendarDate(so.dispatch_date) : '—'}</p></div>
+          {so.received_date && <div><p className="text-xs text-stone-500">Received date</p><p className="font-semibold text-stone-900">{formatSupplyCalendarDate(so.received_date)}</p></div>}
+          {so.notes && <div className="sm:col-span-2"><p className="text-xs text-stone-500">Notes</p><p className="text-sm text-stone-900">{so.notes}</p></div>}
         </div>
         {lines.length > 0 && (
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="w-full text-sm">
-              <thead className="border-b border-gray-200 bg-white">
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Lot</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty</th>
+                  <th>Lot</th>
+                  <th className="text-right">Qty</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody>
                 {lines.map((ln) => (
                   <tr key={ln.id}>
-                    <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-900">
+                    <td className="font-mono text-xs font-semibold">
                       {ln.lot_label || ln.product_batch || '—'}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">{ln.quantity.toLocaleString()}</td>
+                    <td className="text-right tabular-nums">{ln.quantity.toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -730,13 +730,13 @@ function SODetailModal({
         )}
         {isPending && (
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-600">Cancellation reason (optional)</label>
+            <label className="mb-1 block text-xs font-medium text-stone-600">Cancellation reason (optional)</label>
             <input
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
               placeholder="e.g. Outlet requested hold, wrong batch selected…"
               disabled={saving}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             />
           </div>
         )}
@@ -744,9 +744,9 @@ function SODetailModal({
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex max-w-full flex-col gap-2">
           {canHardDelete && isPending && (
-            <p className="text-xs text-gray-500 max-w-prose">
-              Prefer <span className="font-medium text-gray-700">Cancel order</span> to keep a cancelled record with history;{' '}
-              <span className="font-medium text-gray-700">Delete order</span> removes the row entirely (admin).
+            <p className="max-w-prose text-xs text-stone-500">
+              Prefer <span className="font-medium text-stone-700">Cancel order</span> to keep a cancelled record with history;{' '}
+              <span className="font-medium text-stone-700">Delete order</span> removes the row entirely (admin).
             </p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -755,36 +755,36 @@ function SODetailModal({
               type="button"
               onClick={() => void askAdminDelete()}
               disabled={saving}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60 transition-colors"
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
             >
               {saving ? 'Deleting…' : 'Delete order'}
             </button>
           )}
           {isPending && (
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => void askCancelOrder()}
               disabled={saving}
-              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-60 transition-colors"
             >
               {saving ? 'Cancelling…' : 'Cancel order'}
-            </button>
+            </Button>
           )}
           {isPending && (
             <button onClick={markDispatched} disabled={saving}
-              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60 transition-colors">
+              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-60">
               {saving ? 'Dispatching…' : 'Dispatch'}
             </button>
           )}
           {so.status === 'dispatched' && (
             <button onClick={markReceived} disabled={saving}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors">
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-60">
               {saving ? 'Saving…' : 'Mark as Received by Outlet'}
             </button>
           )}
           </div>
         </div>
-        <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
+        <Button type="button" variant="secondary" onClick={onClose}>Close</Button>
       </div>
     </Modal>
   );
@@ -910,14 +910,14 @@ function NewOutletTransferModal({
       <div className="space-y-4">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">From outlet *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">From outlet *</label>
             <select
               value={from_outlet_id}
               onChange={(e) => {
                 setFromOutletId(e.target.value);
                 setRows([{ outletInventoryId: '', qtyStr: '' }]);
               }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             >
               <option value="">Select…</option>
               {outlets.map((o) => (
@@ -928,11 +928,11 @@ function NewOutletTransferModal({
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">To outlet *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">To outlet *</label>
             <select
               value={to_outlet_id}
               onChange={(e) => setToOutletId(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             >
               <option value="">Select…</option>
               {outlets.map((o) =>
@@ -946,12 +946,12 @@ function NewOutletTransferModal({
           </div>
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Lines *</label>
-          <p className="mb-2 text-xs text-gray-500">
+          <label className="mb-1 block text-sm font-medium text-stone-700">Lines *</label>
+          <p className="mb-2 text-xs text-stone-500">
             Pick source inventory rows at the from outlet; quantity cannot exceed available (on hand minus reserved).
           </p>
           {!from_outlet_id ? (
-            <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-6 text-center text-sm text-gray-500">
+            <p className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-6 text-center text-sm text-stone-500">
               Choose a source outlet to load batches.
             </p>
           ) : invRows.length === 0 ? (
@@ -969,7 +969,7 @@ function NewOutletTransferModal({
                       next[idx] = { ...next[idx], outletInventoryId: e.target.value };
                       setRows(next);
                     }}
-                    className="min-w-[12rem] flex-1 rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    className="min-w-[12rem] flex-1 rounded-lg border border-stone-300 px-2 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
                   >
                     <option value="">Lot…</option>
                     {invRows.map((r) => {
@@ -998,13 +998,13 @@ function NewOutletTransferModal({
                       next[idx] = { ...next[idx], qtyStr: e.target.value };
                       setRows(next);
                     }}
-                    className="w-28 rounded-lg border border-gray-300 px-2 py-2 text-right text-sm focus:border-blue-500 focus:outline-none"
+                    className="w-28 rounded-lg border border-stone-300 px-2 py-2 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
                   />
                   {rows.length > 1 && (
                     <button
                       type="button"
                       onClick={() => setRows(rows.filter((_, i) => i !== idx))}
-                      className="rounded-lg border border-gray-200 px-2 py-2 text-xs text-red-600 hover:bg-red-50"
+                      className="rounded-lg border border-stone-200 px-2 py-2 text-xs text-red-600 hover:bg-red-50"
                     >
                       Remove
                     </button>
@@ -1022,23 +1022,23 @@ function NewOutletTransferModal({
           )}
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+          <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
           />
         </div>
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button
+        <Button
           type="button"
+          variant="secondary"
           onClick={onClose}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
         >
           Cancel
-        </button>
+        </Button>
         <button
           type="button"
           onClick={() => void handleSave()}
@@ -1171,64 +1171,64 @@ function TransferDetailModal({
     <Modal isOpen onClose={onClose} title={`Transfer: ${transfer.transfer_number}`} size="xl">
       {loadErr && <p className="mb-3 text-sm text-red-600">{loadErr}</p>}
       <div className="space-y-4">
-        <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
+        <div className="detail-meta sm:grid-cols-2">
           <div>
-            <p className="text-xs text-gray-500">From</p>
-            <p className="font-semibold text-gray-900">{transfer.from_outlet?.name ?? '—'}</p>
+            <p className="text-xs text-stone-500">From</p>
+            <p className="font-semibold text-stone-900">{transfer.from_outlet?.name ?? '—'}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-500">To</p>
-            <p className="font-semibold text-gray-900">{transfer.to_outlet?.name ?? '—'}</p>
+            <p className="text-xs text-stone-500">To</p>
+            <p className="font-semibold text-stone-900">{transfer.to_outlet?.name ?? '—'}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-500">Status</p>
+            <p className="text-xs text-stone-500">Status</p>
             <StatusBadge status={transfer.status} />
           </div>
           <div>
-            <p className="text-xs text-gray-500">Total qty</p>
-            <p className="font-semibold text-gray-900">{Number(transfer.total_quantity ?? 0).toLocaleString()}</p>
+            <p className="text-xs text-stone-500">Total qty</p>
+            <p className="font-semibold text-stone-900">{Number(transfer.total_quantity ?? 0).toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-500">Dispatched</p>
-            <p className="font-semibold text-gray-900">
+            <p className="text-xs text-stone-500">Dispatched</p>
+            <p className="font-semibold text-stone-900">
               {showDispatchDate ? formatSupplyCalendarDate(transfer.dispatch_date) : '—'}
             </p>
           </div>
           <div>
-            <p className="text-xs text-gray-500">Received</p>
-            <p className="font-semibold text-gray-900">
+            <p className="text-xs text-stone-500">Received</p>
+            <p className="font-semibold text-stone-900">
               {transfer.received_date ? formatSupplyCalendarDate(transfer.received_date) : '—'}
             </p>
           </div>
           {transfer.notes && (
             <div className="sm:col-span-2">
-              <p className="text-xs text-gray-500">Notes</p>
-              <p className="text-sm text-gray-900">{transfer.notes}</p>
+              <p className="text-xs text-stone-500">Notes</p>
+              <p className="text-sm text-stone-900">{transfer.notes}</p>
             </div>
           )}
         </div>
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="w-full text-sm">
-            <thead className="border-b border-gray-200 bg-gray-50">
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="px-3 py-2 text-left font-semibold text-gray-700">Lot</th>
-                <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty</th>
+                <th>Lot</th>
+                <th className="text-right">Qty</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {lines.length === 0 ? (
                 <tr>
-                  <td colSpan={2} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={2} className="text-center text-stone-400">
                     No lines loaded
                   </td>
                 </tr>
               ) : (
                 lines.map((ln) => (
                   <tr key={ln.id}>
-                    <td className="px-3 py-2 font-medium text-gray-900">
+                    <td className="font-medium">
                       {formatLotWithSku(ln.lot_label, ln.product_batch, ln.recipe_sku)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">{Number(ln.quantity).toLocaleString()}</td>
+                    <td className="text-right tabular-nums">{Number(ln.quantity).toLocaleString()}</td>
                   </tr>
                 ))
               )}
@@ -1244,18 +1244,18 @@ function TransferDetailModal({
                 type="button"
                 onClick={() => void runDispatch()}
                 disabled={saving}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60 transition-colors"
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-60"
               >
                 {saving ? 'Dispatching…' : 'Dispatch'}
               </button>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={() => void runCancel()}
                 disabled={saving}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
               >
                 Cancel transfer
-              </button>
+              </Button>
             </>
           )}
           {transfer.status === 'dispatched' && (
@@ -1264,28 +1264,24 @@ function TransferDetailModal({
                 type="button"
                 onClick={() => void runReceive()}
                 disabled={saving}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
               >
                 {saving ? 'Saving…' : 'Mark received at destination'}
               </button>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={() => void runCancel()}
                 disabled={saving}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
               >
                 Undo dispatch (return to source)
-              </button>
+              </Button>
             </>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-        >
+        <Button type="button" variant="secondary" onClick={onClose}>
           Close
-        </button>
+        </Button>
       </div>
     </Modal>
   );
@@ -1802,7 +1798,7 @@ export function Distribution() {
         </p>
       )}
 
-      <HubAtpCompact totals={hubFinishedAtp} className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600" />
+      <HubAtpCompact totals={hubFinishedAtp} className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm text-stone-600" />
 
       {/* Stock Summary Cards */}
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
@@ -1898,44 +1894,44 @@ export function Distribution() {
 
       {/* Outlet Inventory Breakdown */}
       {outlets.length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-1 text-sm font-semibold text-gray-900">Outlet Stock Levels</h3>
-          <p className="mb-4 text-xs text-gray-500">
+        <div className="panel p-5">
+          <h3 className="mb-1 text-sm font-semibold text-stone-900">Outlet Stock Levels</h3>
+          <p className="mb-4 text-xs text-stone-500">
             {distributionDisplay.isFiltered ? (
               <>
                 Pending and in-transit lines follow filtered supply orders. The large figure is{' '}
-                <strong className="font-medium text-gray-700">units received</strong> with receipt date in range.{' '}
-                <strong className="font-medium text-gray-700">On hand now</strong> is live inventory.
+                <strong className="font-medium text-stone-700">units received</strong> with receipt date in range.{' '}
+                <strong className="font-medium text-stone-700">On hand now</strong> is live inventory.
               </>
             ) : (
               <>
-              On-hand totals update when the outlet <strong className="font-medium text-gray-700">confirms receipt</strong>.
+              On-hand totals update when the outlet <strong className="font-medium text-stone-700">confirms receipt</strong>.
               Dispatch removes stock from the hub; outlet inventory increases only after receive. Large number is physical on hand;
-              smaller line is <strong className="font-medium text-gray-700">available to sell</strong> (after transfers/supply reservations).
+              smaller line is <strong className="font-medium text-stone-700">available to sell</strong> (after transfers/supply reservations).
             </>
             )}
           </p>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {distributionDisplay.outletInventory.map((inv) => (
-              <div key={inv.outletId} className="flex flex-col gap-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+              <div key={inv.outletId} className="flex flex-col gap-1 rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-gray-700">{inv.outletName}</span>
-                  <span className="text-lg font-bold text-gray-900">{inv.onHand.toLocaleString()}</span>
+                  <span className="text-sm font-medium text-stone-700">{inv.outletName}</span>
+                  <span className="text-lg font-bold text-stone-900">{inv.onHand.toLocaleString()}</span>
                 </div>
-                <p className="text-[11px] leading-snug text-gray-600">
+                <p className="text-[11px] leading-snug text-stone-600">
                   Available to sell (after reservations):{' '}
-                  <span className="font-semibold tabular-nums text-gray-800">
+                  <span className="font-semibold tabular-nums text-stone-800">
                     {inv.availableSellable.toLocaleString()}
                   </span>
                 </p>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-stone-500">
                   {distributionDisplay.isFiltered ? (
                     <>
                       Received in range
                       {inv.currentOnHandSnapshot != null && (
-                        <span className="mt-0.5 block text-gray-600">
+                        <span className="mt-0.5 block text-stone-600">
                           On hand now:{' '}
-                          <span className="font-semibold tabular-nums text-gray-800">{inv.currentOnHandSnapshot.toLocaleString()}</span>
+                          <span className="font-semibold tabular-nums text-stone-800">{inv.currentOnHandSnapshot.toLocaleString()}</span>
                         </span>
                       )}
                     </>
@@ -1962,7 +1958,7 @@ export function Distribution() {
       )}
 
       {loading ? (
-        <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>
+        <div className="flex h-48 items-center justify-center text-stone-400 text-sm">Loading…</div>
       ) : (
         <>
           {tab === 'orders' && (
