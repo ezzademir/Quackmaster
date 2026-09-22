@@ -51,6 +51,36 @@ export function sumAvailableByProductBatch(
   return m;
 }
 
+/** Sum unreserved hub qty per raw material (production consume / RM ATP). */
+export function sumAvailableByRawMaterialId(
+  rows: Array<{
+    raw_material_id?: string | null;
+    quantity_on_hand?: number | null;
+    reserved_quantity?: number | null;
+    available_quantity?: number | null;
+  }>
+): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const row of rows) {
+    const k = row.raw_material_id;
+    if (!k) continue;
+    const avail = hubRowAvailableQuantity(
+      Number(row.quantity_on_hand ?? 0),
+      Number(row.reserved_quantity ?? 0),
+      row.available_quantity
+    );
+    m.set(k, (m.get(k) ?? 0) + avail);
+  }
+  return m;
+}
+
+/** True when unreserved hub qty can cover a production consume line. */
+export function rawMaterialCoversConsumption(available: number, consumed: number): boolean {
+  if (!Number.isFinite(available) || !Number.isFinite(consumed) || consumed < 0) return false;
+  if (consumed === 0) return true;
+  return available >= consumed;
+}
+
 /** Aggregate finished-goods hub rows (`raw_material_id` must be null — caller filters). */
 export function aggregateFinishedGoodsHubTotals(
   rows: Array<{
