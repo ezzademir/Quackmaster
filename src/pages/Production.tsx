@@ -9,6 +9,7 @@ import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../compon
 import { supabase } from '../utils/supabase';
 import { isDateInRange, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
+import { productionFailureDisposition } from '../utils/productionCompletionOutcome';
 import {
   backfillLotExpiryForRecipe,
   completeProductionRun,
@@ -334,7 +335,7 @@ function NewRunModal({
 }: {
   recipes: RecipeWithIngredients[];
   onClose: () => void;
-  onSave: () => void;
+  onSave: (notice?: string) => void;
   profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
   initialRecipeId?: string;
   initialPlannedOutput?: number;
@@ -541,13 +542,51 @@ function NewRunModal({
       });
 
       if (!result.success) {
-        // If QC failed, revert to draft status
-        await supabase
+        const { data: live, error: statusErr } = await supabase
           .from('production_runs')
-          .update({ status: 'cancelled' })
-          .eq('id', run.id);
+          .select('status')
+          .eq('id', run.id)
+          .maybeSingle();
+        const disposition = productionFailureDisposition({
+          statusReadFailed: Boolean(statusErr),
+          liveStatus: (live?.status as string | undefined) ?? null,
+        });
 
-        setError(`QC Evaluation Failed: ${result.error}`);
+        if (disposition === 'already_posted') {
+          setSaving(false);
+          onSave(
+            `Run ${run.run_number} was posted. The confirmation did not come back, but stock was updated. Do not submit this batch again.`
+          );
+          return;
+        }
+
+        if (disposition === 'cancel_in_progress') {
+          // Only cancel if the run is still in progress. A completion that
+          // commits while this request is failing must not be overwritten.
+          await supabase
+            .from('production_runs')
+            .update({ status: 'cancelled' })
+            .eq('id', run.id)
+            .eq('status', 'in_progress');
+          const { data: after, error: afterErr } = await supabase
+            .from('production_runs')
+            .select('status')
+            .eq('id', run.id)
+            .maybeSingle();
+          if (!afterErr && after?.status === 'completed') {
+            setSaving(false);
+            onSave(
+              `Run ${run.run_number} was posted. The confirmation did not come back, but stock was updated. Do not submit this batch again.`
+            );
+            return;
+          }
+        }
+
+        setError(
+          disposition === 'unknown_leave_open'
+            ? `Production may have posted. Refresh the runs list before trying again. ${result.error ?? ''}`.trim()
+            : `QC Evaluation Failed: ${result.error}`
+        );
         setSaving(false);
         return;
       }
@@ -931,6 +970,7 @@ export function Production() {
   const [confirmText, setConfirmText] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [runNotice, setRunNotice] = useState<string | null>(null);
   const [planPrefill, setPlanPrefill] = useState<{
     recipeId: string;
     quantity: number;
@@ -1059,6 +1099,12 @@ export function Production() {
           </>
         }
       />
+
+      {runNotice && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          {runNotice}
+        </div>
+      )}
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <Tabs
@@ -1250,9 +1296,10 @@ export function Production() {
             setShowNewRun(false);
             setPlanPrefill(null);
           }}
-          onSave={() => {
+          onSave={(notice) => {
             setShowNewRun(false);
             setPlanPrefill(null);
+            setRunNotice(notice ?? null);
             loadAll();
           }}
           profile={profile}
