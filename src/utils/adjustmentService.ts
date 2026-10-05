@@ -126,9 +126,17 @@ export async function createInventoryAdjustment(
       return { success: false, error: `Failed to create adjustment: ${adjErr?.message}` };
     }
 
-    // If no approval needed, apply immediately
+    // If no approval needed, apply immediately. The RPC is admin-only and
+    // refuses to floor an over-deduction to zero; surface that failure.
     if (!params.requiresApproval) {
-      await applyInventoryAdjustment(adjustment.id);
+      const applied = await applyInventoryAdjustment(adjustment.id);
+      if (!applied.success) {
+        return {
+          success: false,
+          adjustmentId: adjustment.id,
+          error: applied.error ?? 'Failed to apply adjustment',
+        };
+      }
     }
 
     await writeLedgerEntry({
