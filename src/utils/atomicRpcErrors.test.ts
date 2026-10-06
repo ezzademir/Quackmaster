@@ -3,6 +3,7 @@ import {
   cancelPurchaseOrderErrorMessage,
   extractAtomicRpcErrorCode,
   outletTransferErrorMessage,
+  passwordResetLockMessage,
   salesJournalErrorMessage,
 } from './atomicRpcErrors';
 
@@ -17,6 +18,9 @@ describe('extractAtomicRpcErrorCode', () => {
       'insufficient_raw_material'
     );
     expect(extractAtomicRpcErrorCode(null, 'hub_inventory_missing')).toBe('hub_inventory_missing');
+    expect(extractAtomicRpcErrorCode(null, 'ERROR: password_reset_required')).toBe(
+      'password_reset_required'
+    );
   });
 
   it('falls back to the raw message when no known code matches', () => {
@@ -44,5 +48,14 @@ describe('salesJournalErrorMessage', () => {
 describe('outletTransferErrorMessage', () => {
   it('maps pending-blocked auth', () => {
     expect(outletTransferErrorMessage('not_authenticated_or_inactive')).toMatch(/active staff/i);
+  });
+});
+
+describe('passwordResetLockMessage', () => {
+  it('maps a skipped reset and a stock write blocked by the flag', () => {
+    expect(passwordResetLockMessage('password_not_changed')).toMatch(/new password/i);
+    expect(passwordResetLockMessage('ERROR: password_reset_required')).toMatch(/stock changes/i);
+    expect(salesJournalErrorMessage('password_reset_required')).toMatch(/new password/i);
+    expect(passwordResetLockMessage('insufficient_stock')).toBeNull();
   });
 });
