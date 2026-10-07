@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Button, EmptyState, ListRow } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
+import { parseApproveResult } from '../utils/approveResult';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
 
@@ -312,40 +313,25 @@ export function Users() {
   }
 
   async function handleApproveUser(userId: string) {
+    setRoleNotice(null);
     try {
-      const reviewerId = (await supabase.auth.getUser()).data.user?.id;
-
-      const { error: updateError } = await supabase.from('profiles').update({ role: 'staff' }).eq('id', userId);
-
-      if (updateError) throw updateError;
-
-      const { error } = await supabase
-        .from('pending_registrations')
-        .update({
-          status: 'approved',
-          reviewed_by: reviewerId,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId);
-
-      if (error) {
-        await supabase.from('profiles').update({ role: 'pending' }).eq('id', userId);
-        throw error;
+      // Single atomic server-side approve (profile role + registration status, row-count checked).
+      const { data, error } = await supabase.rpc('admin_approve_registration', { p_user_id: userId });
+      if (error) throw error;
+      const res = parseApproveResult(data);
+      if (!res.ok) {
+        setRoleNotice({ tone: 'err', text: `Approve failed: ${res.message}` });
+        return;
       }
-
-      await writeLedgerEntry({
-        action: 'approved',
-        entityType: 'pending_registration',
-        entityId: userId,
-        module: 'users',
-        operation: 'update',
-        afterData: { status: 'approved', role: 'staff' },
-      });
-
+      setRoleNotice({ tone: 'ok', text: 'User approved as staff.' });
       await loadUsers();
       setDrawer({ open: false });
     } catch (error) {
       console.error('Error approving user:', error);
+      setRoleNotice({
+        tone: 'err',
+        text: `Approve failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   }
 
