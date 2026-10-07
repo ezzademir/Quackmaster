@@ -131,6 +131,26 @@ function ProfileLoadError({ onSignOut }: { onSignOut: () => void }) {
   );
 }
 
+function AccountDeactivated({ onSignOut }: { onSignOut: () => void }) {
+  return (
+    <div className="mobile-auth-shell py-10">
+      <div className="w-full max-w-sm panel p-6 text-center">
+        <h1 className="text-lg font-semibold text-stone-900">Account deactivated</h1>
+        <p className="mt-2 text-sm text-stone-600">
+          This account has been deactivated by an administrator. Contact an admin if you think this is a mistake.
+        </p>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="mt-4 w-full rounded-lg bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ProtectedShell() {
   const { session, loading, profileLoading, profile, signOut } = useAuth();
   const location = useLocation();
@@ -152,6 +172,10 @@ function ProtectedShell() {
         }}
       />
     );
+  }
+
+  if (profile.is_active === false) {
+    return <AccountDeactivated onSignOut={() => void signOut()} />;
   }
 
   const role = profile?.role?.toLowerCase?.()?.trim();

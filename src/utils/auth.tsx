@@ -14,6 +14,8 @@ export interface Profile {
   role: 'admin' | 'staff' | 'pending' | 'supervisor';
   assigned_outlet_id?: string | null;
   password_reset_required?: boolean | null;
+  /** false = deactivated by an admin (login blocked, no access). Missing = active. */
+  is_active?: boolean | null;
 }
 
 interface AuthContextValue {
@@ -65,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       const query = supabase
         .from('profiles')
-        .select('id, full_name, role, assigned_outlet_id, password_reset_required')
+        .select('*') // includes is_active once migration 071 is applied; safe before it
         .eq('id', userId)
         .maybeSingle();
 
@@ -90,6 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   role: normalizeRole(row.role),
                   assigned_outlet_id: row.assigned_outlet_id ?? null,
                   password_reset_required: Boolean(row.password_reset_required),
+                  is_active: row.is_active !== false,
                 }
               : null
           );
