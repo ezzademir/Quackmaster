@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { fetchAllPages } from "./pager.ts";
 import type {
   DiffStatus,
   ReportId,
@@ -406,17 +407,17 @@ async function loadJournals(
   to: string,
   outletIds: string[],
 ): Promise<JournalLine[]> {
-  let q = admin
-    .from("sales_journals")
-    .select("id, business_date, outlet_id, status, notes, source, idempotency_key, sales_journal_lines(quantity_sold, product_batch, lot_id)")
-    .eq("status", "posted")
-    .gte("business_date", from)
-    .lte("business_date", to);
-  if (outletIds.length === 1) q = q.eq("outlet_id", outletIds[0]);
-  else if (outletIds.length > 1) q = q.in("outlet_id", outletIds);
-
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
+  const data = await fetchAllPages((a, b) => {
+    let q = admin
+      .from("sales_journals")
+      .select("id, business_date, outlet_id, status, notes, source, idempotency_key, sales_journal_lines(quantity_sold, product_batch, lot_id)")
+      .eq("status", "posted")
+      .gte("business_date", from)
+      .lte("business_date", to);
+    if (outletIds.length === 1) q = q.eq("outlet_id", outletIds[0]);
+    else if (outletIds.length > 1) q = q.in("outlet_id", outletIds);
+    return q.order("id", { ascending: true }).range(a, b);
+  });
 
   const raw: Omit<JournalLine, "recipe_sku">[] = [];
   for (const j of data ?? []) {
@@ -552,10 +553,13 @@ async function loadDispatchedSupplyLines(
   periodOrders: PeriodSupplyOrder[];
   periodAllOutletQty: number;
 }> {
-  const { data: orders, error: orderErr } = await admin
-    .from("supply_orders")
-    .select("id, outlet_id, status, supply_date, dispatch_date, total_quantity");
-  if (orderErr) throw new Error(orderErr.message);
+  const orders = await fetchAllPages((a, b) =>
+    admin
+      .from("supply_orders")
+      .select("id, outlet_id, status, supply_date, dispatch_date, total_quantity")
+      .order("id", { ascending: true })
+      .range(a, b)
+  );
 
   const inPeriod: Array<{ id: string; outlet_id: string; qty: number; supply_date: string }> = [];
   for (const so of orders ?? []) {
@@ -585,11 +589,14 @@ async function loadDispatchedSupplyLines(
   const rows: DispatchedSupplyLine[] = [];
   for (let i = 0; i < scopedIds.length; i += 200) {
     const slice = scopedIds.slice(i, i + 200);
-    const { data, error } = await admin
-      .from("supply_order_lines")
-      .select("quantity, product_batch, supply_order_id, hub:hub_inventory_id(lot_id, product_batch)")
-      .in("supply_order_id", slice);
-    if (error) throw new Error(error.message);
+    const data = await fetchAllPages((a, b) =>
+      admin
+        .from("supply_order_lines")
+        .select("id, quantity, product_batch, supply_order_id, hub:hub_inventory_id(lot_id, product_batch)")
+        .in("supply_order_id", slice)
+        .order("id", { ascending: true })
+        .range(a, b)
+    );
     for (const row of data ?? []) {
       const hub = firstEmbed(
         row.hub as
