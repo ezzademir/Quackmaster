@@ -19,6 +19,7 @@ import {
 import { Button, EmptyState, ListRow } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
 import { parseApproveResult } from '../utils/approveResult';
+import { countDeactivated, filterByActive, isUserActive } from '../utils/userActive';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
 
@@ -31,6 +32,8 @@ interface UserRecord {
   last_login: string | null;
   password_reset_required: boolean;
   created_at: string;
+  is_active?: boolean | null;
+  deactivated_at?: string | null;
 }
 
 interface PendingUser extends UserRecord {
@@ -65,6 +68,8 @@ export function Users() {
   const [busyRoleUserId, setBusyRoleUserId] = useState<string | null>(null);
   const [roleNotice, setRoleNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showDeactivated, setShowDeactivated] = useState(false);
+  const [activeBusyUserId, setActiveBusyUserId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerState>({ open: false });
   const [nameDraft, setNameDraft] = useState('');
   const [nameSaving, setNameSaving] = useState(false);
@@ -88,13 +93,13 @@ export function Users() {
   const q = searchQuery.trim().toLowerCase();
   const filteredUsers = useMemo(
     () =>
-      users.filter(
+      filterByActive(users, showDeactivated).filter(
         (u) =>
           !q ||
           u.email.toLowerCase().includes(q) ||
           (u.full_name || '').toLowerCase().includes(q)
       ),
-    [users, q]
+    [users, q, showDeactivated]
   );
   const filteredPending = useMemo(
     () =>
@@ -157,6 +162,8 @@ export function Users() {
           password_reset_required: boolean;
           created_at: string;
           email: string;
+          is_active?: boolean | null;
+          deactivated_at?: string | null;
         }>;
         pending?: Array<{
           id: string;
@@ -217,6 +224,8 @@ export function Users() {
         last_login: p.last_login,
         password_reset_required: p.password_reset_required,
         created_at: p.created_at,
+        is_active: p.is_active !== false,
+        deactivated_at: p.deactivated_at ?? null,
         email: (p.email && p.email.trim() !== '' ? p.email : null) || 'Unknown',
       })) as UserRecord[];
 
@@ -332,6 +341,44 @@ export function Users() {
         tone: 'err',
         text: `Approve failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       });
+    }
+  }
+
+  async function handleSetUserActive(target: UserRecord, active: boolean) {
+    if (!authUser?.id || target.id === authUser.id) return;
+    const verb = active ? 'Reactivate' : 'Deactivate';
+    const ok = window.confirm(
+      active
+        ? `Reactivate ${target.email}? They will be able to sign in again.`
+        : `Deactivate ${target.email}? They will be signed out and blocked from signing in. Their history is kept.`
+    );
+    if (!ok) return;
+    setActiveBusyUserId(target.id);
+    setRoleNotice(null);
+    try {
+      const { data, error } = await supabase.functions.invoke<{ success?: boolean; error?: string; message?: string }>(
+        'admin_set_user_active',
+        { body: { userId: target.id, active } }
+      );
+      if (error || !data?.success) {
+        let msg = data?.message || data?.error || error?.message || 'Request failed';
+        const ctx = (error as { context?: Response } | null)?.context;
+        if (ctx && typeof ctx.json === 'function') {
+          try {
+            const j = (await ctx.json()) as { message?: string; error?: string };
+            msg = j.message || j.error || msg;
+          } catch {
+            /* keep msg */
+          }
+        }
+        setRoleNotice({ tone: 'err', text: `${verb} failed: ${msg}` });
+        return;
+      }
+      setRoleNotice({ tone: 'ok', text: `${target.email} ${active ? 'reactivated' : 'deactivated'}.` });
+      await loadUsers();
+      setDrawer({ open: false });
+    } finally {
+      setActiveBusyUserId(null);
     }
   }
 
@@ -694,6 +741,17 @@ export function Users() {
           </button>
         </div>
 
+        {activeTab === 'approved' && countDeactivated(users) > 0 && (
+          <label className="mb-3 inline-flex items-center gap-2 text-sm text-stone-700">
+            <input
+              type="checkbox"
+              checked={showDeactivated}
+              onChange={(e) => setShowDeactivated(e.target.checked)}
+            />
+            Show deactivated ({countDeactivated(users)})
+          </label>
+        )}
+
         {activeTab === 'approved' &&
           (filteredUsers.length === 0 ? (
             <div className="panel py-2">
@@ -711,7 +769,7 @@ export function Users() {
                     <ListRow
                       key={user.id}
                       title={user.email}
-                      meta={`${user.full_name || 'N/A'} · ${user.role} · ${outletLabel}`}
+                      meta={`${user.full_name || 'N/A'} · ${user.role} · ${outletLabel}${isUserActive(user) ? '' : ' · Deactivated'}`}
                       aside={
                         <button
                           type="button"
@@ -765,6 +823,11 @@ export function Users() {
                           >
                             {user.role}
                           </span>
+                          {!isUserActive(user) && (
+                            <span className="ml-1 rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
+                              Deactivated
+                            </span>
+                          )}
                         </td>
                         <td className="hidden lg:table-cell text-xs">
                           {user.role?.toLowerCase()?.trim() === 'supervisor'
@@ -1114,6 +1177,33 @@ export function Users() {
                     ) : (
                       <p className="text-xs text-stone-500">You cannot change your own role here.</p>
                     )}
+                  </div>
+                  <div className="space-y-2 border-t border-stone-200 pt-4">
+                    <p className="text-xs font-medium uppercase text-stone-500">Account status</p>
+                    <p className="text-sm text-stone-700">
+                      {isUserActive(drawerApproved)
+                        ? 'Active'
+                        : `Deactivated${drawerApproved.deactivated_at ? ` on ${new Date(drawerApproved.deactivated_at).toLocaleString()}` : ''}`}
+                    </p>
+                    {authUser?.id !== drawerApproved.id ? (
+                      <button
+                        type="button"
+                        disabled={activeBusyUserId === drawerApproved.id}
+                        onClick={() => void handleSetUserActive(drawerApproved, !isUserActive(drawerApproved))}
+                        className={`w-full rounded-lg py-2 text-sm font-medium disabled:opacity-50 ${
+                          isUserActive(drawerApproved)
+                            ? 'border border-red-300 text-red-700 hover:bg-red-50'
+                            : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        }`}
+                      >
+                        {isUserActive(drawerApproved) ? 'Deactivate user' : 'Reactivate user'}
+                      </button>
+                    ) : (
+                      <p className="text-xs text-stone-500">You cannot deactivate yourself.</p>
+                    )}
+                    <p className="text-xs text-stone-500">
+                      Deactivation blocks sign-in and all access; history and names on past records are kept.
+                    </p>
                   </div>
                 </div>
               )}
