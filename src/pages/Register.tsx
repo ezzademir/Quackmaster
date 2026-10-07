@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
-import { writeLedgerEntry } from '../utils/ledger';
 
 export function Register() {
   const [form, setForm] = useState({
@@ -48,54 +47,18 @@ export function Register() {
       return;
     }
 
-    // Create profile with pending role
-    if (data.user) {
-      const { error: profileError } = await supabase.from('profiles').upsert({
-        id: data.user.id,
-        full_name: form.full_name,
-        role: 'pending',
-      });
-      if (!profileError) {
-        await writeLedgerEntry({
-          action: 'created',
-          entityType: 'profile',
-          entityId: data.user.id,
-          module: 'auth',
-          operation: 'event',
-          afterData: { full_name: form.full_name, role: 'pending' },
-          metadata: { source: 'register' },
-        });
-      }
-
-      if (profileError) {
-        console.error('Profile creation error:', profileError);
-      }
-
-      // Create pending registration entry
-      const { error: regError } = await supabase.from('pending_registrations').insert({
-        user_id: data.user.id,
-        email: form.email,
-        full_name: form.full_name,
-        status: 'pending',
-        requested_at: new Date().toISOString(),
-      });
-      if (!regError) {
-        await writeLedgerEntry({
-          action: 'created',
-          entityType: 'pending_registration',
-          entityId: data.user.id,
-          module: 'auth',
-          operation: 'insert',
-          afterData: { email: form.email, full_name: form.full_name, status: 'pending' },
-          referenceId: data.user.id,
-        });
-      }
-
-      if (regError) {
-        console.error('Pending registration error:', regError);
-        // Don't fail registration if pending_registrations insert fails
-        // The profile was created, user can proceed to pending approval page
-      }
+    // Profile + pending_registrations are created server-side by the auth.users trigger
+    // (handle_new_user, migration 070). With email confirmation on there is no session here,
+    // so client inserts would be rejected by RLS — do not write from the browser.
+    if (!data.user) {
+      setError('Sign-up did not return a user. Please try again or contact an admin.');
+      setLoading(false);
+      return;
+    }
+    if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      setError('An account with this email already exists. Try signing in or resetting your password.');
+      setLoading(false);
+      return;
     }
 
     setLoading(false);
