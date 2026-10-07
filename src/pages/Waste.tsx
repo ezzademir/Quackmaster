@@ -5,7 +5,7 @@ import { Button, EmptyState, ListRow, PageHeader, StatCard, StickyActions, Tabs 
 import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
-import { getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
+import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
 
@@ -207,8 +207,8 @@ export function Waste() {
         }
 
         if (historyRange) {
-          const from = historyRange.start.toISOString().slice(0, 10);
-          const to = historyRange.end.toISOString().slice(0, 10);
+          const from = formatDateForInput(historyRange.start);
+          const to = formatDateForInput(historyRange.end);
           query = query.gte('waste_date', from).lte('waste_date', to);
         }
 
@@ -317,8 +317,8 @@ export function Waste() {
         q = q.eq('location_kind', 'outlet').eq('outlet_id', profile.assigned_outlet_id);
       }
       if (historyRange) {
-        const from = historyRange.start.toISOString().slice(0, 10);
-        const to = historyRange.end.toISOString().slice(0, 10);
+        const from = formatDateForInput(historyRange.start);
+        const to = formatDateForInput(historyRange.end);
         q = q.gte('waste_date', from).lte('waste_date', to);
       }
       const { data: events, error } = await q;

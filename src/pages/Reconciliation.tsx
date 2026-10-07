@@ -93,7 +93,7 @@ export function Reconciliation() {
         }),
         getOutletBalanceAsOf({
           outletId,
-          asOf: new Date(asOfDate + 'T12:00:00'),
+          asOf: new Date(asOfDate + 'T12:00:00+08:00'),
           includeRawMaterials: includeRm,
         }),
         reconcileOutletStockBySku({
