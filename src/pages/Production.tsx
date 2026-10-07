@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { saveRunMaterialsOrRollback, type MaterialsClient } from '../utils/productionRunMaterials';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
@@ -515,14 +516,19 @@ function NewRunModal({
         setSaving(false);
         return;
       }
-      if (runMaterials.length > 0) {
-        await supabase.from('production_run_materials').insert(
-          runMaterials.map((m) => ({
-            production_run_id: run.id,
-            raw_material_id: m.raw_material_id,
-            quantity_consumed: parseFloat(m.quantity_consumed) || 0,
-          }))
-        );
+      const saved = await saveRunMaterialsOrRollback(
+        supabase as unknown as MaterialsClient,
+        run.id,
+        runMaterials.map((m) => ({
+          production_run_id: run.id,
+          raw_material_id: m.raw_material_id,
+          quantity_consumed: parseFloat(m.quantity_consumed) || 0,
+        }))
+      );
+      if (!saved.ok) {
+        setError(saved.error);
+        setSaving(false);
+        return;
       }
 
       // Get recipe for QC evaluation
