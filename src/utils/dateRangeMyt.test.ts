@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   formatDateForInput, getLastMonth, getLastWeek, getThisMonth, getToday, getYesterday,
-  isCalendarDateInRange, isDateInRange, mytRangeFromIso, rangeFromPeriodBucket,
+  isCalendarDateInRange, isDateInRange, malaysiaCalendarDate, mytRangeFromIso, rangeFromPeriodBucket,
 } from './dateRange';
 
 // Runs under any TZ (CI matrix: UTC, America/Los_Angeles, Asia/Kuala_Lumpur).
@@ -43,5 +43,10 @@ describe(`MYT bounds independent of device TZ (device TZ=${Intl.DateTimeFormat()
   it('formatDateForInput renders the MYT day', () => {
     expect(formatDateForInput(new Date('2026-10-06T16:00:00Z'))).toBe('2026-10-07');
     expect(formatDateForInput(new Date('2026-10-06T15:59:59Z'))).toBe('2026-10-06');
+  });
+  it('malaysiaCalendarDate is the next MYT day while UTC is still yesterday', () => {
+    at('2026-10-06T17:30:00Z'); // 7 Oct 01:30 MYT
+    expect(new Date().toISOString().slice(0, 10)).toBe('2026-10-06');
+    expect(malaysiaCalendarDate()).toBe('2026-10-07');
   });
 });

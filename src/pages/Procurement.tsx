@@ -8,7 +8,7 @@ import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, validatePoLinesAgainstSupplierCatalog, formatValidationErrors } from '../utils/validation';
 import { retryWithBackoff } from '../utils/errorHandling';
-import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
+import { isCalendarDateInRange, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
 import {
   cancelPurchaseOrderErrorMessage,
@@ -477,7 +477,7 @@ function NewPOModal({
 
   const [supplier_id, setSupplierId] = useState(existingOrder?.supplier_id ?? '');
   const [order_date, setOrderDate] = useState(
-    editing && existingOrder ? dateInputFromIso(existingOrder.order_date) : new Date().toISOString().split('T')[0]
+    editing && existingOrder ? dateInputFromIso(existingOrder.order_date) : malaysiaCalendarDate()
   );
   const [expected_delivery_date, setExpectedDelivery] = useState(
     existingOrder?.expected_delivery_date ? dateInputFromIso(existingOrder.expected_delivery_date) : ''
