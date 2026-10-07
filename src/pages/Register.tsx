@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
+import { getSignupConfirmRedirectUrl } from '../utils/passwordRules';
 
 export function Register() {
   const [form, setForm] = useState({
@@ -37,6 +38,7 @@ export function Register() {
       email: form.email,
       password: form.password,
       options: {
+        emailRedirectTo: getSignupConfirmRedirectUrl(),
         data: { full_name: form.full_name, role: 'pending' },
       },
     });
