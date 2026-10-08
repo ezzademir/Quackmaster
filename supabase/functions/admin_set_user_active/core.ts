@@ -13,8 +13,8 @@ export interface ApplyResult {
 }
 
 export interface SetUserActiveDeps {
-  /** Resolve the caller from their JWT; null when invalid. */
-  getCaller(jwt: string): Promise<{ id: string } | null>;
+  /** Resolve the caller from their JWT; null when invalid. isActiveAdmin is checked before any ban change. */
+  getCaller(jwt: string): Promise<{ id: string; isActiveAdmin: boolean } | null>;
   /** Service-role RPC public.admin_apply_user_active (does admin / self / last-admin checks atomically). */
   applyActive(actorId: string, targetId: string, active: boolean, reason: string | null): Promise<ApplyResult>;
   /** Auth admin API ban: returns an error message or null. */
@@ -66,6 +66,12 @@ export async function handleSetUserActive(
     return { status: 400, body: { error: "invalid_target", message: "You cannot deactivate or reactivate yourself" } };
   }
 
+  // Authorization before any service-role ban change. Reactivate used to unban first and
+  // only then call admin_apply_user_active, so any signed-in user could lift a ban.
+  if (!caller.isActiveAdmin) {
+    return { status: 403, body: { error: "forbidden", message: "Only admins can change account status" } };
+  }
+
   if (!active) {
     // DB first: profile inactive + sessions revoked + ledger (atomic). Then auth ban.
     const r = await deps.applyActive(caller.id, userId, false, reason);
@@ -81,13 +87,20 @@ export async function handleSetUserActive(
     return { status: 200, body: { success: true, is_active: false, sessions_revoked: r.sessions_revoked ?? 0 } };
   }
 
-  // Reactivate: lift the auth ban first, then mark active.
+  // Reactivate: lift the auth ban first, then mark active. Re-ban if the profile write does not stick.
   const unbanErr = await deps.setBan(userId, UNBAN);
   if (unbanErr) return { status: 502, body: { error: "auth_unban_failed", message: unbanErr } };
-  const r = await deps.applyActive(caller.id, userId, true, reason);
+  let r: ApplyResult;
+  try {
+    r = await deps.applyActive(caller.id, userId, true, reason);
+  } catch (e) {
+    const rebanErr = await deps.setBan(userId, BAN_FOREVER);
+    if (rebanErr) return { status: 502, body: { error: "auth_reban_failed", message: rebanErr } };
+    throw e;
+  }
   if (!r.success) {
-    // Restore the ban so a still-inactive profile cannot sign in.
-    await deps.setBan(userId, BAN_FOREVER);
+    const rebanErr = await deps.setBan(userId, BAN_FOREVER);
+    if (rebanErr) return { status: 502, body: { error: "auth_reban_failed", message: rebanErr } };
     return { status: statusForRpcError(r.error), body: { error: r.error ?? "failed", message: r.message } };
   }
   return { status: 200, body: { success: true, is_active: true } };
