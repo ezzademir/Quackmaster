@@ -4,7 +4,6 @@ import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import { LogOut, Clock, AlertCircle } from 'lucide-react';
 import { type ApprovalStatus } from '../utils/approval';
-import { writeLedgerEntry } from '../utils/ledger';
 
 export function PendingApproval() {
   const { profile, signOut } = useAuth();
@@ -44,19 +43,8 @@ export function PendingApproval() {
       .maybeSingle();
 
     if (data?.status === 'approved') {
-      // Log approval to ledger
-      await writeLedgerEntry({
-        action: 'approved',
-        entityType: 'pending_registration',
-        entityId: profile.id,
-        module: 'admin',
-        operation: 'event',
-        metadata: {
-          user_email: profile.id,
-          approved_at: new Date().toISOString(),
-        },
-      });
-
+      // Approval is logged server-side by admin_approve_registration (_append_data_ledger).
+      // Pending accounts must not write data_ledger (migration 074); previously this re-logged on every poll.
       // Refresh session to get updated profile
       await supabase.auth.refreshSession();
       navigate('/');
