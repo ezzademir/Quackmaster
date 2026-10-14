@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.admin_set_user_active]
 verify_jwt = false
+
+[functions.admin_invite_user]
+verify_jwt = false
