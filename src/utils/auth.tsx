@@ -25,6 +25,8 @@ interface AuthContextValue {
   isAdmin: boolean;
   /** Outlet supervisor — narrow app shell (Stock take module). */
   isSupervisor: boolean;
+  /** Read-only live-check account — POS compare only. */
+  isViewer: boolean;
   /** Session bootstrap (getSession) — ends quickly once storage/network responds */
   loading: boolean;
   /** Profile row fetch after session exists — does not block login screen when logged out */
@@ -41,6 +43,7 @@ const AuthContext = createContext<AuthContextValue>({
   profile: null,
   isAdmin: false,
   isSupervisor: false,
+  isViewer: false,
   loading: true,
   profileLoading: false,
   signOut: async () => {},
@@ -252,6 +255,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile,
       isAdmin: profile?.role?.toLowerCase?.()?.trim() === 'admin',
       isSupervisor: profile?.role?.toLowerCase?.()?.trim() === 'supervisor',
+      isViewer: profile?.role?.toLowerCase?.()?.trim() === 'viewer',
       loading,
       profileLoading,
       signOut,

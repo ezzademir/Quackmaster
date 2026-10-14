@@ -128,7 +128,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const { profile, user, isAdmin, isSupervisor, signOut } = useAuth();
+  const { profile, user, isAdmin, isSupervisor, isViewer, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -193,7 +193,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain px-2.5 py-4">
-          {isSupervisor ? (
+          {isViewer ? (
+            <NavSection title="POS" collapsed={collapsed} items={posCompareNav} />
+          ) : isSupervisor ? (
             <NavSection title="Outlet" collapsed={collapsed} items={outletNav} />
           ) : (
             <>

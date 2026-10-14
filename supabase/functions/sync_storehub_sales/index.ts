@@ -111,9 +111,19 @@ function makeAdminClient(): SupabaseClient {
   });
 }
 
+/** Per-action role gate. Keep in sync with src/utils/roles.ts storehubActionAllowed. `sync` writes: admin only. */
+export function storehubActionAllowed(role: string | null | undefined, action: string): boolean {
+  const r = String(role ?? "").toLowerCase().trim();
+  if (r === "admin") return true;
+  if (r === "viewer") return action === "status" || action === "catalog" || action === "report";
+  return false;
+}
+
 async function requireAdminOrCron(
   req: Request,
-): Promise<{ ok: true; fromCron: boolean; userId: string | null } | { ok: false; res: Response }> {
+): Promise<
+  { ok: true; fromCron: boolean; userId: string | null; role: string | null } | { ok: false; res: Response }
+> {
   const cronHeader = req.headers.get("x-storehub-cron-token")?.trim() ?? "";
   if (cronHeader) {
     const admin = makeAdminClient();
@@ -126,7 +136,7 @@ async function requireAdminOrCron(
       return { ok: false, res: jsonResponse({ error: error.message }, req, 500) };
     }
     if (data?.cron_token && data.cron_token === cronHeader) {
-      return { ok: true, fromCron: true, userId: null };
+      return { ok: true, fromCron: true, userId: null, role: "admin" };
     }
     return { ok: false, res: jsonResponse({ error: "Invalid cron token" }, req, 403) };
   }
@@ -164,10 +174,17 @@ async function requireAdminOrCron(
   if (profileErr) {
     return { ok: false, res: jsonResponse({ error: `Profile check failed: ${profileErr.message}` }, req, 500) };
   }
-  if (String(profile?.role ?? "").toLowerCase() !== "admin") {
+  const role = String(profile?.role ?? "").toLowerCase().trim();
+  if (role !== "admin" && role !== "viewer") {
     return { ok: false, res: jsonResponse({ error: "Forbidden: admin only" }, req, 403) };
   }
-  return { ok: true, fromCron: false, userId: caller.id };
+  if (role === "viewer") {
+    const { data: active } = await admin.from("profiles").select("is_active").eq("id", caller.id).maybeSingle();
+    if (active?.is_active === false) {
+      return { ok: false, res: jsonResponse({ error: "Forbidden: account inactive" }, req, 403) };
+    }
+  }
+  return { ok: true, fromCron: false, userId: caller.id, role };
 }
 
 async function recordFail(
@@ -582,6 +599,9 @@ Deno.serve(async (req: Request) => {
       skus?: string[];
     };
     const action = body.action ?? "status";
+    if (!storehubActionAllowed(auth.role, action)) {
+      return jsonResponse({ error: "Forbidden: admin only" }, req, 403);
+    }
 
     if (action === "status") {
       const admin = makeAdminClient();
