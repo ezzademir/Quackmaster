@@ -96,9 +96,9 @@ const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
   pos_only: 'POS only',
 };
 
-/** Plain-language help for status chips (title tooltip). Period reports match vs StoreHub ingest. */
+/** Plain-language help for status chips (title tooltip). Period reports match vs all posted Outlet sales. */
 const STATUS_HELP: Record<StorehubDiffStatus, string> = {
-  match: 'POS sold matches Outlet sold from StoreHub ingest for this row.',
+  match: 'POS sold matches Outlet sold (StoreHub + manual) for this row.',
   qty_mismatch: 'POS sold and Outlet sold (StoreHub + manual) both exist but the unit counts differ.',
   missing_in_dashboard:
     'POS has sales here, but Outlet Sales has no posted journal (manual or StoreHub) for this row.',
