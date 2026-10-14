@@ -15,6 +15,7 @@ import {
   Copy,
   Search,
   PanelRightClose,
+  UserPlus,
 } from 'lucide-react';
 import { Button, EmptyState, ListRow } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
@@ -85,6 +86,12 @@ export function Users() {
   const [tempPassConfirm, setTempPassConfirm] = useState('');
   const [tempPassLoading, setTempPassLoading] = useState(false);
   const [tempPassMessage, setTempPassMessage] = useState('');
+
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteName, setInviteName] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState('');
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor'>('staff');
@@ -559,6 +566,59 @@ export function Users() {
     }
   }
 
+  function openInviteModal() {
+    setInviteEmail('');
+    setInviteName('');
+    setInviteMessage('');
+    setInviteModalOpen(true);
+  }
+
+  async function handleInviteUser() {
+    const email = inviteEmail.trim();
+    const fullName = inviteName.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setInviteMessage('Error: Enter a valid email address.');
+      return;
+    }
+    if (!fullName) {
+      setInviteMessage('Error: Enter the person\'s name.');
+      return;
+    }
+    setInviteLoading(true);
+    setInviteMessage('');
+    try {
+      const { data, error } = await supabase.functions.invoke<{ error?: string; message?: string; success?: boolean }>(
+        'admin_invite_user',
+        { body: { email, fullName } }
+      );
+      if (error) {
+        let detail = error.message;
+        const ctx = (error as { context?: unknown }).context;
+        if (ctx instanceof Response) {
+          try {
+            const b = (await ctx.json()) as { error?: string; message?: string };
+            detail = b.message ?? b.error ?? detail;
+          } catch {
+            /* keep generic message */
+          }
+        }
+        setInviteMessage(`Error: ${detail}`);
+        return;
+      }
+      if (data?.error) {
+        setInviteMessage(`Error: ${data.message ?? data.error}`);
+        return;
+      }
+      setInviteMessage(`Invitation sent to ${email}. They will appear under Pending until you approve them.`);
+      setInviteEmail('');
+      setInviteName('');
+      setActiveTab('pending');
+      await loadUsers();
+    } finally {
+      setInviteLoading(false);
+    }
+  }
+
   async function handleConfirmTempPassword() {
     if (!tempPassUser) return;
     if (tempPassNew !== tempPassConfirm) {
@@ -659,7 +719,12 @@ export function Users() {
               <span className="font-medium text-stone-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
             </p>
           </div>
-          <div className="relative max-w-md w-full">
+          <div className="flex w-full max-w-md items-center gap-2">
+          <Button type="button" onClick={openInviteModal} className="shrink-0 inline-flex items-center gap-2">
+            <UserPlus size={16} />
+            Invite user
+          </Button>
+          <div className="relative w-full">
             <Search
               size={18}
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400"
@@ -672,6 +737,7 @@ export function Users() {
               className="w-full rounded-lg border border-stone-300 py-2.5 pl-10 pr-3 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               aria-label="Search users"
             />
+          </div>
           </div>
         </div>
 
@@ -1427,6 +1493,58 @@ export function Users() {
               className="flex-1"
             >
               {tempPassLoading ? 'Saving…' : 'Set password'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal title="Invite user" isOpen={inviteModalOpen} onClose={() => !inviteLoading && setInviteModalOpen(false)}>
+        <div className="w-full max-w-md space-y-4">
+          <p className="text-sm text-stone-600">
+            Sends a Supabase invitation email. The new account starts as <strong>pending</strong> and still needs your
+            approval here before it can use the app.
+          </p>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-stone-700">Email</label>
+            <input
+              type="email"
+              autoComplete="off"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-stone-700">Full name</label>
+            <input
+              type="text"
+              autoComplete="off"
+              value={inviteName}
+              onChange={(e) => setInviteName(e.target.value)}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+            />
+          </div>
+          {inviteMessage && (
+            <div
+              className={`rounded-lg p-3 text-sm ${
+                inviteMessage.startsWith('Error') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-800'
+              }`}
+            >
+              {inviteMessage}
+            </div>
+          )}
+          <div className="flex gap-3">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setInviteModalOpen(false)}
+              disabled={inviteLoading}
+              className="flex-1"
+            >
+              Close
+            </Button>
+            <Button type="button" onClick={() => void handleInviteUser()} disabled={inviteLoading} className="flex-1">
+              {inviteLoading ? 'Sending…' : 'Send invite'}
             </Button>
           </div>
         </div>
