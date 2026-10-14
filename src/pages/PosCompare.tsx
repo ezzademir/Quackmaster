@@ -96,12 +96,12 @@ const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
   pos_only: 'POS only',
 };
 
-/** Plain-language help for status chips (title tooltip). Period reports match vs StoreHub ingest. */
+/** Plain-language help for status chips (title tooltip). Period reports match vs all posted Outlet sales. */
 const STATUS_HELP: Record<StorehubDiffStatus, string> = {
-  match: 'POS sold matches Outlet sold from StoreHub ingest for this row.',
-  qty_mismatch: 'POS sold and Outlet StoreHub-ingested sold both exist but the unit counts differ.',
+  match: 'POS sold matches Outlet sold (StoreHub + manual) for this row.',
+  qty_mismatch: 'POS sold and Outlet sold (StoreHub + manual) both exist but the unit counts differ.',
   missing_in_dashboard:
-    'POS has sales here, but Outlet Sales has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
+    'POS has sales here, but Outlet Sales has no posted journal (manual or StoreHub) for this row.',
   extra_in_dashboard:
     'Outlet Sales has posted sales here (often manual or StoreHub ingest) with no matching POS tickets in this period.',
   pos_only: 'This report has no Outlet Sales journal side — POS tickets only.',
@@ -804,7 +804,7 @@ export function PosCompare() {
                 tally
                   ? `${result.totals.match} match · POS vs Outlet sold`
                   : hasSplit
-                    ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−POS`
+                    ? `${result.totals.match} match (vs Outlet sold, StoreHub + manual)`
                     : `${result.totals.match} match · ${result.totals.pos_only} POS only`
               }
             />
