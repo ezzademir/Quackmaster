@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { isActiveAdmin } from "../_shared/activeAdmin.ts";
 
 const MIN_PASSWORD_LENGTH = 6;
 
@@ -74,7 +75,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: profile, error: profileErr } = await adminClient
       .from("profiles")
-      .select("role")
+      .select("role, is_active")
       .eq("id", caller.id)
       .maybeSingle();
 
@@ -82,7 +83,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: `Profile check failed: ${profileErr.message}` }, req, 500);
     }
 
-    if (profile?.role !== "admin") {
+    if (!isActiveAdmin(profile)) {
       return jsonResponse({ error: "Forbidden: admin only" }, req, 403);
     }
 
