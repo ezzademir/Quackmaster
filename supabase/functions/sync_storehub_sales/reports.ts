@@ -352,16 +352,17 @@ function mergeKeys(
     if (posOnly) {
       status = "pos_only";
     } else if (split) {
-      // Match POS to StoreHub-ingested only (manual never closes a gap).
+      // A-05 (14 Oct 2026): ingest is off, sales are keyed manually. Match POS to
+      // all posted Outlet sales (StoreHub + manual); the split columns are informational.
       const posQty = havePos ? p!.qty : 0;
-      const shQty = sh ?? 0;
+      const outletQty = allDash;
       if (!havePos) {
         status = "extra_in_dashboard";
-      } else if (qtyEq(posQty, shQty)) {
+      } else if (qtyEq(posQty, outletQty)) {
         status = "match";
-      } else if (posQty > 0 && shQty === 0) {
+      } else if (posQty > 0 && outletQty === 0) {
         status = "missing_in_dashboard";
-      } else if (posQty === 0 && shQty > 0) {
+      } else if (posQty === 0 && outletQty > 0) {
         status = "extra_in_dashboard";
       } else {
         status = "qty_mismatch";
@@ -1022,7 +1023,7 @@ export async function handleReport(opts: {
         : SPLIT_SOLD_COLUMNS,
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
-        : "POS sold = completed POS tickets (MY calendar; cancels & returns out). Outlet sold (StoreHub) = journals with source=storehub. Outlet sold (manual) = null/manual/other. Outlet sold (all) = both — so TTDI-style 923 vs 1498 is explained by the manual column. Match status compares POS to StoreHub-ingested only.",
+        : "POS sold = completed POS tickets (MY calendar; cancels & returns out). Outlet sold (StoreHub) = journals with source=storehub. Outlet sold (manual) = null/manual/other. Outlet sold (all) = both. Match status compares POS to Outlet sold (all), so manual entries count; StoreHub ingest is off and sales are keyed manually.",
     });
   }
 
