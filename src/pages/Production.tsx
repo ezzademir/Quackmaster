@@ -8,7 +8,7 @@ import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui'
 import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
 import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
-import { isDateInRange, type DateRange } from '../utils/dateRange';
+import { isDateInRange, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
 import {
   backfillLotExpiryForRecipe,
@@ -342,7 +342,7 @@ function NewRunModal({
   plannedBatchId?: string | null;
 }) {
   const [recipe_id, setRecipeId] = useState(initialRecipeId ?? '');
-  const [production_date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [production_date, setDate] = useState(() => malaysiaCalendarDate());
   const [planned_output, setPlanned] = useState(
     initialPlannedOutput != null ? String(initialPlannedOutput) : ''
   );
