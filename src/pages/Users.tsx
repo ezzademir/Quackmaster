@@ -87,7 +87,7 @@ export function Users() {
   const [tempPassMessage, setTempPassMessage] = useState('');
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
-  const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor'>('staff');
+  const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor' | 'viewer'>('staff');
   const [outletDraft, setOutletDraft] = useState('');
 
   const q = searchQuery.trim().toLowerCase();
@@ -777,7 +777,7 @@ export function Users() {
                             setNameDraft(user.full_name ?? '');
                             const rl = String(user.role).toLowerCase().trim();
                             setRoleDraft(
-                              rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
+                              rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : rl === 'viewer' ? 'viewer' : 'staff'
                             );
                             setOutletDraft(user.assigned_outlet_id ?? '');
                             setDrawer({ open: true, tab: 'approved', user });
@@ -845,7 +845,7 @@ export function Users() {
                               setNameDraft(user.full_name ?? '');
                               const rl = String(user.role).toLowerCase().trim();
                               setRoleDraft(
-                                rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
+                                rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : rl === 'viewer' ? 'viewer' : 'staff'
                               );
                               setOutletDraft(user.assigned_outlet_id ?? '');
                               setDrawer({ open: true, tab: 'approved', user });
@@ -1142,13 +1142,14 @@ export function Users() {
                         <select
                           value={roleDraft}
                           onChange={(e) =>
-                            setRoleDraft(e.target.value as 'admin' | 'staff' | 'supervisor')
+                            setRoleDraft(e.target.value as 'admin' | 'staff' | 'supervisor' | 'viewer')
                           }
                           className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900"
                         >
                           <option value="staff">Staff</option>
                           <option value="admin">Admin</option>
                           <option value="supervisor">Outlet supervisor</option>
+                          <option value="viewer">Viewer (POS compare, read-only)</option>
                         </select>
                         {roleDraft === 'supervisor' && (
                           <select

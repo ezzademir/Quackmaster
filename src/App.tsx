@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-
 
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
+import { canViewPosCompare, isViewerAllowedPath, VIEWER_HOME } from './utils/roles';
 import { Layout } from './components/Layout';
 
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
@@ -74,8 +75,8 @@ function LedgerGate() {
 }
 
 function PosCompareGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <PosCompare /> : <Navigate to="/" replace />;
+  const { profile } = useAuth();
+  return canViewPosCompare(profile?.role) ? <PosCompare /> : <Navigate to="/" replace />;
 }
 
 function SettingsGate() {
@@ -184,6 +185,10 @@ function ProtectedShell() {
   const needsPasswordReset = Boolean(profile?.password_reset_required);
   if (needsPasswordReset && location.pathname !== '/required-password-reset') {
     return <Navigate to="/required-password-reset" replace />;
+  }
+
+  if (role === 'viewer' && !isViewerAllowedPath(location.pathname)) {
+    return <Navigate to={VIEWER_HOME} replace />;
   }
 
   if (role === 'supervisor') {
