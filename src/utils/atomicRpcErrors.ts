@@ -45,9 +45,19 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'cannot_fulfill_reserved',
   'outlet_inventory_not_found',
   'inventory_wrong_outlet',
+  'password_reset_required',
+  'password_not_changed',
 ] as const;
 
 export type AtomicRpcErrorCode = (typeof KNOWN_ATOMIC_RPC_CODES)[number];
+
+export function passwordResetLockMessage(message: string | null | undefined): string | null {
+  if (!message) return null;
+  if (message.includes('password_reset_required') || message.includes('password_not_changed')) {
+    return 'Choose a new password before continuing. Stock changes stay blocked until then.';
+  }
+  return null;
+}
 
 /** Prefer an explicit soft-return code; else scan a PostgREST exception message. */
 export function extractAtomicRpcErrorCode(
@@ -72,6 +82,8 @@ export function extractAtomicRpcErrorCode(
 }
 
 export function cancelPurchaseOrderErrorMessage(code: string | undefined): string {
+  const locked = passwordResetLockMessage(code);
+  if (locked) return locked;
   switch (code) {
     case 'not_authenticated':
       return 'You must be signed in to cancel a purchase order.';
@@ -89,6 +101,8 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
 }
 
 export function salesJournalErrorMessage(code: string | undefined): string {
+  const locked = passwordResetLockMessage(code);
+  if (locked) return locked;
   switch (code) {
     case 'not_authenticated_or_inactive':
       return 'You must be an active staff member (or outlet supervisor) to post sales.';
@@ -111,6 +125,8 @@ export function salesJournalErrorMessage(code: string | undefined): string {
 }
 
 export function outletTransferErrorMessage(code: string | undefined): string {
+  const locked = passwordResetLockMessage(code);
+  if (locked) return locked;
   switch (code) {
     case 'not_authenticated_or_inactive':
       return 'You must be active staff or admin to manage outlet transfers.';

@@ -13,6 +13,7 @@ import { useAuth } from '../utils/auth';
 import {
   cancelPurchaseOrderErrorMessage,
   extractAtomicRpcErrorCode,
+  passwordResetLockMessage,
 } from '../utils/atomicRpcErrors';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
@@ -906,8 +907,10 @@ function PODetailModal({
       );
 
       if (rpcErr) {
+        const code = extractAtomicRpcErrorCode(undefined, rpcErr.message);
         setError(
-          extractAtomicRpcErrorCode(undefined, rpcErr.message) ??
+          passwordResetLockMessage(code ?? rpcErr.message) ??
+            code ??
             rpcErr.message ??
             'Receive shipment failed'
         );

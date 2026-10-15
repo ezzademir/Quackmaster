@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import { MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
+import { passwordResetLockMessage } from '../utils/atomicRpcErrors';
 import { LogOut } from 'lucide-react';
 
 export function RequiredPasswordReset() {
@@ -42,7 +43,7 @@ export function RequiredPasswordReset() {
       // Privileged column — clear via SECURITY DEFINER RPC (own-update trigger blocks direct PATCH)
       const { error: profileErr } = await supabase.rpc('clear_own_password_reset_required');
       if (profileErr) {
-        setError(profileErr.message);
+        setError(passwordResetLockMessage(profileErr.message) ?? profileErr.message);
         return;
       }
       await refetchProfile();
