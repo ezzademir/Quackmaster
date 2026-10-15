@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import MIG from '../../supabase/migrations/20261007150000_072_admin_approve_registration.sql?raw';
-import { parseApproveResult } from './approveResult';
+import { isMissingApproveRpc, parseApproveResult } from './approveResult';
 
 const ADM = '00000000-0000-0000-0000-0000000000a1';
 const U1 = '00000000-0000-0000-0000-0000000000c1';
@@ -80,5 +80,16 @@ describe('parseApproveResult', () => {
     expect(parseApproveResult({ success: false, message: 'x' })).toEqual({ ok: false, message: 'x' });
     expect(parseApproveResult(null)).toEqual({ ok: false, message: 'No confirmation from server' });
     expect(parseApproveResult({ error: 'forbidden' })).toEqual({ ok: false, message: 'forbidden' });
+  });
+});
+
+describe('isMissingApproveRpc', () => {
+  it('only the absent-function errors fall back', () => {
+    expect(isMissingApproveRpc({ code: 'PGRST202', message: 'Could not find the function public.admin_approve_registration(p_user_id) in the schema cache' })).toBe(true);
+    expect(isMissingApproveRpc({ code: '42883', message: 'function public.admin_approve_registration(uuid) does not exist' })).toBe(true);
+    expect(isMissingApproveRpc({ message: 'Could not find the function public.admin_approve_registration(p_user_id) in the schema cache' })).toBe(true);
+    expect(isMissingApproveRpc({ code: 'P0001', message: 'approve_profile_update_failed' })).toBe(false);
+    expect(isMissingApproveRpc({ code: '42501', message: 'permission denied for function admin_approve_registration' })).toBe(false);
+    expect(isMissingApproveRpc(null)).toBe(false);
   });
 });

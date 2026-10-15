@@ -6,11 +6,11 @@ import {
 const ADMIN = '11111111-1111-1111-1111-111111111111';
 const TARGET = '22222222-2222-2222-2222-222222222222';
 
-function deps(o: { caller?: string | null; apply?: ApplyResult | ApplyResult[]; banErr?: string | null } = {}) {
+function deps(o: { caller?: string | null; admin?: boolean; apply?: ApplyResult | ApplyResult[]; banErr?: string | null } = {}) {
   const calls: string[] = [];
   const applies = Array.isArray(o.apply) ? [...o.apply] : null;
   const d: SetUserActiveDeps = {
-    getCaller: async () => (o.caller === null ? null : { id: o.caller ?? ADMIN }),
+    getCaller: async () => (o.caller === null ? null : { id: o.caller ?? ADMIN, isActiveAdmin: o.admin !== false }),
     applyActive: async (_a, _t, active) => {
       calls.push(`apply ${active}`);
       return applies ? applies.shift() ?? { success: true } : (o.apply as ApplyResult) ?? { success: true, sessions_revoked: 2 };
@@ -63,5 +63,30 @@ describe('admin_set_user_active handler', () => {
     const bad = deps({ apply: { success: false, error: 'forbidden' } });
     expect((await handleSetUserActive(bad.d, H, { userId: TARGET, active: true })).status).toBe(403);
     expect(bad.calls).toEqual([`ban ${UNBAN}`, 'apply true', `ban ${BAN_FOREVER}`]);
+  });
+  it('non-admin never unbans or deactivates', async () => {
+    const reactivate = deps({ admin: false });
+    const r = await handleSetUserActive(reactivate.d, H, { userId: TARGET, active: true });
+    expect(r.status).toBe(403);
+    expect(r.body.error).toBe('forbidden');
+    expect(reactivate.calls).toEqual([]);
+    const deactivate = deps({ admin: false });
+    expect((await handleSetUserActive(deactivate.d, H, { userId: TARGET, active: false })).status).toBe(403);
+    expect(deactivate.calls).toEqual([]);
+  });
+  it('reactivate: failed re-ban is not reported as a clean refusal', async () => {
+    let bans = 0;
+    const d: SetUserActiveDeps = {
+      getCaller: async () => ({ id: ADMIN, isActiveAdmin: true }),
+      applyActive: async () => ({ success: false, error: 'forbidden' }),
+      setBan: async (_t, dur) => {
+        bans += 1;
+        return dur === BAN_FOREVER ? 'auth down' : null;
+      },
+    };
+    const r = await handleSetUserActive(d, H, { userId: TARGET, active: true });
+    expect(r.status).toBe(502);
+    expect(r.body.error).toBe('auth_reban_failed');
+    expect(bans).toBe(2);
   });
 });

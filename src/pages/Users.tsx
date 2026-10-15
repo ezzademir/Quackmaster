@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { Button, EmptyState, ListRow } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
-import { parseApproveResult } from '../utils/approveResult';
+import { isMissingApproveRpc, parseApproveResult } from '../utils/approveResult';
 import { countDeactivated, filterByActive, isUserActive } from '../utils/userActive';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
@@ -321,11 +321,58 @@ export function Users() {
     }
   }
 
+  async function approveRegistrationClientSide(userId: string) {
+    const reviewerId = (await supabase.auth.getUser()).data.user?.id;
+    const { data: profileRows, error: updateError } = await supabase
+      .from('profiles')
+      .update({ role: 'staff' })
+      .eq('id', userId)
+      .eq('role', 'pending')
+      .select('id');
+    if (updateError) throw updateError;
+    if (!profileRows?.length) {
+      setRoleNotice({ tone: 'err', text: 'Approve failed: profile was not updated' });
+      return;
+    }
+
+    const { data: regRows, error } = await supabase
+      .from('pending_registrations')
+      .update({
+        status: 'approved',
+        reviewed_by: reviewerId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .select('id');
+    if (error || !regRows?.length) {
+      await supabase.from('profiles').update({ role: 'pending' }).eq('id', userId).eq('role', 'staff');
+      throw new Error(error?.message ?? 'Registration was not updated');
+    }
+
+    await writeLedgerEntry({
+      action: 'approved',
+      entityType: 'pending_registration',
+      entityId: userId,
+      module: 'users',
+      operation: 'update',
+      afterData: { status: 'approved', role: 'staff' },
+    });
+    setRoleNotice({ tone: 'ok', text: 'User approved as staff.' });
+    await loadUsers();
+    setDrawer({ open: false });
+  }
+
   async function handleApproveUser(userId: string) {
     setRoleNotice(null);
     try {
-      // Single atomic server-side approve (profile role + registration status, row-count checked).
+      // Atomic when migration 072 is applied. Until then the RPC is absent (PGRST202) and
+      // Pages already calls it — fall back to row-checked client writes so approval still works.
       const { data, error } = await supabase.rpc('admin_approve_registration', { p_user_id: userId });
+      if (error && isMissingApproveRpc(error)) {
+        await approveRegistrationClientSide(userId);
+        return;
+      }
       if (error) throw error;
       const res = parseApproveResult(data);
       if (!res.ok) {

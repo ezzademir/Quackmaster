@@ -49,7 +49,17 @@ Deno.serve(async (req: Request) => {
       {
         async getCaller(jwt) {
           const { data, error } = await userClient.auth.getUser(jwt);
-          return error || !data.user ? null : { id: data.user.id };
+          if (error || !data.user) return null;
+          const { data: profile, error: profileErr } = await admin
+            .from("profiles")
+            .select("role, is_active")
+            .eq("id", data.user.id)
+            .maybeSingle();
+          if (profileErr) throw new Error(`Profile check failed: ${profileErr.message}`);
+          return {
+            id: data.user.id,
+            isActiveAdmin: profile?.role === "admin" && profile?.is_active !== false,
+          };
         },
         async applyActive(actorId, targetId, active, reason) {
           const { data, error } = await admin.rpc("admin_apply_user_active", {
