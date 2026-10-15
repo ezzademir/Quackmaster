@@ -123,13 +123,38 @@ export async function completeProductionRun(
     }
 
     const skuHint = params.productBatch?.trim() || '';
-    const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
+    const invokeCompletion = () =>
       supabase.rpc('post_production_completion_inventory', {
         p_production_run_id: params.productionRunId,
         p_product_batch: skuHint,
         p_finished_quantity: params.actualOutput,
-      })
-    );
+      });
+
+    // One replay: a lost response can follow a committed post. The RPC returns
+    // the existing lot when the run is already completed, so the replay does
+    // not consume raw materials again.
+    let rpcData: unknown;
+    let rpcErr: { message?: string } | null = null;
+    try {
+      const first = await invokeCompletion();
+      rpcData = first.data;
+      rpcErr = first.error;
+      if (rpcErr) {
+        const second = await invokeCompletion();
+        if (!second.error) {
+          rpcData = second.data;
+          rpcErr = null;
+        }
+      }
+    } catch (firstErr) {
+      try {
+        const second = await invokeCompletion();
+        rpcData = second.data;
+        rpcErr = second.error;
+      } catch {
+        throw firstErr;
+      }
+    }
 
     if (rpcErr) {
       return {
