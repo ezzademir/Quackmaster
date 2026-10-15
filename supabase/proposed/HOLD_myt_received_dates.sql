@@ -1,0 +1,6 @@
+-- [HOLD] PROPOSED ONLY — do not apply. Pending Clive/Ezzad review.
+-- Fix A-01: receive_supply_order stamps received_date / movement business_date with CURRENT_DATE (DB TZ = UTC).
+--   Replace both `CURRENT_DATE` occurrences in receive_supply_order with:
+--     (timezone('Asia/Kuala_Lumpur', now()))::date
+-- Fix A-02: receive_po_shipment actual_delivery_date CURRENT_DATE -> same expression.
+-- Same pattern already used by dispatch_supply_order (v_dispatch_date).
