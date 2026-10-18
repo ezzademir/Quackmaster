@@ -123,6 +123,7 @@ export async function completeProductionRun(
     }
 
     const skuHint = params.productBatch?.trim() || '';
+    // RPC validates RM before inserting FG; a jsonb success:false must not follow hub writes.
     const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
       supabase.rpc('post_production_completion_inventory', {
         p_production_run_id: params.productionRunId,

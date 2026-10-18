@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   displayLotFirst,
   displaySkuSecond,
+  draftRunFgCanBeRemoved,
   fgIdentifierMatches,
   formatFgLotLabel,
   formatLotWithSku,
@@ -114,6 +115,12 @@ describe('void-if-supplied', () => {
     expect(voidBlockedIfSupplied({ reservedQty: 0, outletQty: 0, supplyLineCount: 0, salesLineCount: 0, wasteLineCount: 1 })).toBe(
       'waste'
     );
+  });
+
+  it('allows scrubbing draft FG that is still only at hub with no reservation', () => {
+    expect(draftRunFgCanBeRemoved({ reservedQty: 0, outletQty: 0 })).toBe(true);
+    expect(draftRunFgCanBeRemoved({ reservedQty: 1, outletQty: 0 })).toBe(false);
+    expect(draftRunFgCanBeRemoved({ reservedQty: 0, outletQty: 2 })).toBe(false);
   });
 
   it('accepts typed run number or lot code', () => {
