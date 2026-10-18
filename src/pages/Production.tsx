@@ -18,6 +18,7 @@ import {
   voidProductionRun,
 } from '../utils/productionService';
 import { voidConfirmMatches } from '../utils/lotLabel';
+import { rawMaterialCoversConsumption, sumAvailableByRawMaterialId } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
@@ -374,7 +375,7 @@ function NewRunModal({
     const materialIds = (recipe.ingredients ?? []).map((ing) => ing.raw_material_id);
     const { data: inventoryData, error: invError } = await supabase
       .from('hub_inventory')
-      .select('raw_material_id, quantity_on_hand')
+      .select('raw_material_id, quantity_on_hand, reserved_quantity, available_quantity')
       .in('raw_material_id', materialIds);
 
     if (invError) {
@@ -383,9 +384,7 @@ function NewRunModal({
       return;
     }
 
-    const availableQuantities = new Map(
-      (inventoryData ?? []).map((item) => [item.raw_material_id, item.quantity_on_hand])
-    );
+    const availableQuantities = sumAvailableByRawMaterialId(inventoryData ?? []);
 
     setRunMaterials(
       (recipe.ingredients ?? []).map((ing) => ({
@@ -451,7 +450,7 @@ function NewRunModal({
     for (const m of runMaterials) {
       const used = parseFloat(m.quantity_consumed) || 0;
       const available = m.available_qty ?? 0;
-      if (used > available) {
+      if (!rawMaterialCoversConsumption(available, used)) {
         setError(`Insufficient stock for ${m.material_name}. Available: ${available} ${m.unit}, but tried to use ${used} ${m.unit}.`);
         return;
       }
@@ -720,7 +719,7 @@ function NewRunModal({
                 </thead>
                 <tbody className="divide-y divide-stone-100">
                   {runMaterials.map((m, i) => {
-                    const hasEnoughStock = (m.available_qty ?? 0) >= m.required;
+                    const hasEnoughStock = rawMaterialCoversConsumption(m.available_qty ?? 0, m.required);
                     return (
                     <tr key={i}>
                       <td className="px-3 py-2 font-medium text-stone-900">
