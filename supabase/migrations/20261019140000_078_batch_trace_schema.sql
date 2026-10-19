@@ -8,6 +8,10 @@
 --   waste_lines.outlet_inventory_id         outlet batch row the waste came off
 --   waste_lines.lot_id                      batch wasted (hub or outlet)
 --   outlet_stock_take_lines.lot_id          batch counted (snapshot of outlet_inventory.lot_id)
+--   sales_journal_lines.expired_at_sale     true when the batch sold was past expiry on the business date
+--   outlet_stock_take_sessions.status       NULL (legacy, posted) | 'open' | 'posted' | 'cancelled'
+--   outlet_stock_take_sessions.opened_at / opened_by   blind count started (080)
+--   one open count per outlet (partial unique index)
 --
 -- Column DEFAULTs (metadata only; no rows rewritten): supply_orders.supply_date and
 -- outlet_stock_take_sessions.count_date default to today in MYT instead of CURRENT_DATE (UTC),
@@ -43,3 +47,24 @@ ALTER TABLE public.supply_orders
   ALTER COLUMN supply_date SET DEFAULT (timezone('Asia/Kuala_Lumpur', now()))::date;
 ALTER TABLE public.outlet_stock_take_sessions
   ALTER COLUMN count_date SET DEFAULT (timezone('Asia/Kuala_Lumpur', now()))::date;
+
+-- Sales: batch past expiry on the business date (flag only; sale is never blocked). Written by 079.
+ALTER TABLE public.sales_journal_lines
+  ADD COLUMN IF NOT EXISTS expired_at_sale boolean;
+COMMENT ON COLUMN public.sales_journal_lines.expired_at_sale IS
+  'TRUE when the batch sold had expiry_date < business date. Warning only; the sale is never blocked (079).';
+
+-- Blind stock take sessions (080). Existing rows keep status NULL = legacy posted session.
+ALTER TABLE public.outlet_stock_take_sessions
+  ADD COLUMN IF NOT EXISTS status text,
+  ADD COLUMN IF NOT EXISTS opened_at timestamptz,
+  ADD COLUMN IF NOT EXISTS opened_by uuid;
+DO $c$ BEGIN
+  ALTER TABLE public.outlet_stock_take_sessions
+    ADD CONSTRAINT outlet_stock_take_sessions_status_check CHECK (status IS NULL OR status IN ('open', 'posted', 'cancelled'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $c$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_outlet_stock_take_sessions_one_open
+  ON public.outlet_stock_take_sessions (outlet_id) WHERE status = 'open';
+COMMENT ON COLUMN public.outlet_stock_take_sessions.status IS
+  'NULL = legacy posted session; open = blind count in progress (system qty hidden from non-admins); posted; cancelled.';

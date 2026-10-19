@@ -15,6 +15,7 @@ import {
 } from '../utils/visibilityService';
 import { displayLotFirst, formatLotWithSku, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
 import type { Outlet } from '../types';
+import { isBatchExpired, nestedRunNumber, runSequence } from '../utils/hubBatchPick';
 
 interface LineRow extends SalesJournalLineInput {
   key: string;
@@ -23,6 +24,7 @@ interface LineRow extends SalesJournalLineInput {
   lot_label?: string | null;
   available_qty?: number;
   fromInventory?: boolean;
+  expiry_date?: string | null;
 }
 
 const blankLines = (): LineRow[] => [
@@ -85,6 +87,10 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
   parsed.sort((a, b) => {
     const byExpiry = compareNullableStringAsc(a.lot?.expiry_date, b.lot?.expiry_date);
     if (byExpiry !== 0) return byExpiry;
+    // Same FEFO order as the server: equal expiry -> lower production run number first.
+    const ra = runSequence(nestedRunNumber(a.lot));
+    const rb = runSequence(nestedRunNumber(b.lot));
+    if (ra !== rb) return ra == null ? 1 : rb == null ? -1 : ra - rb;
     const byMfg = compareNullableStringAsc(a.lot?.manufactured_at, b.lot?.manufactured_at);
     if (byMfg !== 0) return byMfg;
     const byCreated = compareNullableStringAsc(a.row.created_at, b.row.created_at);
@@ -109,9 +115,13 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
       lot_label: lotLabel,
       available_qty: avail,
       fromInventory: true,
+      expiry_date: lot?.expiry_date ?? null,
     };
   });
 }
+
+/** One posted sales line for history views; expired_at_sale = batch was past expiry on the business date. */
+type SaleHistLine = { product_batch: string; quantity_sold: number; lot_label: string | null; expired_at_sale?: boolean | null };
 
 interface ModalDraftLine extends SalesJournalLineInput {
   key: string;
@@ -125,7 +135,7 @@ interface SalesJournalHistoryRow {
   notes: string | null;
   status: string;
   source?: string | null;
-  lines: { product_batch: string; quantity_sold: number; lot_label: string | null }[];
+  lines: SaleHistLine[];
 }
 
 function isVoidedSalesStatus(status: string | null | undefined): boolean {
@@ -178,12 +188,13 @@ function linesByJournalFromDb(
     product_batch: string;
     quantity_sold: string | number;
     created_at: string;
+    expired_at_sale?: boolean | null;
     lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
   }[]
-): Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]> {
+): Map<string, SaleHistLine[]> {
   const buckets = new Map<
     string,
-    { product_batch: string; quantity_sold: number; created_at: string; lot_label: string | null }[]
+    { product_batch: string; quantity_sold: number; created_at: string; lot_label: string | null; expired_at_sale: boolean | null }[]
   >();
   for (const row of rows) {
     const jid = row.sales_journal_id;
@@ -193,14 +204,15 @@ function linesByJournalFromDb(
       quantity_sold: Number(row.quantity_sold),
       created_at: row.created_at,
       lot_label: nestedLotLabel(row.lot),
+      expired_at_sale: row.expired_at_sale ?? null,
     });
   }
-  const out = new Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]>();
+  const out = new Map<string, SaleHistLine[]>();
   for (const [jid, arr] of buckets) {
     arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     out.set(
       jid,
-      arr.map(({ product_batch, quantity_sold, lot_label }) => ({ product_batch, quantity_sold, lot_label }))
+      arr.map(({ product_batch, quantity_sold, lot_label, expired_at_sale }) => ({ product_batch, quantity_sold, lot_label, expired_at_sale }))
     );
   }
   return out;
@@ -403,12 +415,12 @@ export function Sales() {
       const list = journals ?? [];
       const ids = list.map((j) => j.id);
 
-      let lineMap = new Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]>();
+      let lineMap = new Map<string, SaleHistLine[]>();
 
       if (ids.length > 0) {
         const { data: jl, error: lErr } = await supabase
           .from('sales_journal_lines')
-          .select('sales_journal_id,product_batch,quantity_sold,created_at,lot:inventory_lots(product_batch_label)')
+          .select('sales_journal_id,product_batch,quantity_sold,created_at,expired_at_sale,lot:inventory_lots(product_batch_label)')
           .in('sales_journal_id', ids);
         if (lErr) {
           console.error('[Sales] Failed to load sales journal lines:', lErr);
@@ -572,7 +584,7 @@ export function Sales() {
       const { data, error } = await supabase
         .from('outlet_inventory')
         .select(
-          'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+          'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(run_number, recipe:recipe_id(default_product_batch)))'
         )
         .eq('outlet_id', outletSnap)
         .is('raw_material_id', null)
@@ -641,8 +653,16 @@ export function Sales() {
         tone: 'ok',
         text: res.idempotentReplay
           ? 'Sale already recorded.'
-          : `Posted ${formatSoldQty(postedQty)} units`,
+          : `Posted ${formatSoldQty(postedQty)} units` +
+            (res.expiredQty
+              ? ` — warning: ${formatSoldQty(res.expiredQty)} unit(s) came from expired batch(es) and are flagged.`
+              : ''),
       });
+      if (res.expiredQty) {
+        window.alert(
+          `Expired stock sold: ${formatSoldQty(res.expiredQty)} unit(s) on ${res.expiredLines} line(s) were taken from batches past expiry (FEFO). They are flagged on the journal.`
+        );
+      }
       setNotes('');
       const reloaded = await loadBatchesFromInventory({ afterPost: true });
       if (!reloaded) setLines(blankLines());
@@ -959,6 +979,10 @@ export function Sales() {
           {inventoryEmptyNotice && (
             <p className="mb-2 text-sm text-stone-500">No supplied batches on hand for this outlet.</p>
           )}
+          <p className="mb-2 text-xs text-stone-500">
+            Quantities are deducted from the earliest-expiry batch of the same product first (FEFO, then production run
+            number), whichever batch row you type them on. Expired batches are sold but flagged.
+          </p>
           <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
             <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Batch / lot</div>
             <div className="w-28 min-w-[7rem] text-xs font-medium text-stone-500">Prod. date</div>
@@ -975,6 +999,11 @@ export function Sales() {
                       <span className="break-all font-mono text-stone-900">
                         {formatLotWithSku(line.lot_label, line.product_batch)}
                       </span>
+                      {isBatchExpired(line.expiry_date, businessDate) ? (
+                        <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-red-800">
+                          Expired
+                        </span>
+                      ) : null}
                     </div>
                   ) : (
                     <input
@@ -1120,6 +1149,11 @@ export function Sales() {
                             <span className="font-semibold">{ln.quantity_sold}</span>
                             <span className="mx-1 text-stone-400">×</span>
                             <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
+                            {ln.expired_at_sale ? (
+                              <span className="ml-1 rounded bg-red-100 px-1 py-0.5 font-sans text-[10px] font-semibold uppercase text-red-800">
+                                Expired
+                              </span>
+                            ) : null}
                           </li>
                         ))}
                       </ul>
@@ -1184,6 +1218,11 @@ export function Sales() {
                               <span className="font-semibold">{ln.quantity_sold}</span>
                               <span className="mx-1 text-stone-400">×</span>
                               <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
+                            {ln.expired_at_sale ? (
+                              <span className="ml-1 rounded bg-red-100 px-1 py-0.5 font-sans text-[10px] font-semibold uppercase text-red-800">
+                                Expired
+                              </span>
+                            ) : null}
                             </li>
                           ))}
                         </ul>

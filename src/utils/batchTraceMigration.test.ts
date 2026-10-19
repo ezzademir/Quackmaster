@@ -48,7 +48,9 @@ CREATE FUNCTION public.is_authenticated_active_staff() RETURNS boolean LANGUAGE 
 CREATE FUNCTION public.is_supervisor_for_outlet(uuid) RETURNS boolean LANGUAGE sql AS $$ SELECT false $$;
 CREATE FUNCTION public.profile_can_post_outlet_stock_take(uuid) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;
 CREATE FUNCTION public.fg_recipe_sku(uuid) RETURNS text LANGUAGE sql AS $$ SELECT 'KT'::text $$;
-CREATE FUNCTION public._set_outlet_movement_ctx(uuid, text, date, text, uuid, jsonb DEFAULT NULL) RETURNS void LANGUAGE sql AS $$ SELECT $$;
+CREATE TABLE movement_ctx (outlet_id uuid, movement_type text, business_date date, reference_type text, reference_id uuid, metadata jsonb);
+CREATE FUNCTION public._set_outlet_movement_ctx(uuid, text, date, text, uuid, jsonb DEFAULT NULL) RETURNS void LANGUAGE sql
+  AS $$ INSERT INTO movement_ctx VALUES ($1, $2, $3, $4, $5, $6) $$;
 CREATE FUNCTION public._clear_outlet_movement_ctx() RETURNS void LANGUAGE sql AS $$ SELECT $$;
 CREATE FUNCTION public._post_stock_take_snapshot_hook(uuid, date) RETURNS void LANGUAGE sql AS $$ SELECT $$;
 CREATE FUNCTION public._append_data_ledger(p_action text, p_entity_type text, p_entity_id text, p_module text, p_operation text,
@@ -300,13 +302,111 @@ describe('079 outlet sales, waste and stock take keep the batch', () => {
   });
 });
 
+describe('079 post_sales_journal deducts FEFO and flags expired batches', () => {
+  type SaleResult = { success: boolean; error?: string; expired_lines?: number; expired_qty?: number };
+  async function sell(pg: PGlite, lines: unknown[], date = TODAY) {
+    const r = await pg.query<{ j: SaleResult }>(`SELECT public.post_sales_journal('${OUTLET}', ${date}, $1::jsonb) j`, [
+      JSON.stringify(lines),
+    ]);
+    return r.rows[0].j;
+  }
+  async function soldRows(pg: PGlite) {
+    const r = await pg.query<{ oi: string; q: number; expired: boolean | null }>(
+      `SELECT sl.outlet_inventory_id oi, sl.quantity_sold::float q, sl.expired_at_sale expired FROM sales_journal_lines sl
+       LEFT JOIN inventory_lots il ON il.id = sl.lot_id ORDER BY il.expiry_date NULLS LAST, public.fg_lot_run_seq(sl.lot_id)`
+    );
+    return r.rows;
+  }
+
+  it('a line naming a later batch (Sales page by_line) is still deducted from the earliest expiry first', async () => {
+    const pg = await migratedDb();
+    const early = await outletRow(pg, 10, 2, 4, 'now()');
+    const late = await outletRow(pg, 11, 9, 50, 'now()');
+    const j = await sell(pg, [{ product_batch: 'KT', quantity_sold: 6, outlet_inventory_id: late }]);
+    expect(j.success).toBe(true);
+    expect(await soldRows(pg)).toEqual([
+      { oi: early, q: 4, expired: false },
+      { oi: late, q: 2, expired: false },
+    ]);
+    const ctx = await pg.query<{ m: Record<string, unknown> }>(`SELECT metadata m FROM movement_ctx WHERE movement_type = 'sale'`);
+    expect(ctx.rows.map((r) => r.m.mode)).toEqual(['fefo', 'fefo']);
+    expect(ctx.rows[0].m.requested_outlet_inventory_id).toBe(late);
+  });
+
+  it('equal expiry: lower run number first, matching dispatch', async () => {
+    const pg = await migratedDb();
+    const r113 = await outletRow(pg, 113, 5, 10, `now() - interval '3 days'`);
+    const r112 = await outletRow(pg, 112, 5, 10, 'now()');
+    expect((await sell(pg, [{ product_batch: 'KT', quantity_sold: 12 }])).success).toBe(true);
+    expect((await soldRows(pg)).map((r) => [r.oi, r.q])).toEqual([
+      [r112, 10],
+      [r113, 2],
+    ]);
+  });
+
+  it('expired batch is sold (not blocked) and flagged on the line, the movement, the ledger and the result', async () => {
+    const pg = await migratedDb();
+    const expired = await outletRow(pg, 20, -1, 3, 'now()');
+    const today = await outletRow(pg, 21, 0, 10, 'now()'); // expiry = business date: not expired
+    const j = await sell(pg, [{ product_batch: 'KT', quantity_sold: 5 }]);
+    expect(j).toMatchObject({ success: true, expired_lines: 1, expired_qty: 3 });
+    expect(await soldRows(pg)).toEqual([
+      { oi: expired, q: 3, expired: true },
+      { oi: today, q: 2, expired: false },
+    ]);
+    const ctx = await pg.query<{ e: boolean }>(
+      `SELECT (metadata->>'expired_at_sale')::boolean e FROM movement_ctx WHERE movement_type = 'sale' ORDER BY (metadata->>'expired_at_sale') DESC`
+    );
+    expect(ctx.rows.map((r) => r.e)).toEqual([true, false]);
+    const led = await pg.query<{ a: { expired_lines: number; lines: Array<{ expired_at_sale: boolean }> } }>(
+      `SELECT after_data a FROM ledger_calls WHERE entity_type = 'sales_journal'`
+    );
+    expect(led.rows[0].a.expired_lines).toBe(1);
+    expect(led.rows[0].a.lines.map((l) => l.expired_at_sale)).toEqual([true, false]);
+  });
+
+  it('expiry is judged on the business date, so a late-posted sale is not flagged retroactively', async () => {
+    const pg = await migratedDb();
+    await outletRow(pg, 30, -2, 5, 'now()'); // expired 2 days ago
+    const j = await sell(pg, [{ product_batch: 'KT', quantity_sold: 1 }], `${TODAY} - 3`);
+    expect(j).toMatchObject({ success: true, expired_lines: 0 });
+  });
+
+  it('several lines of one product are checked together; a shortfall writes nothing', async () => {
+    const pg = await migratedDb();
+    const a = await outletRow(pg, 40, 1, 5, 'now()');
+    const b = await outletRow(pg, 41, 2, 5, 'now()');
+    const j = await sell(pg, [
+      { product_batch: 'KT', quantity_sold: 6, outlet_inventory_id: b },
+      { product_batch: 'KT', quantity_sold: 5 },
+    ]);
+    expect(j).toMatchObject({ success: false, error: 'insufficient_stock', requested: 11, available: 10 });
+    const n = await pg.query<{ n: number }>(`SELECT (SELECT count(*) FROM sales_journals)::int + (SELECT count(*) FROM sales_journal_lines)::int n`);
+    expect(n.rows[0].n).toBe(0);
+    const q = await pg.query<{ q: number }>(`SELECT sum(quantity_on_hand)::float q FROM outlet_inventory WHERE id IN ('${a}', '${b}')`);
+    expect(q.rows[0].q).toBe(10);
+  });
+
+  it('a row with no product identity (no lot / SKU / batch code) is still sold from that exact row', async () => {
+    const pg = await migratedDb();
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO outlet_inventory (outlet_id, product_batch, quantity_on_hand, reserved_quantity, available_quantity)
+       VALUES ('${OUTLET}', NULL, 4, 0, 4) RETURNING id`
+    );
+    await pg.exec(`CREATE OR REPLACE FUNCTION public.fg_recipe_sku(uuid) RETURNS text LANGUAGE sql AS $$ SELECT NULL::text $$;`);
+    const j = await sell(pg, [{ product_batch: 'x', quantity_sold: 1, outlet_inventory_id: r.rows[0].id }]);
+    expect(j.success).toBe(true);
+    expect((await soldRows(pg))[0].oi).toBe(r.rows[0].id);
+  });
+});
+
 describe('078/079 guards and rollback', () => {
-  it('079 aborts if the live post_sales_journal body drifted', async () => {
+  it('079 aborts if a live function body drifted from the captured version', async () => {
     const pg = await liveDb();
     await pg.exec(SCHEMA);
     await pg.exec(`CREATE OR REPLACE FUNCTION public.post_sales_journal(p_outlet_id uuid, p_business_date date, p_lines jsonb,
       p_notes text DEFAULT NULL, p_idempotency_key uuid DEFAULT NULL) RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;`);
-    await expect(pg.exec(FUNCS)).rejects.toThrow(/expected 2/);
+    await expect(pg.exec(FUNCS)).rejects.toThrow(/post_sales_journal.*drifted/);
   });
 
   it('079 is re-runnable, and rollback 079 then 078 restores the live behaviour and schema', async () => {

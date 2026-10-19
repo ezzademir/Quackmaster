@@ -9,11 +9,38 @@
 --    expired_at_dispatch = true and the RPC returns expired_lines / expired_qty for a UI warning.
 --    Shortfall still RAISEs (whole dispatch rolls back). Raw-material lines are unchanged.
 -- 2. fg_lot_run_seq(lot_id): numeric run sequence (RUN-0112 -> 112) used as the FEFO tie-break.
--- 3. post_sales_journal: FIFO tie-break on equal expiry = run number ascending (guarded text patch
---    of the live body, same technique as 069).
+-- 3. post_sales_journal: FEFO for EVERY line (expiry, then run number, same order as dispatch),
+--    including lines that name an outlet_inventory_id; expired batches are sold but flagged
+--    expired_at_sale (line, movement metadata, ledger, RPC result). Validation before any write.
 -- 4. post_waste_event: records outlet_inventory_id + lot_id on waste_lines; same FIFO tie-break.
 -- 5. post_outlet_stock_take: records lot_id on outlet_stock_take_lines; a NULL p_count_date now
 --    defaults to today in MYT (was CURRENT_DATE = UTC date, wrong 00:00-08:00 MYT).
+
+-- Drift guard: every function rewritten below must still be the exact live body captured on
+-- 19 Oct 2026 (md5 of prosrc), or already be this migration's version (re-run). Otherwise abort,
+-- so a function changed in production after the capture is never silently overwritten.
+DO $guard$
+DECLARE
+  v_fn record;
+  v_src text;
+BEGIN
+  FOR v_fn IN SELECT * FROM (VALUES
+    ('public.dispatch_supply_order(uuid)', 'ed225eeb0f32c942f60d99dbe9da144a'),
+    ('public.post_waste_event(text, uuid, date, jsonb, text, uuid)', 'aadd8c5674e2df6d8a0915be765ab580'),
+    ('public.post_outlet_stock_take(uuid, date, text, jsonb, uuid)', 'b0144df091890e55f6fa573f88d4d22a'),
+    ('public.post_sales_journal(uuid, date, jsonb, text, uuid)', '203150c5c18d19049979f4e96d12a0d9')
+  ) AS t(sig, md5)
+  LOOP
+    SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure(v_fn.sig);
+    IF v_src IS NULL THEN
+      RAISE EXCEPTION 'batch_trace: % not found', v_fn.sig;
+    END IF;
+    IF md5(v_src) <> v_fn.md5 AND position('batch_trace_07' IN v_src) = 0 THEN
+      RAISE EXCEPTION 'batch_trace: % drifted from the captured live body (md5 %), re-capture before applying', v_fn.sig, md5(v_src);
+    END IF;
+  END LOOP;
+END
+$guard$;
 
 CREATE OR REPLACE FUNCTION public.fg_lot_run_seq(p_lot_id uuid)
 RETURNS bigint
@@ -35,6 +62,7 @@ CREATE OR REPLACE FUNCTION public.dispatch_supply_order(p_supply_order_id uuid)
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
+-- batch_trace_079
 DECLARE
   v_order public.supply_orders%ROWTYPE;
   v_ln RECORD;
@@ -247,24 +275,230 @@ BEGIN
 END;
 $function$;
 
--- Sales FIFO tie-break: guarded patch of the live body (aborts if the body drifted).
-DO $mig$
+-- Sales: every line is deducted FEFO (earliest expiry, then production run number) across the
+-- outlet's batches of the same product, consistent with dispatch. A line that names an
+-- outlet_inventory_id is resolved to that row's product (recipe SKU / lot label / batch code) and
+-- still goes FEFO; the named row is kept as requested_outlet_inventory_id in the movement/ledger
+-- metadata. A batch past expiry on the business date is still sold (never blocked) and flagged
+-- expired_at_sale on the sales line, the movement metadata and the ledger; the RPC returns
+-- expired_lines / expired_qty for a UI warning. Validation runs before any write (atomic).
+CREATE OR REPLACE FUNCTION public.post_sales_journal(p_outlet_id uuid, p_business_date date, p_lines jsonb, p_notes text DEFAULT NULL::text, p_idempotency_key uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+-- batch_trace_079
 DECLARE
-  v_def text;
-  v_n int;
-  v_old constant text := 'il.manufactured_at ASC NULLS LAST,';
+  v_uid uuid := auth.uid();
+  v_existing uuid;
+  v_journal_id uuid;
+  rec jsonb;
+  v_qty numeric;
+  v_key text;
+  v_exact uuid;
+  v_req uuid;
+  v_dkey text;
+  v_plan jsonb := '[]'::jsonb;
+  v_demand jsonb := '{}'::jsonb;
+  v_total_avail numeric;
+  v_remaining numeric;
+  v_take numeric;
+  v_avail numeric;
+  v_expired boolean;
+  v_sale_date date := COALESCE(p_business_date, (timezone('Asia/Kuala_Lumpur', now()))::date);
+  v_lines_meta jsonb := '[]'::jsonb;
+  v_expired_lines int := 0;
+  v_expired_qty numeric := 0;
+  r RECORD;
 BEGIN
-  v_def := pg_get_functiondef('public.post_sales_journal(uuid, date, jsonb, text, uuid)'::regprocedure);
-  IF position('fg_lot_run_seq' IN v_def) > 0 THEN
-    RETURN; -- already patched
+  IF v_uid IS NULL OR NOT (
+    public.is_authenticated_active_staff()
+    OR public.is_supervisor_for_outlet(p_outlet_id)
+  ) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authenticated_or_inactive');
   END IF;
-  v_n := (length(v_def) - length(replace(v_def, v_old, ''))) / length(v_old);
-  IF v_n <> 2 THEN
-    RAISE EXCEPTION 'batch_trace: post_sales_journal has % FIFO order clauses, expected 2', v_n;
+
+  IF p_idempotency_key IS NOT NULL THEN
+    SELECT id INTO v_existing FROM public.sales_journals WHERE idempotency_key = p_idempotency_key;
+    IF FOUND THEN
+      RETURN jsonb_build_object('success', true, 'sales_journal_id', v_existing, 'idempotent_replay', true);
+    END IF;
   END IF;
-  EXECUTE replace(v_def, v_old, 'public.fg_lot_run_seq(oi.lot_id) ASC NULLS LAST, ' || v_old);
-END
-$mig$;
+
+  IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) < 1 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'lines_required');
+  END IF;
+
+  -- 1. Resolve every line to a product key (or an exact row when the row has no product identity).
+  FOR rec IN SELECT * FROM jsonb_array_elements(p_lines)
+  LOOP
+    v_qty := NULLIF(rec->>'quantity_sold', '')::numeric;
+    IF v_qty IS NULL OR v_qty <= 0 THEN
+      RETURN jsonb_build_object('success', false, 'error', 'invalid_line');
+    END IF;
+    v_key := NULL;
+    v_exact := NULL;
+    v_req := NULL;
+    IF NULLIF(trim(both from coalesce(rec->>'outlet_inventory_id', '')), '') IS NOT NULL THEN
+      v_req := (rec->>'outlet_inventory_id')::uuid;
+      SELECT COALESCE(
+               public.fg_recipe_sku(oi.lot_id),
+               NULLIF(trim(both from il.product_batch_label), ''),
+               NULLIF(trim(both from oi.product_batch), '')
+             )
+      INTO v_key
+      FROM public.outlet_inventory oi
+      LEFT JOIN public.inventory_lots il ON il.id = oi.lot_id
+      WHERE oi.id = v_req AND oi.outlet_id = p_outlet_id;
+      IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'outlet_inventory_row_not_found', 'outlet_inventory_id', v_req);
+      END IF;
+      IF v_key IS NULL THEN
+        v_exact := v_req;
+      END IF;
+    ELSE
+      v_key := NULLIF(trim(both from coalesce(rec->>'product_batch', '')), '');
+      IF v_key IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'product_batch_or_outlet_inventory_id_required');
+      END IF;
+    END IF;
+    v_dkey := COALESCE('sku:' || v_key, 'row:' || v_exact::text);
+    v_demand := jsonb_set(v_demand, ARRAY[v_dkey], to_jsonb(COALESCE((v_demand->>v_dkey)::numeric, 0) + v_qty));
+    v_plan := v_plan || jsonb_build_array(jsonb_build_object('key', v_key, 'exact', v_exact, 'req', v_req, 'qty', v_qty));
+  END LOOP;
+
+  -- 2. Stock check per product (all lines of the same product together), locking the rows.
+  FOR rec IN SELECT jsonb_build_object('k', k, 'q', q) FROM jsonb_each_text(v_demand) AS d(k, q)
+  LOOP
+    v_dkey := rec->>'k';
+    SELECT COALESCE(SUM(GREATEST(x.quantity_on_hand - x.reserved_qty, 0)), 0) INTO v_total_avail
+    FROM (
+      SELECT oi.quantity_on_hand, COALESCE(oi.reserved_quantity, 0) AS reserved_qty
+      FROM public.outlet_inventory oi
+      LEFT JOIN public.inventory_lots il ON il.id = oi.lot_id
+      WHERE oi.outlet_id = p_outlet_id
+        AND oi.quantity_on_hand > 0
+        AND CASE
+              WHEN left(v_dkey, 4) = 'row:' THEN oi.id = substr(v_dkey, 5)::uuid
+              ELSE public.fg_identifier_matches(oi.product_batch, il.product_batch_label, public.fg_recipe_sku(oi.lot_id), substr(v_dkey, 5))
+            END
+      FOR UPDATE OF oi
+    ) x;
+    IF v_total_avail < (rec->>'q')::numeric THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'insufficient_stock',
+        'product_batch', substr(v_dkey, 5),
+        'requested', (rec->>'q')::numeric,
+        'available', v_total_avail
+      );
+    END IF;
+  END LOOP;
+
+  INSERT INTO public.sales_journals (outlet_id, business_date, status, notes, idempotency_key, created_by)
+  VALUES (p_outlet_id, p_business_date, 'posted', p_notes, p_idempotency_key, v_uid)
+  RETURNING id INTO v_journal_id;
+
+  -- 3. Deduct FEFO: expiry ASC, run number ASC, then manufacture / row age (same order as dispatch).
+  FOR rec IN SELECT * FROM jsonb_array_elements(v_plan)
+  LOOP
+    v_key := rec->>'key';
+    v_exact := NULLIF(rec->>'exact', '')::uuid;
+    v_req := NULLIF(rec->>'req', '')::uuid;
+    v_remaining := (rec->>'qty')::numeric;
+
+    FOR r IN
+      SELECT oi.id AS inv_id, oi.product_batch, oi.lot_id, oi.quantity_on_hand,
+             COALESCE(oi.reserved_quantity, 0) AS reserved_qty, il.expiry_date
+      FROM public.outlet_inventory oi
+      LEFT JOIN public.inventory_lots il ON il.id = oi.lot_id
+      WHERE oi.outlet_id = p_outlet_id
+        AND oi.quantity_on_hand > 0
+        AND CASE
+              WHEN v_exact IS NOT NULL THEN oi.id = v_exact
+              ELSE public.fg_identifier_matches(oi.product_batch, il.product_batch_label, public.fg_recipe_sku(oi.lot_id), v_key)
+            END
+      ORDER BY
+        il.expiry_date ASC NULLS LAST,
+        public.fg_lot_run_seq(oi.lot_id) ASC NULLS LAST,
+        il.manufactured_at ASC NULLS LAST,
+        oi.created_at ASC NULLS LAST,
+        oi.id ASC
+      FOR UPDATE OF oi
+    LOOP
+      EXIT WHEN v_remaining <= 0;
+      v_avail := GREATEST(r.quantity_on_hand - r.reserved_qty, 0);
+      v_take := LEAST(v_avail, v_remaining);
+      CONTINUE WHEN v_take <= 0;
+      v_expired := r.expiry_date IS NOT NULL AND r.expiry_date < v_sale_date;
+
+      PERFORM public._set_outlet_movement_ctx(
+        p_outlet_id, 'sale', p_business_date, 'sales_journal', v_journal_id,
+        jsonb_build_object(
+          'source', 'manual', 'mode', 'fefo',
+          'lot_id', r.lot_id, 'expiry_date', r.expiry_date,
+          'expired_at_sale', v_expired,
+          'requested_outlet_inventory_id', v_req
+        )
+      );
+
+      UPDATE public.outlet_inventory oi
+      SET quantity_on_hand = oi.quantity_on_hand - v_take,
+          available_quantity = (oi.quantity_on_hand - v_take) - COALESCE(oi.reserved_quantity, 0),
+          last_updated = now(),
+          updated_at = now()
+      WHERE oi.id = r.inv_id;
+
+      PERFORM public._clear_outlet_movement_ctx();
+
+      INSERT INTO public.sales_journal_lines (sales_journal_id, product_batch, lot_id, quantity_sold, outlet_inventory_id, expired_at_sale)
+      VALUES (v_journal_id, trim(both from coalesce(r.product_batch, '')), r.lot_id, v_take, r.inv_id, v_expired);
+
+      v_lines_meta := v_lines_meta || jsonb_build_array(jsonb_build_object(
+        'outlet_inventory_id', r.inv_id,
+        'product_batch', trim(both from coalesce(r.product_batch, '')),
+        'lot_id', r.lot_id,
+        'expiry_date', r.expiry_date,
+        'quantity_sold', v_take,
+        'expired_at_sale', v_expired,
+        'requested_outlet_inventory_id', v_req
+      ));
+      IF v_expired THEN
+        v_expired_lines := v_expired_lines + 1;
+        v_expired_qty := v_expired_qty + v_take;
+      END IF;
+      v_remaining := v_remaining - v_take;
+    END LOOP;
+
+    IF v_remaining > 0 THEN
+      RAISE EXCEPTION 'fifo_line_alloc_failed'
+        USING ERRCODE = 'P0001', DETAIL = format('remaining %s batch %s', v_remaining, COALESCE(v_key, v_exact::text));
+    END IF;
+  END LOOP;
+
+  PERFORM public._append_data_ledger(
+    'posted', 'sales_journal', v_journal_id::text, 'sales', 'event', NULL, NULL,
+    jsonb_build_object(
+      'outlet_id', p_outlet_id,
+      'business_date', p_business_date,
+      'lines', v_lines_meta,
+      'expired_lines', v_expired_lines,
+      'expired_qty', v_expired_qty
+    ),
+    NULL,
+    jsonb_build_object('notes', p_notes, 'allocation', 'fefo')
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'sales_journal_id', v_journal_id,
+    'lines', v_lines_meta,
+    'expired_lines', v_expired_lines,
+    'expired_qty', v_expired_qty
+  );
+END;
+$function$;
 
 -- Waste: record the batch (outlet row + lot) on every waste line; same FIFO tie-break.
 CREATE OR REPLACE FUNCTION public.post_waste_event(p_location_kind text, p_outlet_id uuid, p_waste_date date, p_lines jsonb, p_notes text DEFAULT NULL::text, p_idempotency_key uuid DEFAULT NULL::uuid)
@@ -273,6 +507,7 @@ CREATE OR REPLACE FUNCTION public.post_waste_event(p_location_kind text, p_outle
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
+-- batch_trace_079
 DECLARE
   v_uid uuid := auth.uid();
   v_existing uuid;
@@ -518,6 +753,7 @@ CREATE OR REPLACE FUNCTION public.post_outlet_stock_take(p_outlet_id uuid, p_cou
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
+-- batch_trace_079
 DECLARE
   v_uid uuid := auth.uid();
   v_session_id uuid;
