@@ -30,6 +30,84 @@ export type PostOutletStockTakeResult =
     }
   | { success: false; error: string; [k: string]: unknown };
 
+/** One line of a blind count sheet: batch identity only (the server never sends quantities). */
+export interface BlindCountSheetLine {
+  outlet_inventory_id: string;
+  raw_material_id: string | null;
+  product_batch: string | null;
+  lot_id: string | null;
+  lot_label: string | null;
+  recipe_sku: string | null;
+  expiry_date: string | null;
+  run_number: string | null;
+  item_name: string | null;
+  unit_of_measure: string | null;
+}
+
+export type BlindCountSheetResult =
+  | { success: true; session_id: string; count_date: string; resumed?: boolean; lines: BlindCountSheetLine[] }
+  | { success: false; error: string };
+
+export type SubmitBlindCountResult =
+  | {
+      success: true;
+      session_id: string;
+      lines_counted?: number;
+      idempotent_replay?: boolean;
+      /** Present for admins only: system quantity and variance per line. */
+      lines?: Array<{ outlet_inventory_id: string; system_qoh_before: number; counted_qty: number; variance: number }>;
+    }
+  | { success: false; error: string };
+
+async function callJsonRpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) return { success: false, error: error.message } as T;
+  if (!data || typeof data !== 'object') return { success: false, error: 'empty_response' } as T;
+  return data as T;
+}
+
+/** Open (or resume) the outlet's blind count and get its count sheet. */
+export function startBlindStockTake(outletId: string, countDate?: string | null, notes?: string | null) {
+  return callJsonRpc<BlindCountSheetResult>('start_outlet_stock_take', {
+    p_outlet_id: outletId,
+    p_count_date: countDate ?? null,
+    p_notes: notes?.trim() || null,
+  });
+}
+
+export function getBlindStockTakeSheet(sessionId: string) {
+  return callJsonRpc<BlindCountSheetResult>('get_outlet_stock_take_sheet', { p_session_id: sessionId });
+}
+
+export function submitBlindStockTake(params: {
+  sessionId: string;
+  lines: OutletStockTakeLineInput[];
+  notes?: string | null;
+  idempotencyKey?: string | null;
+}) {
+  return callJsonRpc<SubmitBlindCountResult>('submit_outlet_stock_take', {
+    p_session_id: params.sessionId,
+    p_lines: params.lines.map((l) => ({
+      outlet_inventory_id: l.outlet_inventory_id,
+      counted_qty: l.counted_qty,
+      line_remark: l.line_remark ?? null,
+    })),
+    p_notes: params.notes?.trim() || null,
+    p_idempotency_key: params.idempotencyKey ?? null,
+  });
+}
+
+export function cancelBlindStockTake(sessionId: string, reason?: string | null) {
+  return callJsonRpc<{ success: boolean; error?: string }>('cancel_outlet_stock_take', {
+    p_session_id: sessionId,
+    p_reason: reason?.trim() || null,
+  });
+}
+
+/**
+ * Legacy direct post. Since 080 the server only accepts this into the outlet's open blind session
+ * (error blind_count_session_required otherwise); kept for compatibility.
+ */
 export async function postOutletStockTake(params: PostOutletStockTakeParams): Promise<PostOutletStockTakeResult> {
   const { data, error } = await supabase.rpc('post_outlet_stock_take', {
     p_outlet_id: params.outletId,
@@ -58,6 +136,10 @@ export interface OutletStockTakeSessionRow {
   id: string;
   outlet_id: string;
   count_date: string;
+  /** NULL = legacy posted session; open = blind count in progress (080). */
+  status?: 'open' | 'posted' | 'cancelled' | null;
+  opened_at?: string | null;
+  opened_by?: string | null;
   notes: string | null;
   idempotency_key: string | null;
   created_by: string | null;
