@@ -8,7 +8,7 @@ import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui'
 import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
 import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
-import { isDateInRange, type DateRange } from '../utils/dateRange';
+import { isDateInRange, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
 import {
   backfillLotExpiryForRecipe,
@@ -342,7 +342,9 @@ function NewRunModal({
   plannedBatchId?: string | null;
 }) {
   const [recipe_id, setRecipeId] = useState(initialRecipeId ?? '');
-  const [production_date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  // Malaysia calendar date (00:00-08:00 MYT is still the previous day in UTC).
+  const [production_date, setDate] = useState(() => malaysiaCalendarDate());
+  const productionDateInFuture = production_date > malaysiaCalendarDate();
   const [planned_output, setPlanned] = useState(
     initialPlannedOutput != null ? String(initialPlannedOutput) : ''
   );
@@ -636,6 +638,11 @@ function NewRunModal({
             <label className="mb-1 block text-sm font-medium text-stone-700">Production Date</label>
             <input type="date" value={production_date} onChange={(e) => setDate(e.target.value)}
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
+            {productionDateInFuture && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                This date is in the future (Malaysia time). The lot code and expiry use this date.
+              </p>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>

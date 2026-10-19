@@ -4,6 +4,7 @@
 
 import { supabase } from './supabase';
 import { isLegacyBatchCode, skuForDisplay } from './lotLabel';
+import { compareHubBatches } from './hubBatchPick';
 import type { Outlet } from '../types';
 
 export interface OutletStockTakeLineInput {
@@ -117,7 +118,7 @@ const OUTLET_INV_SELECT_WITH_RM = `
   lot:inventory_lots (
     product_batch_label,
     expiry_date,
-    production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+    production_run:production_run_id ( run_number, recipe:recipe_id ( default_product_batch ) )
   ),
   raw_materials ( name, unit_of_measure )
 `;
@@ -134,7 +135,7 @@ const OUTLET_INV_SELECT_LEGACY = `
   lot:inventory_lots (
     product_batch_label,
     expiry_date,
-    production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+    production_run:production_run_id ( run_number, recipe:recipe_id ( default_product_batch ) )
   )
 `;
 
@@ -325,6 +326,7 @@ export interface SkuCountLotRow {
   reserved_quantity: number;
   expiry_date?: string | null;
   created_at?: string | null;
+  run_number?: string | null;
   item_label?: string;
 }
 
@@ -369,38 +371,39 @@ export function groupRowsForSkuCount(rows: SkuCountLotRow[]): SkuCountGroup[] {
 }
 
 /**
- * Allocate a SKU counted total onto lot rows FIFO by expiry then created_at.
- * Shortfall zeros earlier lots then applies remainder (may go below reserved — caller validates).
- * Surplus lands on the last lot.
+ * Allocate a SKU counted total onto lot rows.
+ * Sales and waste consume the OLDEST batch first (FEFO, ties by run number), so stock still on the
+ * shelf is the NEWEST. The count therefore fills the newest batches first, up to each batch's system
+ * on-hand; any surplus over the system total lands on the newest batch. A shortfall falls on the
+ * oldest batches (the ones FIFO would already have sold). Output order is FEFO (oldest first).
  */
 export function allocateSkuCountToLots(
   lots: SkuCountLotRow[],
   countedTotal: number
 ): Array<{ outlet_inventory_id: string; counted_qty: number }> {
-  const sorted = [...lots].sort((a, b) => {
-    const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
-    const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
-    if (ae !== be) return ae - be;
+  const fefo = [...lots].sort((a, b) => {
+    const byBatch = compareHubBatches(
+      { expiry_date: a.expiry_date, run_number: a.run_number },
+      { expiry_date: b.expiry_date, run_number: b.run_number }
+    );
+    if (byBatch !== 0) return byBatch;
     const ac = a.created_at ? Date.parse(a.created_at) : 0;
     const bc = b.created_at ? Date.parse(b.created_at) : 0;
     return ac - bc;
   });
 
   let remaining = Math.max(0, countedTotal);
-  const out: Array<{ outlet_inventory_id: string; counted_qty: number }> = [];
-
-  for (let i = 0; i < sorted.length; i++) {
-    const lot = sorted[i];
-    const isLast = i === sorted.length - 1;
-    if (isLast) {
-      out.push({ outlet_inventory_id: lot.id, counted_qty: remaining });
-      remaining = 0;
-    } else {
-      const take = Math.min(remaining, Math.max(0, Number(lot.quantity_on_hand ?? 0)));
-      out.push({ outlet_inventory_id: lot.id, counted_qty: take });
-      remaining -= take;
-    }
+  const counted = new Map<string, number>();
+  for (let i = fefo.length - 1; i >= 0; i--) {
+    const lot = fefo[i];
+    const take = Math.min(remaining, Math.max(0, Number(lot.quantity_on_hand ?? 0)));
+    counted.set(lot.id, take);
+    remaining -= take;
+  }
+  if (remaining > 0 && fefo.length > 0) {
+    const newest = fefo[fefo.length - 1].id;
+    counted.set(newest, (counted.get(newest) ?? 0) + remaining);
   }
 
-  return out;
+  return fefo.map((lot) => ({ outlet_inventory_id: lot.id, counted_qty: counted.get(lot.id) ?? 0 }));
 }

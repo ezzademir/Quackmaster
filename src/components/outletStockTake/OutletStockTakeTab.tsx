@@ -16,6 +16,7 @@ import {
 } from '../../utils/outletStockTakeService';
 import { fetchStockTakeVarianceThreshold } from '../../utils/stockTakeSettings';
 import { displayLotFirst, displaySkuSecond, nestedLotLabel, nestedRecipeSku } from '../../utils/lotLabel';
+import { nestedRunNumber } from '../../utils/hubBatchPick';
 import { filterByStockView, type StockView } from '../../utils/stockView';
 import { StockViewToggle } from '../StockViewToggle';
 import { StickyActions } from '../ui/StickyActions';
@@ -41,6 +42,7 @@ type DraftRow = {
   created_at?: string | null;
   last_updated?: string | null;
   recipe_sku?: string | null;
+  run_number?: string | null;
 };
 
 function normBatch(pb: string | null | undefined): string {
@@ -276,6 +278,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 countedStr: '',
                 remark: '',
                 expiry_date: lot?.expiry_date ?? null,
+                run_number: nestedRunNumber(row.lot),
                 created_at: typeof row.created_at === 'string' ? row.created_at : null,
                 last_updated: typeof row.last_updated === 'string' ? row.last_updated : null,
               } satisfies DraftRow,
@@ -325,6 +328,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               countedStr: String(qoh),
               remark: '',
               expiry_date: lot?.expiry_date ?? null,
+              run_number: nestedRunNumber(row.lot),
               created_at: typeof row.created_at === 'string' ? row.created_at : null,
               last_updated: typeof row.last_updated === 'string' ? row.last_updated : null,
             };
@@ -427,6 +431,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         quantity_on_hand: r.quantity_on_hand,
         reserved_quantity: r.reserved_quantity,
         expiry_date: r.expiry_date,
+        run_number: r.run_number,
         created_at: r.created_at,
         item_label: r.item_label,
       }))
