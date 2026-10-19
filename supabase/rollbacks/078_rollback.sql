@@ -14,3 +14,5 @@ DROP INDEX IF EXISTS public.uq_outlet_stock_take_sessions_one_open;
 ALTER TABLE public.outlet_stock_take_sessions DROP CONSTRAINT IF EXISTS outlet_stock_take_sessions_status_check;
 ALTER TABLE public.outlet_stock_take_sessions DROP COLUMN IF EXISTS opened_by, DROP COLUMN IF EXISTS opened_at, DROP COLUMN IF EXISTS status;
 ALTER TABLE public.sales_journal_lines DROP COLUMN IF EXISTS expired_at_sale;
+DROP TABLE IF EXISTS public.outlet_stock_take_open_balances;
+ALTER TABLE public.outlet_stock_take_lines DROP COLUMN IF EXISTS qty_moved_during_count, DROP COLUMN IF EXISTS system_qoh_at_open;

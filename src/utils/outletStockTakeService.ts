@@ -55,7 +55,16 @@ export type SubmitBlindCountResult =
       lines_counted?: number;
       idempotent_replay?: boolean;
       /** Present for admins only: system quantity and variance per line. */
-      lines?: Array<{ outlet_inventory_id: string; system_qoh_before: number; counted_qty: number; variance: number }>;
+      lines?: Array<{
+        outlet_inventory_id: string;
+        system_qoh_before: number;
+        counted_qty: number;
+        variance: number;
+        /** System qty when the count opened (audit; 0 = batch arrived during the count). */
+        system_qoh_at_open?: number;
+        /** Net sales/receipts/waste posted while the count was open (system_qoh_before − system_qoh_at_open). */
+        qty_moved_during_count?: number;
+      }>;
     }
   | { success: false; error: string };
 
@@ -64,6 +73,35 @@ async function callJsonRpc<T>(fn: string, args: Record<string, unknown>): Promis
   if (error) return { success: false, error: error.message } as T;
   if (!data || typeof data !== 'object') return { success: false, error: 'empty_response' } as T;
   return data as T;
+}
+
+/** FG batch on hand at an outlet, identity only (no quantities): shape matches the outlet_inventory select. */
+export interface OutletSaleBatchRow {
+  id: string;
+  product_batch: string;
+  created_at: string | null;
+  lot: {
+    expiry_date: string | null;
+    manufactured_at: string | null;
+    product_batch_label: string | null;
+    production_run: { run_number: string | null; recipe: { default_product_batch: string | null } } | null;
+  } | null;
+}
+
+export interface OutletSaleBatchesResult {
+  success: boolean;
+  error?: string;
+  /** true while a blind count is open and the caller (non-admin) cannot read this outlet's stock. */
+  hidden?: boolean;
+  rows?: OutletSaleBatchRow[];
+}
+
+/**
+ * Batches on hand for the Sales / Waste screens. Used when a blind count hides outlet_inventory
+ * from the user (RLS): posting still works server-side, the screen just gets no quantities.
+ */
+export function getOutletSaleBatches(outletId: string) {
+  return callJsonRpc<OutletSaleBatchesResult>('get_outlet_sale_batches', { p_outlet_id: outletId });
 }
 
 /** Open (or resume) the outlet's blind count and get its count sheet. */
@@ -172,6 +210,9 @@ export interface OutletStockTakeLineRow {
   counted_qty: number;
   variance: number;
   line_remark: string | null;
+  /** Blind counts (080): system qty at open and net movement while open. NULL on older sessions. */
+  system_qoh_at_open?: number | null;
+  qty_moved_during_count?: number | null;
   outlet_inventory?: {
     product_batch?: string | null;
     raw_material_id?: string | null;
@@ -362,6 +403,8 @@ export function buildOutletStockTakeCsv(
     counted_qty: number;
     variance: number;
     line_remark?: string | null;
+    system_qoh_at_open?: number | null;
+    qty_moved_during_count?: number | null;
   }>
 ): string {
   const outletName = session.outlet?.name ?? '';
@@ -378,6 +421,8 @@ export function buildOutletStockTakeCsv(
     'counted_qty',
     'variance',
     'line_remark',
+    'system_qoh_at_open',
+    'qty_moved_during_count',
   ];
   const rows = lines.map((l) =>
     [
@@ -393,6 +438,8 @@ export function buildOutletStockTakeCsv(
       l.counted_qty,
       l.variance,
       l.line_remark ?? '',
+      l.system_qoh_at_open ?? '',
+      l.qty_moved_during_count ?? '',
     ].map(csvCell)
   );
 

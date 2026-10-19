@@ -242,6 +242,158 @@ describe('080 blind stock take: submission and variance', () => {
   });
 });
 
+/**
+ * Call an RPC the way PostgREST does for a signed-in user: role `authenticated` (RLS applies to the
+ * caller). The posting functions are re-owned by a non-superuser BYPASSRLS role first, matching prod
+ * (owner `postgres`: rolbypassrls = true, rolsuper = false, tables not FORCE ROW LEVEL SECURITY), so
+ * the test does not pass merely because pglite's default owner is a superuser.
+ */
+async function asProdOwner(pg: PGlite) {
+  await pg.exec(`
+    DO $$ BEGIN CREATE ROLE fn_owner NOSUPERUSER BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    GRANT ALL ON ALL TABLES IN SCHEMA public TO fn_owner;
+    GRANT USAGE ON SCHEMA public, auth TO fn_owner;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO fn_owner, authenticated;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO fn_owner, authenticated;
+    ALTER FUNCTION public.post_sales_journal(uuid, date, jsonb, text, uuid) OWNER TO fn_owner;
+    ALTER FUNCTION public.post_waste_event(text, uuid, date, jsonb, text, uuid) OWNER TO fn_owner;
+    ALTER FUNCTION public.receive_supply_order(uuid, uuid) OWNER TO fn_owner;
+    ALTER FUNCTION public.dispatch_supply_order(uuid) OWNER TO fn_owner;
+    DO $$ BEGIN
+      IF to_regprocedure('public.get_outlet_sale_batches(uuid)') IS NOT NULL THEN
+        ALTER FUNCTION public.get_outlet_sale_batches(uuid) OWNER TO fn_owner;
+      END IF;
+    END $$;`);
+}
+async function rpcAsUser<T = Record<string, unknown>>(pg: PGlite, uid: string, sql: string, params: unknown[] = []) {
+  await as(pg, uid);
+  await pg.exec('SET ROLE authenticated');
+  try {
+    return (await pg.query<{ j: T }>(`SELECT ${sql} j`, params)).rows[0].j;
+  } finally {
+    await pg.exec('RESET ROLE');
+  }
+}
+
+describe('080 blind stock take: operations keep working during an open count', () => {
+  type Sale = { success: boolean; error?: string; expired_lines?: number };
+  const TODAY = `(timezone('Asia/Kuala_Lumpur', now()))::date`;
+
+  it('staff can post a sale for the outlet while a count is open; FEFO deduction is unchanged', async () => {
+    const pg = await db();
+    await asProdOwner(pg);
+    const later = await stock(pg, OUTLET, 10, { expiry: 9 });
+    const earliest = await stock(pg, OUTLET, 4, { expiry: 2 });
+    const s = await rpcAsUser<Start>(pg, STAFF, `public.start_outlet_stock_take('${OUTLET}')`);
+    expect(s.success).toBe(true);
+    // Control: the caller's own reads are hidden by 080's RLS while the count is open…
+    expect(await readAs(pg, STAFF, `SELECT 1 FROM outlet_inventory WHERE outlet_id = '${OUTLET}'`)).toHaveLength(0);
+    // …but the SECURITY DEFINER posting path is not (owner bypasses RLS), so the sale posts.
+    const sale = await rpcAsUser<Sale>(pg, STAFF, `public.post_sales_journal('${OUTLET}', ${TODAY}, $1::jsonb)`, [
+      JSON.stringify([{ product_batch: 'KT', outlet_inventory_id: later, quantity_sold: 6 }]),
+    ]);
+    expect(sale).toMatchObject({ success: true, expired_lines: 0 });
+    const q = await pg.query<{ id: string; q: number }>(
+      `SELECT id, quantity_on_hand::float q FROM outlet_inventory WHERE id IN ('${later}', '${earliest}')`
+    );
+    expect(Object.fromEntries(q.rows.map((r) => [r.id, r.q]))).toEqual({ [earliest]: 0, [later]: 8 });
+    const sl = await pg.query<{ oi: string; q: number }>(
+      `SELECT outlet_inventory_id oi, quantity_sold::float q FROM sales_journal_lines ORDER BY quantity_sold DESC`
+    );
+    expect(sl.rows).toEqual([{ oi: earliest, q: 4 }, { oi: later, q: 2 }]);
+    const st = await pg.query<{ status: string }>(`SELECT status FROM outlet_stock_take_sessions`);
+    expect(st.rows).toEqual([{ status: 'open' }]); // the count stays open
+  });
+
+  it('waste and supply receive also post during an open count', async () => {
+    const pg = await db();
+    await asProdOwner(pg);
+    const a = await stock(pg, OUTLET, 5, { expiry: 3 });
+    await rpcAsUser<Start>(pg, SUP, `public.start_outlet_stock_take('${OUTLET}')`);
+    const w = await rpcAsUser<{ success: boolean }>(pg, SUP, `public.post_waste_event('outlet', '${OUTLET}', ${TODAY}, $1::jsonb)`, [
+      JSON.stringify([{ outlet_id: OUTLET, outlet_inventory_id: a, quantity: 2, waste_reason: 'spoiled' }]),
+    ]);
+    expect(w).toMatchObject({ success: true });
+    const hub = await pg.query<{ id: string }>(`
+      WITH pr AS (INSERT INTO production_runs (run_number) VALUES ('RUN-0900') RETURNING id),
+      il AS (INSERT INTO inventory_lots (product_batch_label, expiry_date, manufactured_at, production_run_id)
+             SELECT 'KT-LOT-900', ${TODAY} + 8, now(), id FROM pr RETURNING id)
+      INSERT INTO hub_inventory (product_batch, lot_id, quantity_on_hand, reserved_quantity, available_quantity)
+      SELECT 'KT', id, 30, 0, 30 FROM il RETURNING id`);
+    const so = await pg.query<{ id: string }>(
+      `INSERT INTO supply_orders (supply_order_number, outlet_id, status, total_quantity) VALUES ('SO-B', '${OUTLET}', 'pending', 12) RETURNING id`
+    );
+    await pg.exec(`INSERT INTO supply_order_lines (supply_order_id, hub_inventory_id, product_batch, quantity)
+      VALUES ('${so.rows[0].id}', '${hub.rows[0].id}', 'KT', 12)`);
+    const d = await rpcAsUser<{ success: boolean }>(pg, ADMIN, `public.dispatch_supply_order('${so.rows[0].id}')`);
+    expect(d).toMatchObject({ success: true });
+    const rec = await rpcAsUser<{ success: boolean }>(pg, ADMIN, `public.receive_supply_order('${so.rows[0].id}')`);
+    expect(rec).toMatchObject({ success: true });
+    const oi = await pg.query<{ label: string; q: number }>(`
+      SELECT il.product_batch_label label, oi.quantity_on_hand::float q FROM outlet_inventory oi
+      JOIN inventory_lots il ON il.id = oi.lot_id WHERE oi.outlet_id = '${OUTLET}' ORDER BY 1`);
+    expect(Object.fromEntries(oi.rows.map((r) => [r.label, r.q]))).toMatchObject({ 'KT-LOT-900': 12 });
+    const left = await pg.query<{ q: number }>(`SELECT quantity_on_hand::float q FROM outlet_inventory WHERE id = '${a}'`);
+    expect(left.rows[0].q).toBe(3); // 5 − 2 wasted
+  });
+
+  it('variance is against stock at submit; quantity at open and net movement during the count are recorded for admins', async () => {
+    const pg = await db();
+    await asProdOwner(pg);
+    const a = await stock(pg, OUTLET, 10, { expiry: 2 });
+    const s = await rpcAsUser<Start>(pg, STAFF, `public.start_outlet_stock_take('${OUTLET}')`);
+    // Sold 3 while the count was open (posted before submission).
+    await rpcAsUser<Sale>(pg, STAFF, `public.post_sales_journal('${OUTLET}', ${TODAY}, $1::jsonb)`, [
+      JSON.stringify([{ product_batch: 'KT', quantity_sold: 3 }]),
+    ]);
+    const res = await rpcAsUser<Submit>(pg, STAFF, `public.submit_outlet_stock_take($1, $2::jsonb)`, [
+      s.session_id,
+      JSON.stringify([{ outlet_inventory_id: a, counted_qty: 6 }]),
+    ]);
+    expect(res).toEqual({ success: true, session_id: s.session_id, lines_counted: 1 }); // still blind for staff
+    const line = await pg.query(`SELECT system_qoh_at_open::float o, qty_moved_during_count::float m,
+      system_qoh_before::float sys, counted_qty::float c, variance::float v FROM outlet_stock_take_lines`);
+    expect(line.rows).toEqual([{ o: 10, m: -3, sys: 7, c: 6, v: -1 }]);
+    // The open-time quantities are never readable by non-admins.
+    expect(await readAs(pg, STAFF, `SELECT * FROM outlet_stock_take_open_balances`)).toHaveLength(0);
+    expect(await readAs(pg, SUP, `SELECT * FROM outlet_stock_take_open_balances`)).toHaveLength(0);
+    expect(await readAs(pg, ADMIN, `SELECT * FROM outlet_stock_take_open_balances`)).toHaveLength(1);
+  });
+
+  it('a batch first received during the count has quantity-at-open 0', async () => {
+    const pg = await db();
+    await asProdOwner(pg);
+    await stock(pg, OUTLET, 2);
+    const s = await rpcAsUser<Start>(pg, ADMIN, `public.start_outlet_stock_take('${OUTLET}')`);
+    const fresh = await stock(pg, OUTLET, 5);
+    const res = await rpcAsUser<Submit>(pg, ADMIN, `public.submit_outlet_stock_take($1, $2::jsonb)`, [
+      s.session_id,
+      JSON.stringify([{ outlet_inventory_id: fresh, counted_qty: 5 }]),
+    ]);
+    expect(res.lines?.[0]).toMatchObject({ system_qoh_at_open: 0, qty_moved_during_count: 5, system_qoh_before: 5, variance: 0 });
+  });
+
+  it('get_outlet_sale_batches gives the Sales/Waste screens batch identity (no quantities) while stock is hidden', async () => {
+    const pg = await db();
+    await asProdOwner(pg);
+    const late = await stock(pg, OUTLET, 10, { expiry: 9 });
+    const early = await stock(pg, OUTLET, 4, { expiry: 2 });
+    await stock(pg, OUTLET, 0, { updatedDaysAgo: 1 }); // sold out: not offered
+    type B = { success: boolean; hidden: boolean; rows: Array<Record<string, unknown>> };
+    const open = await rpcAsUser<B>(pg, STAFF, `public.get_outlet_sale_batches('${OUTLET}')`);
+    expect(open).toMatchObject({ success: true, hidden: false });
+    expect(open.rows.map((r) => r.id)).toEqual([early, late]);
+    await rpcAsUser<Start>(pg, STAFF, `public.start_outlet_stock_take('${OUTLET}')`);
+    const during = await rpcAsUser<B>(pg, STAFF, `public.get_outlet_sale_batches('${OUTLET}')`);
+    expect(during.hidden).toBe(true);
+    expect(during.rows.map((r) => r.id)).toEqual([early, late]);
+    expect(JSON.stringify(during)).not.toMatch(QTY_KEYS);
+    expect(await rpcAsUser(pg, '00000000-0000-0000-0000-00000000dead', `public.get_outlet_sale_batches('${OUTLET}')`)).toMatchObject({
+      success: false,
+    });
+  });
+});
+
 describe('080 guards and rollback', () => {
   it('080 refuses to apply before 079', async () => {
     const pg = await before080();
@@ -261,7 +413,7 @@ describe('080 guards and rollback', () => {
     );
     expect(r.success).toBe(true); // direct post again (079 behaviour)
     expect(await readAs(pg, STAFF, `SELECT variance FROM outlet_stock_take_lines`)).toHaveLength(1);
-    const fns = await pg.query(`SELECT 1 FROM pg_proc WHERE proname IN ('start_outlet_stock_take','submit_outlet_stock_take','stock_qty_hidden_for_outlet')`);
+    const fns = await pg.query(`SELECT 1 FROM pg_proc WHERE proname IN ('start_outlet_stock_take','submit_outlet_stock_take','stock_qty_hidden_for_outlet','get_outlet_sale_batches')`);
     expect(fns.rows).toHaveLength(0);
     const pol = await pg.query(`SELECT 1 FROM pg_policies WHERE policyname LIKE 'Blind count%'`);
     expect(pol.rows).toHaveLength(0);

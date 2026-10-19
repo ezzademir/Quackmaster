@@ -8,6 +8,7 @@ import type { Outlet } from '../types';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
+import { getOutletSaleBatches } from '../utils/outletStockTakeService';
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -164,8 +165,14 @@ export function Waste() {
         .eq('outlet_id', outletId)
         .is('raw_material_id', null)
         .gt('quantity_on_hand', 0);
+      let rows: unknown[] = data ?? [];
+      if (rows.length === 0) {
+        // Blind stock take open: outlet stock is hidden from non-admins; waste still posts server-side.
+        const alt = await getOutletSaleBatches(outletId);
+        if (alt.success && alt.hidden) rows = alt.rows ?? [];
+      }
       if (cancelled) return;
-      const picks: OutletPickRow[] = (data ?? []).map((row) => {
+      const picks: OutletPickRow[] = rows.map((row) => {
         const r = row as {
           id: string;
           product_batch: string | null;

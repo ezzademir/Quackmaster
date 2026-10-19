@@ -88,7 +88,7 @@ interface Props {
   initialOutletId?: string;
 }
 
-type AdminVariance = Array<{ label: string; system: number; counted: number; variance: number }>;
+type AdminVariance = Array<{ label: string; system: number; counted: number; variance: number; atOpen: number | null; moved: number | null }>;
 
 export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initialOutletId }: Props) {
   const { isAdmin } = useAuth();
@@ -259,6 +259,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             system: Number(l.system_qoh_before),
             counted: Number(l.counted_qty),
             variance: Number(l.variance),
+            atOpen: l.system_qoh_at_open == null ? null : Number(l.system_qoh_at_open),
+            moved: l.qty_moved_during_count == null ? null : Number(l.qty_moved_during_count),
           }))
         );
       }
@@ -295,6 +297,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         counted_qty: Number(l.counted_qty),
         variance: Number(l.variance),
         line_remark: l.line_remark,
+        system_qoh_at_open: l.system_qoh_at_open ?? null,
+        qty_moved_during_count: l.qty_moved_during_count ?? null,
       }));
       const csv = buildOutletStockTakeCsv(detail, csvLines);
       const safeDate = (detail.count_date ?? '').replace(/[^\d-]/g, '');
@@ -480,7 +484,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           {adminVariance && adminVariance.length > 0 ? (
             <div className="rounded-lg border border-stone-200">
               <p className="border-b border-stone-200 bg-stone-50 px-3 py-2 text-xs font-semibold text-stone-700">
-                Variance (admin only) — counted minus system at submission
+                Variance (admin only) — counted minus system at submission. “Moved” = sales, receipts or waste
+                posted while the count was open; a variance close to −moved usually means a sale was posted for
+                goods sold before they were counted.
               </p>
               <table className="w-full text-sm">
                 <tbody className="divide-y divide-stone-100">
@@ -489,6 +495,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       <td className="px-3 py-1.5 text-stone-800">{v.label}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-stone-500">sys {v.system}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-stone-500">cnt {v.counted}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-stone-500">
+                        {v.moved ? `moved ${v.moved > 0 ? '+' : ''}${v.moved} (open ${v.atOpen ?? 0})` : ''}
+                      </td>
                       <td
                         className={`px-3 py-1.5 text-right tabular-nums ${v.variance !== 0 ? 'font-semibold text-amber-800' : 'text-stone-500'}`}
                       >

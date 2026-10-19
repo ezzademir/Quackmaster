@@ -8,6 +8,7 @@ DROP POLICY IF EXISTS "Blind count hides outlet stock" ON public.outlet_inventor
 DROP POLICY IF EXISTS "Blind count hides outlet movements" ON public.outlet_stock_movements;
 DROP POLICY IF EXISTS "Blind count hides outlet snapshots" ON public.outlet_inventory_snapshots;
 DROP POLICY IF EXISTS "Admins view outlet stock take lines" ON public.outlet_stock_take_lines;
+DROP POLICY IF EXISTS "Admins view stock take open balances" ON public.outlet_stock_take_open_balances;
 DROP POLICY IF EXISTS "Non supervisor view outlet stock take lines" ON public.outlet_stock_take_lines;
 CREATE POLICY "Non supervisor view outlet stock take lines" ON public.outlet_stock_take_lines
   FOR SELECT TO authenticated
@@ -466,6 +467,7 @@ BEGIN
 END;
 $function$;
 
+DROP FUNCTION IF EXISTS public.get_outlet_sale_batches(uuid);
 DROP FUNCTION IF EXISTS public.submit_outlet_stock_take(uuid, jsonb, text, uuid);
 DROP FUNCTION IF EXISTS public.cancel_outlet_stock_take(uuid, text);
 DROP FUNCTION IF EXISTS public.get_outlet_stock_take_sheet(uuid);

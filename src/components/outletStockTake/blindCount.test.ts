@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { parseCount, sheetToCountRows } from './blindCount';
 import TAB from './OutletStockTakeTab.tsx?raw';
 import SERVICE from '../../utils/outletStockTakeService.ts?raw';
+import SALES from '../../pages/Sales.tsx?raw';
+import WASTE from '../../pages/Waste.tsx?raw';
 
 const sheet = [
   {
@@ -46,5 +48,11 @@ describe('blind count sheet (client)', () => {
   it('variance is only rendered from the admin-only submit result', () => {
     expect(TAB).toMatch(/if \(res\.lines && isAdmin\)/);
     expect(TAB).toMatch(/isAdmin && posted \?/); // CSV (with variance) only for admins
+  });
+
+  it('Sales and Waste fall back to the identity-only batch RPC while a count hides outlet stock', () => {
+    expect(SERVICE).toMatch(/'get_outlet_sale_batches'/);
+    for (const src of [SALES, WASTE]) expect(src).toMatch(/getOutletSaleBatches\(/);
+    expect(SALES).toMatch(/quantity_on_hand: null/); // no available qty shown during a count
   });
 });

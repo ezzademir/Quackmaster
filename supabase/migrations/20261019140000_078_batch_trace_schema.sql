@@ -12,6 +12,9 @@
 --   outlet_stock_take_sessions.status       NULL (legacy, posted) | 'open' | 'posted' | 'cancelled'
 --   outlet_stock_take_sessions.opened_at / opened_by   blind count started (080)
 --   one open count per outlet (partial unique index)
+--   outlet_stock_take_open_balances          system qty per batch when a blind count opened (admin-only, 080)
+--   outlet_stock_take_lines.system_qoh_at_open / qty_moved_during_count   audit of stock that moved while
+--                                            the count was open (sales/receipts/waste posted mid-count)
 --
 -- Column DEFAULTs (metadata only; no rows rewritten): supply_orders.supply_date and
 -- outlet_stock_take_sessions.count_date default to today in MYT instead of CURRENT_DATE (UTC),
@@ -68,3 +71,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_outlet_stock_take_sessions_one_open
   ON public.outlet_stock_take_sessions (outlet_id) WHERE status = 'open';
 COMMENT ON COLUMN public.outlet_stock_take_sessions.status IS
   'NULL = legacy posted session; open = blind count in progress (system qty hidden from non-admins); posted; cancelled.';
+
+-- Blind count audit (080): system quantity per batch at the moment the count opened. Readable by
+-- active admins only (policy in 080); no client writes (only SECURITY DEFINER RPCs write it).
+CREATE TABLE IF NOT EXISTS public.outlet_stock_take_open_balances (
+  session_id uuid NOT NULL REFERENCES public.outlet_stock_take_sessions(id) ON DELETE CASCADE,
+  outlet_inventory_id uuid NOT NULL REFERENCES public.outlet_inventory(id) ON DELETE CASCADE,
+  qoh_at_open numeric NOT NULL,
+  PRIMARY KEY (session_id, outlet_inventory_id)
+);
+ALTER TABLE public.outlet_stock_take_open_balances ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.outlet_stock_take_open_balances FROM anon, authenticated;
+GRANT SELECT ON public.outlet_stock_take_open_balances TO authenticated;
+COMMENT ON TABLE public.outlet_stock_take_open_balances IS
+  'System qty per outlet batch when a blind stock take opened. Admin-only. Variance is still counted - qty at submit; this is audit.';
+ALTER TABLE public.outlet_stock_take_lines
+  ADD COLUMN IF NOT EXISTS system_qoh_at_open numeric,
+  ADD COLUMN IF NOT EXISTS qty_moved_during_count numeric;
+COMMENT ON COLUMN public.outlet_stock_take_lines.system_qoh_at_open IS
+  'Blind count (080): system qty of this batch when the count opened (0 if the batch arrived during the count).';
+COMMENT ON COLUMN public.outlet_stock_take_lines.qty_moved_during_count IS
+  'Blind count (080): system_qoh_before - system_qoh_at_open = net sales/receipts/waste/transfers posted while the count was open.';

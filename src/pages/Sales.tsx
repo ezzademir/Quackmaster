@@ -7,6 +7,7 @@ import { supabase } from '../utils/supabase';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { outletRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
+import { getOutletSaleBatches } from '../utils/outletStockTakeService';
 import {
   postSalesJournal,
   replaceSalesJournal,
@@ -44,7 +45,8 @@ interface OutletInventoryLot {
 interface OutletInventoryRowForLoad {
   id: string;
   product_batch: string;
-  quantity_on_hand: number;
+  /** null when a blind count hides quantities (rows from get_outlet_sale_batches). */
+  quantity_on_hand: number | null;
   reserved_quantity: number | null;
   available_quantity: number | null;
   created_at: string | null;
@@ -102,9 +104,10 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
     const lotLabel = nestedLotLabel(lot as never);
     const recipeSku = nestedRecipeSku(lot);
     const displayBatch = displayLotFirst(lotLabel, batch) || batch;
+    const qtyHidden = row.quantity_on_hand == null;
     const qoh = Number(row.quantity_on_hand ?? 0);
     const res = Number(row.reserved_quantity ?? 0);
-    const avail = outletRowAvailableQuantity(qoh, res, row.available_quantity);
+    const avail = qtyHidden ? undefined : outletRowAvailableQuantity(qoh, res, row.available_quantity);
     return {
       key: crypto.randomUUID(),
       // Keep a matchable identifier; posting uses outlet_inventory_id for the exact lot row.
@@ -591,15 +594,38 @@ export function Sales() {
         .gt('quantity_on_hand', 0);
 
       if (error) throw error;
+      let rows = (data ?? []) as OutletInventoryRowForLoad[];
+      let blindCount = false;
+      if (rows.length === 0) {
+        // A blind stock take hides this outlet's stock from non-admins (RLS). Sales still post
+        // server-side; list the batches without quantities.
+        const alt = await getOutletSaleBatches(outletSnap);
+        if (alt.success && alt.hidden) {
+          blindCount = true;
+          rows = (alt.rows ?? []).map((r) => ({
+            ...r,
+            quantity_on_hand: null,
+            reserved_quantity: null,
+            available_quantity: null,
+          }));
+        }
+      }
       if (gen !== batchesFetchGenRef.current || outletSnap !== outletIdRef.current) {
         return true;
       }
 
-      const next = outletInventoryToSaleLines((data ?? []) as OutletInventoryRowForLoad[]);
+      const next = outletInventoryToSaleLines(rows);
       const isEmpty = next.length === 1 && !next[0].product_batch;
       setLines(next);
       setInventoryEmptyNotice(isEmpty);
-      if (!opts?.afterPost && !isEmpty) {
+      if (blindCount) {
+        setMessage({
+          tone: 'ok',
+          text:
+            'Stock take in progress at this outlet: on-hand quantities are hidden until it is submitted. ' +
+            'You can still post sales (deducted oldest expiry first).',
+        });
+      } else if (!opts?.afterPost && !isEmpty) {
         setMessage({
           tone: 'ok',
           text: `Loaded ${next.length} supplied batch${next.length === 1 ? '' : 'es'} on hand at this outlet. Enter qty sold, then Post.`,

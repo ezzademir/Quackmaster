@@ -15,6 +15,16 @@
 --   * post_outlet_stock_take (old signature) no longer accepts free-form counts; it only submits into
 --     the outlet's open blind session (error blind_count_session_required otherwise), so an old
 --     client cannot post a count it pre-filled from system quantity.
+--   * Operations keep working during a count: post_sales_journal, post_waste_event, dispatch and
+--     receive_supply_order are SECURITY DEFINER owned by postgres (BYPASSRLS, tables not FORCE RLS),
+--     so the caller's hidden-stock RLS does not apply inside them and none of them call the three
+--     refusing balance RPCs. The Sales/Waste screens list batches during a count through
+--     get_outlet_sale_batches (identity only, no quantities).
+--   * Variance basis: counted - system qty AT SUBMIT (which already includes sales/receipts/waste
+--     posted while the count was open). The system qty per batch at open is snapshotted into
+--     outlet_stock_take_open_balances (admin-only) and each line records system_qoh_at_open and
+--     qty_moved_during_count, so an admin can see when a variance coincides with stock that moved
+--     mid-count (e.g. a sale posted for goods sold before they were counted).
 --   * Submission validates every line before writing (the live body could RETURN an error after
 --     writing earlier lines; now all-or-nothing).
 
@@ -137,6 +147,8 @@ BEGIN
       VALUES (p_outlet_id, COALESCE(p_count_date, (timezone('Asia/Kuala_Lumpur', now()))::date),
               NULLIF(trim(both from p_notes), ''), v_uid, 'open', now(), v_uid)
       RETURNING * INTO v_sess;
+      INSERT INTO public.outlet_stock_take_open_balances (session_id, outlet_inventory_id, qoh_at_open)
+      SELECT v_sess.id, oi.id, oi.quantity_on_hand FROM public.outlet_inventory oi WHERE oi.outlet_id = p_outlet_id;
     EXCEPTION WHEN unique_violation THEN
       SELECT * INTO v_sess FROM public.outlet_stock_take_sessions WHERE outlet_id = p_outlet_id AND status = 'open';
       v_resumed := true;
@@ -238,6 +250,8 @@ DECLARE
   v_qoh numeric;
   v_res numeric;
   v_var numeric;
+  v_open numeric;
+  v_moved numeric;
   v_seen uuid[] := ARRAY[]::uuid[];
   v_lines_out jsonb := '[]'::jsonb;
   v_n int := 0;
@@ -292,7 +306,12 @@ BEGIN
     INTO v_qoh, v_res, v_lot
     FROM public.outlet_inventory oi WHERE oi.id = v_oi_id;
 
+    -- Variance against stock at submit; open-time qty is audit only (0 = batch arrived mid-count).
     v_var := v_counted - v_qoh;
+    SELECT ob.qoh_at_open INTO v_open FROM public.outlet_stock_take_open_balances ob
+    WHERE ob.session_id = v_sess.id AND ob.outlet_inventory_id = v_oi_id;
+    v_open := COALESCE(v_open, 0);
+    v_moved := v_qoh - v_open;
 
     PERFORM public._set_outlet_movement_ctx(
       v_sess.outlet_id, 'stock_take', v_sess.count_date, 'outlet_stock_take', v_sess.id,
@@ -304,11 +323,13 @@ BEGIN
     WHERE oi.id = v_oi_id;
     PERFORM public._clear_outlet_movement_ctx();
 
-    INSERT INTO public.outlet_stock_take_lines (session_id, outlet_inventory_id, system_qoh_before, counted_qty, variance, line_remark, lot_id)
-    VALUES (v_sess.id, v_oi_id, v_qoh, v_counted, v_var, v_remark, v_lot);
+    INSERT INTO public.outlet_stock_take_lines (session_id, outlet_inventory_id, system_qoh_before, counted_qty, variance, line_remark, lot_id,
+                                                system_qoh_at_open, qty_moved_during_count)
+    VALUES (v_sess.id, v_oi_id, v_qoh, v_counted, v_var, v_remark, v_lot, v_open, v_moved);
 
     v_lines_out := v_lines_out || jsonb_build_array(jsonb_build_object(
-      'outlet_inventory_id', v_oi_id, 'lot_id', v_lot, 'system_qoh_before', v_qoh, 'counted_qty', v_counted, 'variance', v_var
+      'outlet_inventory_id', v_oi_id, 'lot_id', v_lot, 'system_qoh_before', v_qoh, 'counted_qty', v_counted, 'variance', v_var,
+      'system_qoh_at_open', v_open, 'qty_moved_during_count', v_moved
     ));
     v_n := v_n + 1;
   END LOOP;
@@ -370,6 +391,46 @@ BEGIN
 END;
 $function$;
 
+-- Sales / Waste screens: FG batches on hand at the outlet, identity only (FEFO order). Works while
+-- a blind count hides outlet_inventory from the caller; never returns quantities. Same permission
+-- as post_sales_journal.
+CREATE OR REPLACE FUNCTION public.get_outlet_sale_batches(p_outlet_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+-- batch_trace_080
+BEGIN
+  IF auth.uid() IS NULL OR NOT (public.is_authenticated_active_staff() OR public.is_supervisor_for_outlet(p_outlet_id)) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authenticated_or_inactive');
+  END IF;
+  RETURN jsonb_build_object(
+    'success', true,
+    'hidden', public.stock_qty_hidden_for_outlet(p_outlet_id),
+    'rows', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+          'id', oi.id,
+          'product_batch', oi.product_batch,
+          'created_at', oi.created_at,
+          'lot', CASE WHEN il.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'expiry_date', il.expiry_date,
+            'manufactured_at', il.manufactured_at,
+            'product_batch_label', il.product_batch_label,
+            'production_run', jsonb_build_object('run_number', pr.run_number,
+              'recipe', jsonb_build_object('default_product_batch', public.fg_recipe_sku(oi.lot_id)))
+          ) END
+        ) ORDER BY il.expiry_date ASC NULLS LAST, public.fg_lot_run_seq(oi.lot_id) ASC NULLS LAST,
+          il.manufactured_at ASC NULLS LAST, oi.created_at, oi.id), '[]'::jsonb)
+      FROM public.outlet_inventory oi
+      LEFT JOIN public.inventory_lots il ON il.id = oi.lot_id
+      LEFT JOIN public.production_runs pr ON pr.id = il.production_run_id
+      WHERE oi.outlet_id = p_outlet_id AND oi.raw_material_id IS NULL AND oi.quantity_on_hand > 0
+    )
+  );
+END;
+$function$;
+
 REVOKE ALL ON FUNCTION public.can_view_stock_take_variance() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.outlet_has_open_stock_take(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.stock_qty_hidden_for_outlet(uuid) FROM PUBLIC;
@@ -378,6 +439,7 @@ REVOKE ALL ON FUNCTION public.start_outlet_stock_take(uuid, date, text) FROM PUB
 REVOKE ALL ON FUNCTION public.get_outlet_stock_take_sheet(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.cancel_outlet_stock_take(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.submit_outlet_stock_take(uuid, jsonb, text, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_outlet_sale_batches(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.can_view_stock_take_variance() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.outlet_has_open_stock_take(uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.stock_qty_hidden_for_outlet(uuid) TO authenticated, service_role;
@@ -385,6 +447,7 @@ GRANT EXECUTE ON FUNCTION public.start_outlet_stock_take(uuid, date, text) TO au
 GRANT EXECUTE ON FUNCTION public.get_outlet_stock_take_sheet(uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.cancel_outlet_stock_take(uuid, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.submit_outlet_stock_take(uuid, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.get_outlet_sale_batches(uuid) TO authenticated, service_role;
 
 -- RLS: hide quantities of an outlet under blind count from non-admins (RESTRICTIVE = AND-ed with
 -- the existing permissive SELECT policies, which stay unchanged).
@@ -408,6 +471,11 @@ DROP POLICY IF EXISTS "Non supervisor view outlet stock take lines" ON public.ou
 DROP POLICY IF EXISTS "Supervisor view stock take lines via session outlet" ON public.outlet_stock_take_lines;
 DROP POLICY IF EXISTS "Admins view outlet stock take lines" ON public.outlet_stock_take_lines;
 CREATE POLICY "Admins view outlet stock take lines" ON public.outlet_stock_take_lines
+  FOR SELECT TO authenticated
+  USING (public.can_view_stock_take_variance());
+
+DROP POLICY IF EXISTS "Admins view stock take open balances" ON public.outlet_stock_take_open_balances;
+CREATE POLICY "Admins view stock take open balances" ON public.outlet_stock_take_open_balances
   FOR SELECT TO authenticated
   USING (public.can_view_stock_take_variance());
 
