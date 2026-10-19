@@ -9,6 +9,7 @@ import RB079 from '../../supabase/rollbacks/079_rollback.sql?raw';
 import RB080 from '../../supabase/rollbacks/080_rollback.sql?raw';
 import LIVE_DEPS from '../../supabase/tests/fixtures/batch_trace_live_deps.sql?raw';
 import BLIND_DEPS from '../../supabase/tests/fixtures/blind_stock_take_live_deps.sql?raw';
+import MOVE_DEPS from '../../supabase/tests/fixtures/movement_live_deps.sql?raw';
 
 const OUTLET = '00000000-0000-0000-0000-0000000000b1';
 const OTHER = '00000000-0000-0000-0000-0000000000b2';
@@ -391,6 +392,95 @@ describe('080 blind stock take: operations keep working during an open count', (
     expect(await rpcAsUser(pg, '00000000-0000-0000-0000-00000000dead', `public.get_outlet_sale_batches('${OUTLET}')`)).toMatchObject({
       success: false,
     });
+  });
+});
+
+/** Real movement trigger + ctx helpers + snapshot hook + void_sales_journal, as live. */
+const withLiveMovements = pgliteTemplate(async (pg) => {
+  await build079(pg);
+  await pg.exec(BLIND);
+  await pg.exec(`
+    ALTER TABLE outlet_stock_movements ADD COLUMN reference_type text, ADD COLUMN reference_id uuid;
+    CREATE UNIQUE INDEX ON outlet_inventory_snapshots (outlet_id, snapshot_date, snapshot_type);
+    ALTER TABLE sales_journals ADD COLUMN IF NOT EXISTS updated_at timestamptz;`);
+  await pg.exec(MOVE_DEPS);
+});
+
+describe('080 smoke-plan rehearsal (live movement trigger)', () => {
+  const TODAY = `(timezone('Asia/Kuala_Lumpur', now()))::date`;
+  const qty = async (pg: PGlite, ids: string[]) =>
+    Object.fromEntries(
+      (await pg.query<{ id: string; q: number }>(`SELECT id, quantity_on_hand::float q FROM outlet_inventory WHERE id = ANY($1::uuid[])`, [ids])).rows.map(
+        (r) => [r.id, r.q]
+      )
+    );
+  const movements = async (pg: PGlite) =>
+    (
+      await pg.query<{ oi: string; type: string; q: number; ref: string }>(
+        `SELECT outlet_inventory_id oi, movement_type type, signed_qty::float q, reference_type ref FROM outlet_stock_movements ORDER BY created_at, id`
+      )
+    ).rows;
+
+  it('zero-variance blind count submit writes no stock movements and leaves every batch unchanged', async () => {
+    const pg = await withLiveMovements();
+    const a = await stock(pg, OUTLET, 150, { expiry: -3 });
+    const b = await stock(pg, OUTLET, 512, { expiry: 3 });
+    const z = await stock(pg, OUTLET, 0, { updatedDaysAgo: 5 });
+    const before = await qty(pg, [a, b, z]);
+    const m0 = (await movements(pg)).length;
+    const s = await rpcAsUser<Start>(pg, STAFF, `public.start_outlet_stock_take('${OUTLET}')`);
+    expect(s.lines).toHaveLength(3);
+    const res = await rpcAsUser<Submit>(pg, STAFF, `public.submit_outlet_stock_take($1, $2::jsonb)`, [
+      s.session_id,
+      JSON.stringify(s.lines.map((l) => ({ outlet_inventory_id: l.outlet_inventory_id, counted_qty: before[l.outlet_inventory_id as string] }))),
+    ]);
+    expect(res).toEqual({ success: true, session_id: s.session_id, lines_counted: 3 });
+    expect((await movements(pg)).length).toBe(m0); // trigger skips delta 0
+    expect(await qty(pg, [a, b, z])).toEqual(before);
+    const v = await pg.query<{ v: number; m: number }>(`SELECT variance::float v, qty_moved_during_count::float m FROM outlet_stock_take_lines`);
+    expect(v.rows.every((r) => r.v === 0 && r.m === 0)).toBe(true);
+    const snaps = await pg.query<{ t: string }>(`SELECT snapshot_type t FROM outlet_inventory_snapshots`);
+    expect(snaps.rows).toEqual([{ t: 'post_stock_take' }]); // the one non-stock side effect (plus ledger rows)
+  });
+
+  it('mid-count FEFO sale of 1 hits the expired batch, zero-variance submit, then void restores that same batch', async () => {
+    const pg = await withLiveMovements();
+    const expired = await stock(pg, OUTLET, 150, { expiry: -3 });
+    const fresh = await stock(pg, OUTLET, 512, { expiry: 3 });
+    const before = await qty(pg, [expired, fresh]);
+    const s = await rpcAsUser<Start>(pg, STAFF, `public.start_outlet_stock_take('${OUTLET}')`);
+    // Staff picks the fresh batch on screen; the server deducts FEFO (the expired one) and flags it.
+    const sale = await rpcAsUser<{ success: boolean; sales_journal_id: string; expired_qty: number }>(
+      pg,
+      STAFF,
+      `public.post_sales_journal('${OUTLET}', ${TODAY}, $1::jsonb)`,
+      [JSON.stringify([{ product_batch: 'KT', outlet_inventory_id: fresh, quantity_sold: 1 }])]
+    );
+    expect(sale).toMatchObject({ success: true, expired_qty: 1 });
+    expect(await qty(pg, [expired, fresh])).toEqual({ [expired]: 149, [fresh]: 512 });
+    const line = await pg.query(`SELECT outlet_inventory_id oi, quantity_sold::float q, expired_at_sale e FROM sales_journal_lines`);
+    expect(line.rows).toEqual([{ oi: expired, q: 1, e: true }]);
+    // Count = system at submit for every line → variance 0, no stock_take movement.
+    const res = await rpcAsUser<Submit>(pg, ADMIN, `public.submit_outlet_stock_take($1, $2::jsonb)`, [
+      s.session_id,
+      JSON.stringify([
+        { outlet_inventory_id: expired, counted_qty: 149 },
+        { outlet_inventory_id: fresh, counted_qty: 512 },
+      ]),
+    ]);
+    expect(res.lines?.map((l) => [l.variance, l.qty_moved_during_count])).toEqual(
+      expect.arrayContaining([
+        [0, -1],
+        [0, 0],
+      ])
+    );
+    const voided = await rpcAsUser<{ success: boolean }>(pg, ADMIN, `public.void_sales_journal('${sale.sales_journal_id}')`);
+    expect(voided).toEqual({ success: true, sales_journal_id: sale.sales_journal_id });
+    expect(await qty(pg, [expired, fresh])).toEqual(before); // back on the same batch row
+    expect(await movements(pg)).toEqual([
+      { oi: expired, type: 'sale', q: -1, ref: 'sales_journal' },
+      { oi: expired, type: 'reversal', q: 1, ref: 'sales_journal' },
+    ]);
   });
 });
 
