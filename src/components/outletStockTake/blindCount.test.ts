@@ -55,4 +55,8 @@ describe('blind count sheet (client)', () => {
     for (const src of [SALES, WASTE]) expect(src).toMatch(/getOutletSaleBatches\(/);
     expect(SALES).toMatch(/quantity_on_hand: null/); // no available qty shown during a count
   });
+
+  it('the count screen tells staff to post sales before opening a count', () => {
+    expect(TAB).toContain('Post all sales up to the count start time before opening a count.');
+  });
 });
