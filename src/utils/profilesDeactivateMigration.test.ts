@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG from '../../supabase/migrations/20261007140000_071_profiles_deactivate.sql?raw';
 
 const A1 = '00000000-0000-0000-0000-0000000000a1';
@@ -45,8 +46,7 @@ const ENV = `
   END $f$;
 `;
 
-async function setup() {
-  const pg = new PGlite();
+const setup = pgliteTemplate(async (pg) => {
   await pg.exec(ENV);
   await pg.exec(MIG);
   await pg.exec(`
@@ -58,8 +58,7 @@ async function setup() {
     SET quackmaster.bypass_profile_privilege_guard = 'off';
     INSERT INTO auth.sessions (user_id) VALUES ('${S1}'),('${S1}'),('${A1}');
     INSERT INTO auth.refresh_tokens (user_id) VALUES ('${S1}'),('${A1}');`);
-  return pg;
-}
+});
 const apply = async (pg: PGlite, actor: string, target: string, active: boolean) =>
   (await pg.query<{ r: Record<string, unknown> }>(`select public.admin_apply_user_active($1,$2,$3,'test') r`, [actor, target, active])).rows[0].r;
 const asUser = (pg: PGlite, uid: string) => pg.exec(`SELECT set_config('test.uid', '${uid}', false)`);

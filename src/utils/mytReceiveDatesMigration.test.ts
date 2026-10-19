@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import MIG from '../../supabase/migrations/20261007120000_069_myt_receive_dates.sql?raw';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
 
 
-async function db(supplyUses = 3) {
-  const pg = new PGlite();
-  await pg.exec(`SET TimeZone='UTC';`);
+async function build(pg: PGlite, supplyUses: number) {
   const body = Array.from({ length: supplyUses }, (_, i) => `d${i} := CURRENT_DATE;`).join(' ');
   const decl = Array.from({ length: supplyUses }, (_, i) => `d${i} date;`).join(' ');
   await pg.exec(`
@@ -13,8 +12,10 @@ async function db(supplyUses = 3) {
     RETURNS date LANGUAGE plpgsql AS $$ DECLARE ${decl} BEGIN ${body} RETURN d0; END $$;
     CREATE FUNCTION public.receive_po_shipment(p_po_id uuid, p_lines jsonb)
     RETURNS date LANGUAGE plpgsql AS $$ BEGIN RETURN CURRENT_DATE; END $$;`);
-  return pg;
 }
+const live3 = pgliteTemplate((pg) => build(pg, 3));
+const live2 = pgliteTemplate((pg) => build(pg, 2));
+const db = (supplyUses: 3 | 2 = 3) => (supplyUses === 3 ? live3() : live2());
 
 describe('069 MYT receive dates migration', () => {
   it('replaces every CURRENT_DATE with the Malaysia date', async () => {
@@ -35,7 +36,7 @@ describe('069 MYT receive dates migration', () => {
   });
 
   it('MYT expression gives the next day at 00:40 MYT where CURRENT_DATE (UTC) does not', async () => {
-    const pg = new PGlite();
+    const pg = await db();
     const r = await pg.query<{ myt: string; utc: string }>(
       `select (timezone('Asia/Kuala_Lumpur', t))::date::text myt, (t at time zone 'UTC')::date::text utc
          from (select '2026-05-04 16:40:57+00'::timestamptz t) x`

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG from '../../supabase/migrations/20261007150000_072_admin_approve_registration.sql?raw';
 import { parseApproveResult } from './approveResult';
 
@@ -24,10 +25,12 @@ const ENV = `
   INSERT INTO public.profiles VALUES ('${ADM}','admin',now()),('${U1}','pending',now()),('${U2}','pending',now());
   INSERT INTO public.pending_registrations (user_id, status) VALUES ('${U1}','pending'),('${U2}','approved');
 `;
-async function setup(uid = ADM) {
-  const pg = new PGlite();
+const base = pgliteTemplate(async (pg) => {
   await pg.exec(ENV);
   await pg.exec(MIG);
+});
+async function setup(uid = ADM) {
+  const pg = await base();
   await pg.exec(`SELECT set_config('test.uid', '${uid}', false)`);
   return pg;
 }

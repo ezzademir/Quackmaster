@@ -12,7 +12,8 @@
 -- 3. post_sales_journal: FIFO tie-break on equal expiry = run number ascending (guarded text patch
 --    of the live body, same technique as 069).
 -- 4. post_waste_event: records outlet_inventory_id + lot_id on waste_lines; same FIFO tie-break.
--- 5. post_outlet_stock_take: records lot_id on outlet_stock_take_lines.
+-- 5. post_outlet_stock_take: records lot_id on outlet_stock_take_lines; a NULL p_count_date now
+--    defaults to today in MYT (was CURRENT_DATE = UTC date, wrong 00:00-08:00 MYT).
 
 CREATE OR REPLACE FUNCTION public.fg_lot_run_seq(p_lot_id uuid)
 RETURNS bigint
@@ -510,7 +511,7 @@ BEGIN
 END;
 $function$;
 
--- Stock take: record the batch counted on every line.
+-- Stock take: record the batch counted on every line; NULL count date = today in MYT.
 CREATE OR REPLACE FUNCTION public.post_outlet_stock_take(p_outlet_id uuid, p_count_date date, p_notes text, p_lines jsonb, p_idempotency_key uuid DEFAULT NULL::uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -549,7 +550,7 @@ BEGIN
   END IF;
 
   INSERT INTO public.outlet_stock_take_sessions (outlet_id, count_date, notes, idempotency_key, created_by)
-  VALUES (p_outlet_id, COALESCE(p_count_date, CURRENT_DATE), NULLIF(trim(both from p_notes), ''), p_idempotency_key, v_uid)
+  VALUES (p_outlet_id, COALESCE(p_count_date, (timezone('Asia/Kuala_Lumpur', now()))::date), NULLIF(trim(both from p_notes), ''), p_idempotency_key, v_uid)
   RETURNING id INTO v_session_id;
 
   FOR rec IN SELECT * FROM jsonb_array_elements(p_lines)
@@ -570,7 +571,7 @@ BEGIN
     v_var := v_counted - v_sys;
 
     PERFORM public._set_outlet_movement_ctx(
-      p_outlet_id, 'stock_take', COALESCE(p_count_date, CURRENT_DATE), 'outlet_stock_take', v_session_id
+      p_outlet_id, 'stock_take', COALESCE(p_count_date, (timezone('Asia/Kuala_Lumpur', now()))::date), 'outlet_stock_take', v_session_id
     );
 
     UPDATE public.outlet_inventory oi
@@ -590,11 +591,11 @@ BEGIN
 
   PERFORM public._append_data_ledger(
     'posted', 'outlet_stock_take', v_session_id::text, 'inventory', 'event', NULL, NULL,
-    jsonb_build_object('outlet_id', p_outlet_id, 'count_date', COALESCE(p_count_date, CURRENT_DATE), 'lines', v_lines_out),
+    jsonb_build_object('outlet_id', p_outlet_id, 'count_date', COALESCE(p_count_date, (timezone('Asia/Kuala_Lumpur', now()))::date), 'lines', v_lines_out),
     NULL, jsonb_build_object('notes', p_notes)
   );
 
-  PERFORM public._post_stock_take_snapshot_hook(p_outlet_id, COALESCE(p_count_date, CURRENT_DATE));
+  PERFORM public._post_stock_take_snapshot_hook(p_outlet_id, COALESCE(p_count_date, (timezone('Asia/Kuala_Lumpur', now()))::date));
 
   RETURN jsonb_build_object('success', true, 'session_id', v_session_id, 'lines', v_lines_out);
 END;

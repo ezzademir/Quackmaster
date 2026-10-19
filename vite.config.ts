@@ -31,6 +31,9 @@ function devClientLogPlugin(): Plugin {
   };
 }
 
+/** PGlite (in-process Postgres) test files: naming convention `*Migration.test.ts`. */
+const PGLITE_TESTS = ['src/**/*Migration.test.ts'];
+
 const pagesBaseRaw = process.env.VITE_PAGES_BASE_PATH?.trim() ?? '';
 
 // https://vitejs.dev/guide/build#public-base-path — GitHub project Pages needs an absolute base
@@ -44,7 +47,34 @@ export default defineConfig(({ command }) => ({
   plugins: [react(), ...(command === 'serve' ? [devClientLogPlugin()] : [])],
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // include lives on each project (inline projects concatenate arrays from the root)
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['src/**/*.test.ts'],
+          exclude: [...PGLITE_TESTS],
+          sequence: { groupOrder: 0 },
+        },
+      },
+      {
+        // In-process Postgres (PGlite/WASM) migration tests. Each database costs ~1.5 s of CPU to
+        // boot (WASM compile + initdb), so: build one template per file in a hook and clone it per
+        // test (src/test/pgliteTemplate.ts), allow DB-sized timeouts, and cap how many of these
+        // files boot Postgres at the same time (own group, after the unit tests) so they don't starve each other of CPU.
+        extends: true,
+        test: {
+          name: 'db',
+          include: [...PGLITE_TESTS],
+          testTimeout: 30_000,
+          hookTimeout: 60_000,
+          // runs after the unit group, on half the cores (at least 1)
+          sequence: { groupOrder: 1 },
+          maxWorkers: '50%',
+        },
+      },
+    ],
   },
   build: {
     rollupOptions: {

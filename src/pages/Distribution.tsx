@@ -162,7 +162,7 @@ function NewSupplyOrderModal({
   onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
-  const [supply_date, setSupplyDate] = useState(new Date().toISOString().split('T')[0]);
+  const [supply_date, setSupplyDate] = useState(() => malaysiaCalendarDate());
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -371,7 +371,7 @@ function NewRawMaterialSupplyModal({
   onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
-  const [supply_date, setSupplyDate] = useState(new Date().toISOString().split('T')[0]);
+  const [supply_date, setSupplyDate] = useState(() => malaysiaCalendarDate());
   const [notes, setNotes] = useState('');
   const [qtyByHubId, setQtyByHubId] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);

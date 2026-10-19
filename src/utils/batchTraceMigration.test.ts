@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
 import SCHEMA from '../../supabase/migrations/20261019140000_078_batch_trace_schema.sql?raw';
 import FUNCS from '../../supabase/migrations/20261019140100_079_batch_trace_functions.sql?raw';
 import RB078 from '../../supabase/rollbacks/078_rollback.sql?raw';
@@ -8,7 +9,6 @@ import LIVE_DEPS from '../../supabase/tests/fixtures/batch_trace_live_deps.sql?r
 
 /** Minimal tables + stubs matching production columns used by the batch RPCs. */
 const BASE = `
-SET TimeZone='UTC';
 DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE service_role; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE SCHEMA IF NOT EXISTS auth;
@@ -23,9 +23,9 @@ CREATE TABLE hub_inventory (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), raw_m
 CREATE TABLE hub_inventory_reservations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), hub_inventory_id uuid NOT NULL, reference_type text NOT NULL,
   reference_id uuid NOT NULL, quantity numeric NOT NULL, reason text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
   UNIQUE (hub_inventory_id, reference_type, reference_id));
-CREATE TABLE supply_orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), supply_order_number text, outlet_id uuid, dispatch_date date,
+CREATE TABLE supply_orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), supply_order_number text, outlet_id uuid, dispatch_date date DEFAULT CURRENT_DATE,
   received_date date, status text DEFAULT 'pending', total_quantity numeric, notes text, created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(), supply_date date);
+  updated_at timestamptz DEFAULT now(), supply_date date DEFAULT CURRENT_DATE);
 CREATE TABLE supply_order_lines (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), supply_order_id uuid, hub_inventory_id uuid,
   product_batch text, quantity numeric, created_at timestamptz DEFAULT now());
 CREATE TABLE outlet_inventory (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), outlet_id uuid, product_batch text, quantity_on_hand numeric DEFAULT 0,
@@ -39,7 +39,7 @@ CREATE TABLE waste_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), locati
   notes text, idempotency_key uuid, created_by uuid, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
 CREATE TABLE waste_lines (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), waste_event_id uuid NOT NULL, hub_inventory_id uuid, outlet_id uuid,
   product_batch text NOT NULL, quantity numeric NOT NULL, waste_reason text NOT NULL, created_at timestamptz DEFAULT now());
-CREATE TABLE outlet_stock_take_sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), outlet_id uuid NOT NULL, count_date date NOT NULL, notes text,
+CREATE TABLE outlet_stock_take_sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), outlet_id uuid NOT NULL, count_date date NOT NULL DEFAULT CURRENT_DATE, notes text,
   idempotency_key uuid, created_by uuid, created_at timestamptz DEFAULT now(), posted_at timestamptz DEFAULT now());
 CREATE TABLE outlet_stock_take_lines (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid NOT NULL, outlet_inventory_id uuid NOT NULL,
   system_qoh_before numeric NOT NULL, counted_qty numeric NOT NULL, variance numeric NOT NULL, line_remark text);
@@ -60,21 +60,22 @@ const OUTLET = '00000000-0000-0000-0000-0000000000b1';
 const TODAY = `(timezone('Asia/Kuala_Lumpur', now()))::date`;
 
 /** Production state before this PR: live bodies (from the 079 rollback) + live deps. */
-async function liveDb() {
-  const pg = new PGlite();
+const liveDb = pgliteTemplate(async (pg) => {
   await pg.exec(BASE);
   await pg.exec(LIVE_DEPS);
   await pg.exec(RB079);
   await pg.exec(`INSERT INTO outlets (id, name) VALUES ('${OUTLET}', 'TTDI');`);
-  return pg;
-}
+});
 
-async function migratedDb() {
-  const pg = await liveDb();
+/** Same live state with 078 + 079 applied. */
+const migratedDb = pgliteTemplate(async (pg) => {
+  await pg.exec(BASE);
+  await pg.exec(LIVE_DEPS);
+  await pg.exec(RB079);
+  await pg.exec(`INSERT INTO outlets (id, name) VALUES ('${OUTLET}', 'TTDI');`);
   await pg.exec(SCHEMA);
   await pg.exec(FUNCS);
-  return pg;
-}
+});
 
 /** Hub batch: run RUN-<run>, expiry = MYT today + offset days. Returns hub_inventory id. */
 async function batch(pg: PGlite, run: number, expiryOffset: number | null, qoh: number, createdAt = 'now()') {
@@ -328,5 +329,67 @@ describe('078/079 guards and rollback', () => {
     const sol = await pg.query<{ h: string }>(`SELECT hub_inventory_id h FROM supply_order_lines WHERE supply_order_id = '${so}'`);
     expect(sol.rows).toEqual([{ h: b2 }]); // old behaviour: ships the creation-time pick
     expect(b1).toBeTruthy();
+  });
+});
+
+describe('078/079 business-date defaults use today in MYT (00:00-08:00 MYT edge)', () => {
+  /** Evaluate a column DEFAULT with now() pinned to a fixed UTC instant. */
+  async function defaultAt(pg: PGlite, table: string, column: string, utcInstant: string) {
+    const d = await pg.query<{ expr: string }>(`
+      SELECT pg_get_expr(ad.adbin, ad.adrelid) expr FROM pg_attrdef ad
+      JOIN pg_attribute a ON a.attrelid = ad.adrelid AND a.attnum = ad.adnum
+      WHERE ad.adrelid = 'public.${table}'::regclass AND a.attname = '${column}'`);
+    const expr = d.rows[0].expr
+      .replace(/now\(\)/g, `'${utcInstant}'::timestamptz`)
+      .replace(/CURRENT_DATE/g, `('${utcInstant}'::timestamptz)::date`);
+    const r = await pg.query<{ v: string }>(`SELECT (${expr})::text v`);
+    return r.rows[0].v;
+  }
+
+  const cases: Array<[string, string]> = [
+    ['2026-10-18T16:00:00Z', '2026-10-19'], // 00:00 MYT
+    ['2026-10-18T16:30:00Z', '2026-10-19'], // 00:30 MYT
+    ['2026-10-18T23:59:59Z', '2026-10-19'], // 07:59:59 MYT
+    ['2026-10-19T00:00:00Z', '2026-10-19'], // 08:00 MYT
+    ['2026-10-18T15:59:59Z', '2026-10-18'], // 23:59:59 MYT previous day
+  ];
+
+  it('supply_orders.supply_date and outlet_stock_take_sessions.count_date default to the MYT date', async () => {
+    const pg = await migratedDb();
+    for (const [utc, myt] of cases) {
+      expect(await defaultAt(pg, 'supply_orders', 'supply_date', utc)).toBe(myt);
+      expect(await defaultAt(pg, 'outlet_stock_take_sessions', 'count_date', utc)).toBe(myt);
+    }
+    // live (pre-078) CURRENT_DATE default gave the UTC date: yesterday at 00:30 MYT
+    const live = await liveDb();
+    expect(await defaultAt(live, 'supply_orders', 'supply_date', '2026-10-18T16:30:00Z')).toBe('2026-10-18');
+    expect(await defaultAt(live, 'outlet_stock_take_sessions', 'count_date', '2026-10-18T16:30:00Z')).toBe('2026-10-18');
+    // an insert without a date takes the MYT default
+    const so = await pg.query<{ ok: boolean }>(
+      `INSERT INTO supply_orders (outlet_id, status) VALUES ('${OUTLET}', 'pending') RETURNING supply_date = ${TODAY} ok`
+    );
+    expect(so.rows).toEqual([{ ok: true }]);
+  });
+
+  it('post_outlet_stock_take with a NULL count date uses the MYT date (no CURRENT_DATE left)', async () => {
+    const pg = await migratedDb();
+    const def = await pg.query<{ d: string }>(
+      `SELECT pg_get_functiondef('public.post_outlet_stock_take(uuid,date,text,jsonb,uuid)'::regprocedure) d`
+    );
+    expect(def.rows[0].d).not.toMatch(/CURRENT_DATE/i);
+    expect(def.rows[0].d.match(/timezone\('Asia\/Kuala_Lumpur', now\(\)\)\)::date/g)).toHaveLength(4);
+    const o1 = await outletRow(pg, 1, 1, 5, 'now()');
+    await pg.query(`SELECT public.post_outlet_stock_take('${OUTLET}', NULL, NULL,
+      '[{"outlet_inventory_id":"${o1}","counted_qty":5}]'::jsonb)`);
+    const s = await pg.query<{ ok: boolean }>(`SELECT count_date = ${TODAY} ok FROM outlet_stock_take_sessions`);
+    expect(s.rows).toEqual([{ ok: true }]);
+  });
+
+  it('rollback 078 restores the CURRENT_DATE defaults', async () => {
+    const pg = await migratedDb();
+    await pg.exec(RB079);
+    await pg.exec(RB078);
+    expect(await defaultAt(pg, 'supply_orders', 'supply_date', '2026-10-18T16:30:00Z')).toBe('2026-10-18');
+    expect(await defaultAt(pg, 'outlet_stock_take_sessions', 'count_date', '2026-10-18T16:30:00Z')).toBe('2026-10-18');
   });
 });

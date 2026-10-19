@@ -9,6 +9,10 @@
 --   waste_lines.lot_id                      batch wasted (hub or outlet)
 --   outlet_stock_take_lines.lot_id          batch counted (snapshot of outlet_inventory.lot_id)
 --
+-- Column DEFAULTs (metadata only; no rows rewritten): supply_orders.supply_date and
+-- outlet_stock_take_sessions.count_date default to today in MYT instead of CURRENT_DATE (UTC),
+-- which gave yesterday's date for inserts made 00:00-08:00 MYT.
+--
 -- Existing rows are left NULL (no backfill here; a backfill is a separate data-change clearance).
 
 ALTER TABLE public.supply_order_lines
@@ -33,3 +37,9 @@ COMMENT ON COLUMN public.supply_order_lines.expired_at_dispatch IS
 COMMENT ON COLUMN public.waste_lines.lot_id IS 'Batch wasted. Written by post_waste_event (079).';
 COMMENT ON COLUMN public.waste_lines.outlet_inventory_id IS 'Outlet batch row wasted. Written by post_waste_event (079).';
 COMMENT ON COLUMN public.outlet_stock_take_lines.lot_id IS 'Batch counted. Written by post_outlet_stock_take (079).';
+
+-- Business-date defaults: today in Malaysia time (DB timezone is UTC).
+ALTER TABLE public.supply_orders
+  ALTER COLUMN supply_date SET DEFAULT (timezone('Asia/Kuala_Lumpur', now()))::date;
+ALTER TABLE public.outlet_stock_take_sessions
+  ALTER COLUMN count_date SET DEFAULT (timezone('Asia/Kuala_Lumpur', now()))::date;
