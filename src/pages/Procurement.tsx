@@ -1136,7 +1136,7 @@ function PODetailModal({
 
 // ---- Main Procurement Page ----
 export function Procurement() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isProcurement } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const initialTab: Tab =
@@ -1198,7 +1198,10 @@ export function Procurement() {
     setLoading(true);
     const [{ data: sups }, { data: mats }, { data: pos }, { data: links }, { data: scores }] = await Promise.all([
       supabase.from('suppliers').select('*').order('name'),
-      supabase.from('raw_materials').select('*').order('name'),
+      // procurement cannot read raw_materials (cost columns); it gets the cost-free catalogue view
+      isProcurement
+        ? supabase.from('v_raw_material_catalog').select('*').order('name')
+        : supabase.from('raw_materials').select('*').order('name'),
       supabase
         .from('purchase_orders')
         .select(`*, supplier:supplier_id(*), items:purchase_order_items(*, material:raw_material_id(*))`)
@@ -1208,9 +1211,14 @@ export function Procurement() {
     ]);
     setSuppliers(sups ?? []);
     setSupplierScores((scores ?? []) as SupplierScoreRow[]);
-    setMaterials(mats ?? []);
+    setMaterials((mats ?? []) as typeof materials);
     setSupplierMaterialLinks(links ?? []);
-    setOrders(pos as POWithDetails[] ?? []);
+    const matById = new Map((mats ?? []).map((m: { id: string }) => [m.id, m]));
+    // embedded material is null for procurement (raw_materials denied); fill it from the catalogue
+    setOrders(((pos ?? []) as POWithDetails[]).map((po) => ({
+      ...po,
+      items: (po.items ?? []).map((it) => ({ ...it, material: it.material ?? (matById.get(it.raw_material_id) as typeof it.material) ?? it.material })),
+    })));
     setLoading(false);
   }
 

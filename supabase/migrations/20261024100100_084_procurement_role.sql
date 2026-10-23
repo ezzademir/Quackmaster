@@ -1,7 +1,8 @@
 /*
-  083: 'procurement' role, scoped by entity tag and enforced in RLS (not just the UI).
+  084: 'procurement' role, scoped by entity tag and enforced in RLS (not just the UI).
 
-  Depends on 081 (#88: receive_po_shipment v2, close_po_short, adjust_po_receipt) and 082.
+  Depends on 081 (#88, merged + live: receive_po_shipment v2, close_po_short, adjust_po_receipt), 082 (numeric
+  widening, separate PR) and 083 (costing schema).
   Draft / held: not applied anywhere.
 
   - profiles.role gains 'procurement'. Procurement is NOT "active staff": is_authenticated_active_staff()
@@ -12,11 +13,12 @@
         nobody approves a PO they created.
       * receive deliveries via record_po_delivery (qty, unit, invoice price, DO / invoice attachment),
         within the over-receipt tolerance (081: over-tolerance needs admin + reason).
-      * record supplier bills; view payment status read-only (amount_paid / paid flags are admin-only).
-      * view suppliers / supplier_items / price_history; add suppliers or items as 'pending'
+      * record supplier bills; view payment status read-only (supplier_payments are admin-only).
+      * view suppliers / supplier_items / price_history for their tags; add suppliers or items as 'pending'
         (unusable on POs until an admin approves).
   - Procurement users can NOT read: recipes, BOMs, sub-recipes, menu items (prices), costing views,
-    sales, PosCompare, outlet / hub stock, production, users (other than their own profile), ledgers.
+    sales, PosCompare, outlet / hub stock, production, users (other than their own profile), ledgers,
+    raw_materials (cost_price / weighted_avg_unit_cost); they get v_raw_material_catalog (no cost columns).
     Enforced with RESTRICTIVE policies (AND-ed with every existing permissive policy).
   - Cannot: approve a PO, close short, exceed tolerance, edit a posted receipt, mark a bill paid.
   - Audit: entered_by / entered_at on receipts, bills, price_history; created_by / submitted_by on POs.
@@ -24,13 +26,32 @@
 */
 
 -- ---------------------------------------------------------------- role
+-- Role list reconciled with #81 (073, 'viewer', held): the constraint is the union, so either landing order
+-- works as long as 073 runs before 084. 073 as written re-creates the constraint WITHOUT 'procurement';
+-- if 073 is applied after 084 it must be rebased to include 'procurement' (see PR body).
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check
-  CHECK (role IN ('admin', 'staff', 'pending', 'supervisor', 'procurement'));
+  CHECK (role IN ('admin', 'staff', 'pending', 'supervisor', 'viewer', 'procurement'));
+
+-- Let admins assign the role through the existing RPC. Patched in place (works with or without #81's 'viewer').
+DO $$
+DECLARE
+  v_def text;
+  v_old text := 'IF v_norm NOT IN (''admin'', ''staff'', ''supervisor''';
+  v_new text := 'IF v_norm NOT IN (''admin'', ''staff'', ''supervisor'', ''procurement''';
+BEGIN
+  IF to_regprocedure('public.admin_set_profile_role_and_outlet(uuid, text, uuid)') IS NULL THEN RETURN; END IF;
+  v_def := pg_get_functiondef('public.admin_set_profile_role_and_outlet(uuid, text, uuid)'::regprocedure);
+  IF position(v_new IN v_def) > 0 THEN RETURN; END IF;
+  IF (length(v_def) - length(replace(v_def, v_old, ''))) / length(v_old) <> 1 THEN
+    RAISE EXCEPTION '084: admin_set_profile_role_and_outlet role list not found exactly once';
+  END IF;
+  EXECUTE replace(v_def, v_old, v_new);
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.user_entities (
   user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  procurement_tag text NOT NULL CHECK (procurement_tag IN ('quackteow', 'merdeka_house')),
+  procurement_tag text NOT NULL REFERENCES public.procurement_tags(tag),
   created_by uuid DEFAULT auth.uid(),
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, procurement_tag)
@@ -94,7 +115,7 @@ BEGIN
     'hub_inventory', 'hub_inventory_reservations', 'inventory_lots', 'inventory_adjustments',
     'production_runs', 'production_run_materials', 'production_resources', 'production_qc_observations', 'planned_batches',
     'waste_events', 'waste_lines', 'pending_registrations', 'activity_logs', 'data_ledger',
-    'qc_audit_settings', 'stock_take_settings'
+    'qc_audit_settings', 'stock_take_settings', 'raw_materials', 'procurement_settings'
   ] LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN
       EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_deny_procurement', t);
@@ -150,11 +171,18 @@ CREATE POLICY purchase_order_items_procurement_rw ON public.purchase_order_items
 
 -- Workflow guard for non-admins: create as draft; edit only drafts; only draft -> pending_approval;
 -- no delete after submit. Approval (pending_approval -> ordered) is admin-only and never by the PO's creator.
+--
+-- Direct writes vs RPC writes (replaces the old app.po_rpc session flag): these trigger functions are
+-- SECURITY INVOKER, so current_user is the role running the statement. A client write through PostgREST runs
+-- as 'authenticated'; a write made inside a SECURITY DEFINER RPC (record_po_delivery -> receive_po_shipment,
+-- close_po_short, adjust_po_receipt) runs as the function owner. The procurement draft-only rules apply to
+-- direct writes; RPC writes are governed by the explicit checks inside each RPC (tag scope, DO / invoice,
+-- tolerance + admin reason, admin-only close / adjust). Nothing a client can set changes current_user.
 CREATE OR REPLACE FUNCTION public._po_procurement_workflow()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
 DECLARE
   v_admin boolean := public.is_profiles_admin();
-  v_proc boolean := public.is_procurement_user();
+  v_proc boolean := public.is_procurement_user() AND current_user IN ('authenticated', 'anon');
 BEGIN
   IF TG_OP = 'INSERT' THEN
     NEW.created_by := COALESCE(auth.uid(), NEW.created_by);
@@ -184,13 +212,9 @@ BEGIN
       NEW.submitted_by := auth.uid();
       NEW.submitted_at := now();
     ELSIF v_proc AND NOT (OLD.status = 'pending_approval' AND NEW.status = 'draft') THEN
-      -- receipt-driven status moves (ordered -> partial/received) happen inside SECURITY DEFINER RPCs,
-      -- which run as the owner and are not procurement sessions for this check (see record_po_delivery).
-      IF current_setting('app.po_rpc', true) IS DISTINCT FROM 'on' THEN
-        RAISE EXCEPTION 'procurement_po_status_change_not_allowed' USING ERRCODE = 'P0001';
-      END IF;
+      RAISE EXCEPTION 'procurement_po_status_change_not_allowed' USING ERRCODE = 'P0001';
     END IF;
-  ELSIF v_proc AND OLD.status <> 'draft' AND current_setting('app.po_rpc', true) IS DISTINCT FROM 'on' THEN
+  ELSIF v_proc AND OLD.status <> 'draft' THEN
     RAISE EXCEPTION 'procurement_po_edit_draft_only' USING ERRCODE = 'P0001';
   END IF;
   IF NOT v_admin THEN
@@ -204,12 +228,13 @@ CREATE TRIGGER po_procurement_workflow BEFORE INSERT OR UPDATE OR DELETE ON publ
   FOR EACH ROW EXECUTE FUNCTION public._po_procurement_workflow();
 
 CREATE OR REPLACE FUNCTION public._po_item_procurement_guard()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
 DECLARE v_status text;
 BEGIN
   IF TG_OP = 'INSERT' THEN NEW.entered_by := COALESCE(auth.uid(), NEW.entered_by); END IF;
   IF TG_OP = 'UPDATE' THEN NEW.entered_by := OLD.entered_by; NEW.last_edited_by := auth.uid(); END IF;
-  IF public.is_procurement_user() AND current_setting('app.po_rpc', true) IS DISTINCT FROM 'on' THEN
+  -- direct client writes only (see _po_procurement_workflow); RPC writes run as the function owner
+  IF public.is_procurement_user() AND current_user IN ('authenticated', 'anon') THEN
     SELECT status INTO v_status FROM public.purchase_orders
       WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.purchase_order_id ELSE NEW.purchase_order_id END;
     IF v_status IS DISTINCT FROM 'draft' THEN
@@ -248,8 +273,30 @@ CREATE POLICY price_history_procurement_select ON public.price_history FOR SELEC
   USING (EXISTS (SELECT 1 FROM public.supplier_items si
                  WHERE si.id = price_history.supplier_item_id AND public.procurement_has_tag(si.procurement_tag)));
 
--- raw_materials / supplier_raw_materials stay readable (PO line pickers); raw_materials cost columns are
--- hub stock valuation, not dish cost. See PR open questions.
+-- raw_materials is denied to procurement (cost_price, weighted_avg_unit_cost). PO line pickers use this safe
+-- view instead: no cost columns. Owner-rights view (bypasses raw_materials RLS) with an explicit caller filter.
+CREATE OR REPLACE VIEW public.v_raw_material_catalog AS
+SELECT rm.id, rm.name, rm.unit_of_measure
+FROM public.raw_materials rm
+WHERE public.is_po_operator();
+REVOKE ALL ON public.v_raw_material_catalog FROM PUBLIC, anon;
+GRANT SELECT ON public.v_raw_material_catalog TO authenticated;
+
+-- ---------------------------------------------------------------- leak fixes found by the 084 audit
+-- Owner-rights views bypass RLS (incl. the procurement deny-list). Make them run with the caller's rights.
+DO $$ BEGIN
+  IF to_regclass('public.supplier_scorecard_metrics') IS NOT NULL THEN
+    ALTER VIEW public.supplier_scorecard_metrics SET (security_invoker = true);   -- cross-tag PO metrics
+  END IF;
+  IF to_regclass('public.recipe_variance_by_run') IS NOT NULL THEN
+    ALTER VIEW public.recipe_variance_by_run SET (security_invoker = true);       -- production recipe variance
+  END IF;
+  -- Internal helper (outlet stock sheet) callable by ANY signed-in user with no gate; only ever called from
+  -- gated SECURITY DEFINER RPCs (get_outlet_stock_take_sheet, start / submit stock take), which run as owner.
+  IF to_regprocedure('public._stock_take_sheet(uuid)') IS NOT NULL THEN
+    REVOKE EXECUTE ON FUNCTION public._stock_take_sheet(uuid) FROM PUBLIC, anon, authenticated;
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------- receipts (append-only records)
 CREATE TABLE IF NOT EXISTS public.po_receipt_records (
@@ -275,17 +322,41 @@ CREATE POLICY po_receipt_records_select ON public.po_receipt_records FOR SELECT 
 REVOKE ALL ON public.po_receipt_records FROM PUBLIC, anon;
 GRANT SELECT ON public.po_receipt_records TO authenticated;
 
--- Let receive_po_shipment (081) accept a procurement user for a PO in their tags. Patched in place so the
--- body stays exactly #88's; fails loudly if the guard line is not found exactly once.
+-- Let receive_po_shipment (081) accept a procurement user ONLY when called from record_po_delivery.
+-- record_po_delivery does the procurement checks (tag scope, DO / invoice, lines on this PO), then issues a
+-- one-shot ticket for (PO, user, transaction). The patched guard consumes it. Clients cannot write tickets
+-- (no grants, no policies) or call the consumer, so calling receive_po_shipment directly stays staff-only.
+CREATE TABLE IF NOT EXISTS public.po_receipt_tickets (
+  purchase_order_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  txid bigint NOT NULL,
+  PRIMARY KEY (purchase_order_id, user_id, txid)
+);
+ALTER TABLE public.po_receipt_tickets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.po_receipt_tickets FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._consume_po_receipt_ticket(p_po_id uuid)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n int;
+BEGIN
+  DELETE FROM public.po_receipt_tickets
+  WHERE purchase_order_id = p_po_id AND user_id = auth.uid() AND txid = txid_current();
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n > 0 AND public.procurement_has_po(p_po_id);
+END $$;
+REVOKE ALL ON FUNCTION public._consume_po_receipt_ticket(uuid) FROM PUBLIC, anon, authenticated;
+
+-- Patched in place so the body stays exactly 081's (re-diffed against live 24 Oct: identical to the merged 081,
+-- guard line present once). Fails loudly if the guard line is not found exactly once.
 DO $$
 DECLARE
   v_def text := pg_get_functiondef('public.receive_po_shipment(uuid, jsonb)'::regprocedure);
   v_old text := 'IF NOT public.is_authenticated_active_staff() THEN';
-  v_new text := 'IF NOT (public.is_authenticated_active_staff() OR public.procurement_has_po(p_po_id)) THEN';
+  v_new text := 'IF NOT (public.is_authenticated_active_staff() OR public._consume_po_receipt_ticket(p_po_id)) THEN';
 BEGIN
   IF position(v_new IN v_def) > 0 THEN RETURN; END IF;     -- already patched (re-run)
   IF (length(v_def) - length(replace(v_def, v_old, ''))) / length(v_old) <> 1 THEN
-    RAISE EXCEPTION '083: receive_po_shipment guard not found exactly once; re-check against 081';
+    RAISE EXCEPTION '084: receive_po_shipment guard not found exactly once; re-check against 081';
   END IF;
   EXECUTE replace(v_def, v_old, v_new);
 END $$;
@@ -312,9 +383,18 @@ BEGIN
        nullif(trim(p_invoice_number), '')) IS NULL THEN
     RETURN jsonb_build_object('success', false, 'error', 'do_or_invoice_required');
   END IF;
-  PERFORM set_config('app.po_rpc', 'on', true);
+  -- Every line must belong to this PO (receive_po_shipment re-checks quantities, tolerance and status).
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_lines) l
+             WHERE NOT EXISTS (SELECT 1 FROM public.purchase_order_items poi
+                               WHERE poi.id = (l->>'purchase_order_item_id')::uuid AND poi.purchase_order_id = p_po_id)) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'line_not_on_po');
+  END IF;
+  IF public.is_procurement_user() THEN
+    INSERT INTO public.po_receipt_tickets (purchase_order_id, user_id, txid)
+    VALUES (p_po_id, auth.uid(), txid_current()) ON CONFLICT DO NOTHING;
+  END IF;
   v_res := public.receive_po_shipment(p_po_id, p_lines);
-  PERFORM set_config('app.po_rpc', 'off', true);
+  DELETE FROM public.po_receipt_tickets WHERE purchase_order_id = p_po_id AND user_id = auth.uid();
   IF NOT COALESCE((v_res->>'success')::boolean, false) THEN
     RETURN v_res;
   END IF;
@@ -337,7 +417,7 @@ END $$;
 REVOKE ALL ON FUNCTION public.record_po_delivery(uuid, jsonb, text, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.record_po_delivery(uuid, jsonb, text, text, text) TO authenticated;
 
--- ---------------------------------------------------------------- supplier bills (minimal)
+-- ---------------------------------------------------------------- supplier bills + payments
 CREATE TABLE IF NOT EXISTS public.supplier_bills (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   entity_code text NOT NULL REFERENCES public.business_entities(code),
@@ -347,9 +427,6 @@ CREATE TABLE IF NOT EXISTS public.supplier_bills (
   bill_date date NOT NULL,
   due_date date,
   amount_rm numeric(14,2) NOT NULL CHECK (amount_rm >= 0),
-  amount_paid_rm numeric(14,2) NOT NULL DEFAULT 0 CHECK (amount_paid_rm >= 0),
-  paid_at timestamptz,
-  paid_by uuid,
   document_path text,
   notes text,
   entered_by uuid DEFAULT auth.uid(),   -- NULL only for service-role / SQL imports
@@ -368,7 +445,7 @@ CREATE POLICY supplier_bills_procurement_select ON public.supplier_bills FOR SEL
   USING (public.procurement_has_entity(entity_code));
 DROP POLICY IF EXISTS supplier_bills_procurement_insert ON public.supplier_bills;
 CREATE POLICY supplier_bills_procurement_insert ON public.supplier_bills FOR INSERT TO authenticated
-  WITH CHECK (public.procurement_has_entity(entity_code) AND amount_paid_rm = 0 AND paid_at IS NULL AND paid_by IS NULL);
+  WITH CHECK (public.procurement_has_entity(entity_code));
 
 CREATE OR REPLACE FUNCTION public._supplier_bills_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
@@ -380,9 +457,6 @@ BEGIN
     NEW.entered_by := OLD.entered_by;
     NEW.entered_at := OLD.entered_at;
   END IF;
-  IF auth.uid() IS NOT NULL AND NOT public.is_profiles_admin() AND (COALESCE(NEW.amount_paid_rm, 0) <> 0 OR NEW.paid_at IS NOT NULL OR NEW.paid_by IS NOT NULL) THEN
-    RAISE EXCEPTION 'bill_payment_admin_only' USING ERRCODE = 'P0001';
-  END IF;
   RETURN NEW;
 END $$;
 DROP TRIGGER IF EXISTS supplier_bills_guard ON public.supplier_bills;
@@ -391,18 +465,80 @@ CREATE TRIGGER supplier_bills_guard BEFORE INSERT OR UPDATE ON public.supplier_b
 REVOKE ALL ON public.supplier_bills FROM PUBLIC, anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.supplier_bills TO authenticated;
 
--- Payment status (paid / part_paid / overdue / unpaid), read-only, caller's RLS applies.
+-- Payments: part payments allowed; recording is admin-only (RLS). Procurement never reads this table,
+-- it sees only the derived status in v_supplier_bill_status.
+CREATE TABLE IF NOT EXISTS public.supplier_payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bill_id uuid NOT NULL REFERENCES public.supplier_bills(id) ON DELETE RESTRICT,
+  amount_rm numeric(14,2) NOT NULL CHECK (amount_rm > 0),
+  paid_on date NOT NULL,
+  method text NOT NULL CHECK (method IN ('bank_transfer', 'cash', 'cheque', 'card', 'duitnow', 'other')),
+  reference text,
+  document_path text,   -- attachment (proof of payment) in storage
+  notes text,
+  created_by uuid DEFAULT auth.uid(),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS supplier_payments_bill_idx ON public.supplier_payments (bill_id);
+ALTER TABLE public.supplier_payments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS supplier_payments_admin ON public.supplier_payments;
+CREATE POLICY supplier_payments_admin ON public.supplier_payments FOR ALL TO authenticated
+  USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
+DROP POLICY IF EXISTS supplier_payments_staff_select ON public.supplier_payments;
+CREATE POLICY supplier_payments_staff_select ON public.supplier_payments FOR SELECT TO authenticated
+  USING (public.is_authenticated_active_staff());
+REVOKE ALL ON public.supplier_payments FROM PUBLIC, anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.supplier_payments TO authenticated;
+
+-- Audit + no overpayment. created_by is stamped; a bill's payments may not exceed its amount.
+CREATE OR REPLACE FUNCTION public._supplier_payments_guard()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_amount numeric; v_paid numeric;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.created_by := COALESCE(auth.uid(), NEW.created_by);
+    NEW.created_at := now();
+  ELSE
+    NEW.created_by := OLD.created_by;
+    NEW.created_at := OLD.created_at;
+  END IF;
+  SELECT amount_rm INTO v_amount FROM public.supplier_bills WHERE id = NEW.bill_id FOR UPDATE;
+  SELECT COALESCE(sum(amount_rm), 0) INTO v_paid FROM public.supplier_payments
+    WHERE bill_id = NEW.bill_id AND id IS DISTINCT FROM NEW.id;
+  IF v_paid + NEW.amount_rm > v_amount THEN
+    RAISE EXCEPTION 'payment_exceeds_bill_balance' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS supplier_payments_guard ON public.supplier_payments;
+CREATE TRIGGER supplier_payments_guard BEFORE INSERT OR UPDATE ON public.supplier_payments
+  FOR EACH ROW EXECUTE FUNCTION public._supplier_payments_guard();
+
+-- Paid total for a bill the caller can see. Owner-rights so procurement gets the status without reading
+-- supplier_payments; returns NULL for a bill outside the caller's scope.
+CREATE OR REPLACE FUNCTION public.supplier_bill_paid_rm(p_bill_id uuid)
+RETURNS numeric LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT COALESCE((SELECT sum(sp.amount_rm) FROM public.supplier_payments sp WHERE sp.bill_id = b.id), 0)
+  FROM public.supplier_bills b
+  WHERE b.id = p_bill_id
+    AND (public.is_authenticated_active_staff() OR public.procurement_has_entity(b.entity_code));
+$$;
+REVOKE ALL ON FUNCTION public.supplier_bill_paid_rm(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.supplier_bill_paid_rm(uuid) TO authenticated;
+
+-- Payment status derived from payments: paid / overdue / part_paid / unpaid. Caller's RLS applies to bills.
 CREATE OR REPLACE VIEW public.v_supplier_bill_status WITH (security_invoker = true) AS
-SELECT b.id, b.entity_code, b.supplier_id, s.name AS supplier_name, b.purchase_order_id, b.bill_number, b.bill_date,
-       b.due_date, b.amount_rm, b.amount_paid_rm, b.amount_rm - b.amount_paid_rm AS balance_rm,
-       CASE WHEN b.amount_paid_rm >= b.amount_rm THEN 'paid'
-            WHEN b.due_date IS NOT NULL AND b.due_date < (now() AT TIME ZONE 'Asia/Kuala_Lumpur')::date THEN 'overdue'
-            WHEN b.amount_paid_rm > 0 THEN 'part_paid'
+SELECT x.id, x.entity_code, x.supplier_id, x.supplier_name, x.purchase_order_id, x.bill_number, x.bill_date, x.due_date,
+       x.amount_rm, x.paid_rm, x.amount_rm - x.paid_rm AS balance_rm,
+       CASE WHEN x.paid_rm >= x.amount_rm THEN 'paid'
+            WHEN x.due_date IS NOT NULL AND x.due_date < (now() AT TIME ZONE 'Asia/Kuala_Lumpur')::date THEN 'overdue'
+            WHEN x.paid_rm > 0 THEN 'part_paid'
             ELSE 'unpaid' END AS payment_status,
-       b.entered_by, b.entered_at
-FROM public.supplier_bills b JOIN public.suppliers s ON s.id = b.supplier_id;
+       x.entered_by, x.entered_at
+FROM (SELECT b.*, s.name AS supplier_name, COALESCE(public.supplier_bill_paid_rm(b.id), 0) AS paid_rm
+      FROM public.supplier_bills b JOIN public.suppliers s ON s.id = b.supplier_id) x;
 REVOKE ALL ON public.v_supplier_bill_status FROM PUBLIC, anon;
 GRANT SELECT ON public.v_supplier_bill_status TO authenticated;
 
 REVOKE ALL ON FUNCTION public._po_procurement_workflow(), public._po_item_procurement_guard(),
-  public._supplier_bills_guard() FROM PUBLIC, anon, authenticated;
+  public._supplier_bills_guard(), public._supplier_payments_guard() FROM PUBLIC, anon, authenticated;

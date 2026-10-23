@@ -7,7 +7,7 @@ interface PoItem {
   quantity_ordered: number;
   quantity_received: number | null;
   unit_price: number | null;
-  raw_materials: { name: string; unit: string | null } | null;
+  raw_material_id: string;
 }
 interface Po {
   id: string;
@@ -21,6 +21,7 @@ interface Po {
 /** Receive deliveries against ordered POs (qty, invoice price, DO / invoice ref). Server: record_po_delivery. */
 export function Receiving() {
   const [pos, setPos] = useState<Po[]>([]);
+  const [catalog, setCatalog] = useState<Record<string, { name: string; unit_of_measure: string | null }>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [lines, setLines] = useState<Record<string, { qty: string; price: string }>>({});
   const [doNo, setDoNo] = useState('');
@@ -31,11 +32,14 @@ export function Receiving() {
   const load = useCallback(async () => {
     const { data, error } = await supabase
       .from('purchase_orders')
-      .select('id, order_number, status, entity_code, suppliers(name), purchase_order_items(id, quantity_ordered, quantity_received, unit_price, raw_materials(name, unit))')
+      .select('id, order_number, status, entity_code, suppliers(name), purchase_order_items(id, quantity_ordered, quantity_received, unit_price, raw_material_id)')
       .in('status', ['ordered', 'partial'])
       .order('created_at', { ascending: false });
     if (error) setMsg(error.message);
     else setPos((data ?? []) as unknown as Po[]);
+    // names / units from the cost-free catalogue (procurement cannot read raw_materials)
+    const cat = await supabase.from('v_raw_material_catalog').select('id, name, unit_of_measure');
+    setCatalog(Object.fromEntries(((cat.data ?? []) as Array<{ id: string; name: string; unit_of_measure: string | null }>).map((m) => [m.id, m])));
   }, []);
 
   useEffect(() => {
@@ -89,7 +93,7 @@ export function Receiving() {
                 {po.purchase_order_items.map((i) => (
                   <div key={i.id} className="grid grid-cols-[1fr_6rem_7rem] items-center gap-2 text-sm">
                     <span>
-                      {i.raw_materials?.name ?? 'Item'} ({i.quantity_received ?? 0}/{i.quantity_ordered} {i.raw_materials?.unit ?? ''})
+                      {catalog[i.raw_material_id]?.name ?? 'Item'} ({i.quantity_received ?? 0}/{i.quantity_ordered} {catalog[i.raw_material_id]?.unit_of_measure ?? ''})
                     </span>
                     <input aria-label="Quantity received" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Qty"
                       value={lines[i.id]?.qty ?? ''} onChange={(e) => setLines({ ...lines, [i.id]: { qty: e.target.value, price: lines[i.id]?.price ?? '' } })} />
