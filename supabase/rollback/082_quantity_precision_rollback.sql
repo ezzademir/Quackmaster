@@ -3,6 +3,9 @@
   (e.g. the PO-0032 hub row 194.524 -> 194.52). Run only if 082 must be withdrawn; the correction ledger
   row stays as the audit trail and a reversal row is appended.
 */
+-- trg_outlet_inventory_movement is UPDATE OF quantity_on_hand (blocks ALTER TYPE). Drop and recreate
+-- from its live pg_get_triggerdef, verbatim, inside this same transaction. Live tgenabled = 'O' (default on create).
+DROP TRIGGER trg_outlet_inventory_movement ON public.outlet_inventory;
 DROP VIEW IF EXISTS public.recipe_variance_by_run;
 
 ALTER TABLE public.hub_inventory
@@ -33,6 +36,9 @@ ALTER TABLE public.recipe_ingredients
   ALTER COLUMN quantity_required TYPE numeric(10,2);
 ALTER TABLE public.recipes
   ALTER COLUMN standard_batch_size TYPE numeric(10,2);
+
+-- Recreate exactly as live pg_get_triggerdef:
+CREATE TRIGGER trg_outlet_inventory_movement AFTER INSERT OR UPDATE OF quantity_on_hand ON public.outlet_inventory FOR EACH ROW EXECUTE FUNCTION _outlet_inventory_movement_trigger();
 
 CREATE VIEW public.recipe_variance_by_run AS
  SELECT pr.id AS production_run_id,

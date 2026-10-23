@@ -9,6 +9,7 @@ import RB079 from '../../supabase/rollbacks/079_rollback.sql?raw';
 import FUNCS079 from '../../supabase/migrations/20261019140100_079_batch_trace_functions.sql?raw';
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
 import MIG082 from '../../supabase/migrations/20261024013000_082_quantity_precision.sql?raw';
+import MIG082_OLD from '../../supabase/tests/fixtures/082_at_9fa0902.sql?raw';
 import RB082 from '../../supabase/rollback/082_quantity_precision_rollback.sql?raw';
 
 /**
@@ -189,6 +190,37 @@ describe('082 rollback', () => {
     await pg.exec(RB082);
     const live = LIVE_COLUMNS as { t: string; c: string; ty: string }[];
     for (const [t, c] of WIDENED) expect(await typeOf(pg, t, c)).toBe(live.find((x) => x.t === t && x.c === c)!.ty);
+    expect(await num(pg, `select count(*) v from pg_views where viewname='recipe_variance_by_run'`)).toBe(1);
+  });
+});
+
+const TRG_SQL = `select pg_get_triggerdef(oid) d, tgenabled::text e from pg_trigger where tgname='trg_outlet_inventory_movement'`;
+const LIVE_TRG = 'CREATE TRIGGER trg_outlet_inventory_movement AFTER INSERT OR UPDATE OF quantity_on_hand ON public.outlet_inventory FOR EACH ROW EXECUTE FUNCTION _outlet_inventory_movement_trigger()';
+
+describe('082 trigger dependency (live 0A000 regression)', () => {
+  it('old 082 at 9fa0902 fails against the fixture with the live error', async () => {
+    const pg = await liveDb();
+    await expect(pg.exec(MIG082_OLD)).rejects.toThrow(/cannot alter type of a column used in a trigger definition/);
+  });
+
+  it('new 082 recreates the trigger byte-for-byte (def + tgenabled), and so does the rollback', async () => {
+    const pg = await liveDb();
+    const before = await one<{ d: string; e: string }>(pg, TRG_SQL);
+    expect(before).toEqual({ d: LIVE_TRG, e: 'O' });
+    await pg.exec(MIG082);
+    expect(await one(pg, TRG_SQL)).toEqual(before);
+    expect(await num(pg, `select count(*) v from pg_trigger where tgname='trg_outlet_inventory_movement'`)).toBe(1);
+    await pg.exec(RB082);
+    expect(await one(pg, TRG_SQL)).toEqual(before);
+  });
+
+  it('drop + ALTERs + recreate are one transaction: a failure after them leaves trigger, types and view untouched', async () => {
+    const pg = await liveDb();
+    expect(MIG082).not.toMatch(/^\s*(BEGIN|COMMIT|END)\s*;/im);
+    await expect(pg.exec(`BEGIN; ${MIG082}; SELECT 1/0; COMMIT;`)).rejects.toThrow();
+    await pg.exec('ROLLBACK');
+    expect(await one(pg, TRG_SQL)).toEqual({ d: LIVE_TRG, e: 'O' });
+    expect(await typeOf(pg, 'outlet_inventory', 'quantity_on_hand')).toBe('numeric(10,2)');
     expect(await num(pg, `select count(*) v from pg_views where viewname='recipe_variance_by_run'`)).toBe(1);
   });
 });

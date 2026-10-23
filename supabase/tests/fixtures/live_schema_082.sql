@@ -302,3 +302,63 @@ CREATE VIEW public.recipe_variance_by_run AS
   WHERE pr.status <> 'cancelled'::text;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.recipe_variance_by_run TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.recipe_variance_by_run TO service_role;
+
+-- Live trigger on outlet_inventory (added after 082 apply failed on live with 0A000).
+-- Function body is verbatim from live pg_get_functiondef; trigger is verbatim pg_get_triggerdef.
+CREATE OR REPLACE FUNCTION public._outlet_inventory_movement_trigger()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_raw text;
+  v_ctx jsonb;
+  v_delta numeric(14, 4);
+  v_outlet_id uuid;
+BEGIN
+  v_raw := current_setting('app.outlet_movement_ctx', true);
+  IF v_raw IS NULL OR v_raw = '' THEN
+    RETURN NEW;
+  END IF;
+
+  v_ctx := v_raw::jsonb;
+  v_outlet_id := (v_ctx->>'outlet_id')::uuid;
+
+  IF TG_OP = 'INSERT' THEN
+    v_delta := NEW.quantity_on_hand;
+  ELSE
+    v_delta := NEW.quantity_on_hand - OLD.quantity_on_hand;
+  END IF;
+
+  IF v_delta = 0 THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO public.outlet_stock_movements (
+    outlet_id,
+    outlet_inventory_id,
+    movement_type,
+    signed_qty,
+    business_date,
+    reference_type,
+    reference_id,
+    qoh_after,
+    metadata
+  )
+  VALUES (
+    v_outlet_id,
+    NEW.id,
+    v_ctx->>'movement_type',
+    v_delta,
+    (v_ctx->>'business_date')::date,
+    v_ctx->>'reference_type',
+    (v_ctx->>'reference_id')::uuid,
+    NEW.quantity_on_hand,
+    COALESCE(v_ctx->'metadata', '{}'::jsonb)
+  );
+
+  RETURN NEW;
+END;
+$function$;
+CREATE TRIGGER trg_outlet_inventory_movement AFTER INSERT OR UPDATE OF quantity_on_hand ON public.outlet_inventory FOR EACH ROW EXECUTE FUNCTION _outlet_inventory_movement_trigger();
