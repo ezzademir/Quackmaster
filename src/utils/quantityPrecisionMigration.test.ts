@@ -8,7 +8,7 @@ import LIVE_DEPS from '../../supabase/tests/fixtures/batch_trace_live_deps.sql?r
 import RB079 from '../../supabase/rollbacks/079_rollback.sql?raw';
 import FUNCS079 from '../../supabase/migrations/20261019140100_079_batch_trace_functions.sql?raw';
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
-import MIG082 from '../../supabase/migrations/20261024013000_082_quantity_precision.sql?raw';
+import MIG082 from '../../supabase/migrations/20261023181403_082_quantity_precision.sql?raw';
 import MIG082_OLD from '../../supabase/tests/fixtures/082_at_9fa0902.sql?raw';
 import MIG083 from '../../supabase/migrations/20261024020000_083_post_082_grants_and_ledger.sql?raw';
 import RB082 from '../../supabase/rollback/082_quantity_precision_rollback.sql?raw';
