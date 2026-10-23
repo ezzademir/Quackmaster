@@ -144,7 +144,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
               <input
                 type="number"
                 min={0}
-                step="0.01"
+                step="0.0001"
                 value={resCap}
                 onChange={(e) => setResCap(e.target.value)}
                 placeholder="Daily capacity"
@@ -178,7 +178,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                 ))}
               </select>
               <input type="datetime-local" value={pbStart} onChange={(e) => setPbStart(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm" />
-              <input type="number" min={0} step="0.01" value={pbQty} onChange={(e) => setPbQty(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              <input type="number" min={0} step="0.0001" value={pbQty} onChange={(e) => setPbQty(e.target.value)} className="rounded-lg border border-stone-300 px-3 py-2 text-sm" />
               <button type="button" onClick={() => void addBatch()} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white">
                 Create draft plan
               </button>

@@ -310,7 +310,7 @@ export function Settings() {
               <input
                 type="number"
                 min={0}
-                step="0.01"
+                step="0.0001"
                 value={stThreshold}
                 onChange={(e) => setStThreshold(e.target.value)}
                 className="w-40 rounded-lg border border-stone-300 px-3 py-2 text-sm"
@@ -390,7 +390,7 @@ export function Settings() {
             <input
               type="number"
               min={0}
-              step="0.01"
+              step="0.0001"
               value={parTarget}
               onChange={(e) => setParTarget(e.target.value)}
               placeholder="Target"
@@ -399,7 +399,7 @@ export function Settings() {
             <input
               type="number"
               min={0}
-              step="0.01"
+              step="0.0001"
               value={parSafety}
               onChange={(e) => setParSafety(e.target.value)}
               placeholder="Safety"

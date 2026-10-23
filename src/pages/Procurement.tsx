@@ -369,12 +369,12 @@ function MaterialModal({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-stone-700">Cost Price (MYR)</label>
-            <input type="number" min="0" step="0.01" value={form.cost_price} onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+            <input type="number" min="0" step="0.0001" value={form.cost_price} onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-stone-700">Reorder Level</label>
-            <input type="number" min="0" step="0.01" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value })}
+            <input type="number" min="0" step="0.0001" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value })}
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
         </div>
@@ -797,11 +797,11 @@ function NewPOModal({
                       </select>
                     </td>
                     <td className="px-3 py-2">
-                      <input type="number" min="0" step="0.01" value={line.quantity_ordered} onChange={(e) => updateLine(i, 'quantity_ordered', e.target.value)}
+                      <input type="number" min="0" step="0.0001" value={line.quantity_ordered} onChange={(e) => updateLine(i, 'quantity_ordered', e.target.value)}
                         className="w-24 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
                     <td className="px-3 py-2">
-                      <input type="number" min="0" step="0.01" value={line.unit_price} onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
+                      <input type="number" min="0" step="0.0001" value={line.unit_price} onChange={(e) => updateLine(i, 'unit_price', e.target.value)}
                         className="w-28 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
                     <td className="px-3 py-2 text-right font-medium text-stone-900">

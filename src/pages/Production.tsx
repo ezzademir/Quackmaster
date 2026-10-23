@@ -202,7 +202,7 @@ function RecipeModal({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-stone-700">Standard Batch Size *</label>
-            <input type="number" min="0" step="0.01" value={form.standard_batch_size} onChange={(e) => setForm({ ...form, standard_batch_size: e.target.value })}
+            <input type="number" min="0" step="0.0001" value={form.standard_batch_size} onChange={(e) => setForm({ ...form, standard_batch_size: e.target.value })}
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
@@ -442,7 +442,7 @@ function NewRunModal({
 
     // Calculate new planned output based on the bottleneck ratio
     const maxPlanned = recipe.standard_batch_size * minRatio;
-    updatePlannedOutput(maxPlanned.toFixed(2));
+    updatePlannedOutput(String(Math.round(maxPlanned * 10000) / 10000));
   }
 
   async function handleSave() {
@@ -662,12 +662,12 @@ function NewRunModal({
                 </button>
               )}
             </div>
-            <input type="number" min="0" step="0.01" value={planned_output} onChange={(e) => updatePlannedOutput(e.target.value)}
+            <input type="number" min="0" step="0.0001" value={planned_output} onChange={(e) => updatePlannedOutput(e.target.value)}
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-stone-700">Actual Output ({selectedRecipe?.batch_unit ?? 'units'})</label>
-            <input type="number" min="0" step="0.01" value={actual_output} onChange={(e) => setActual(e.target.value)}
+            <input type="number" min="0" step="0.0001" value={actual_output} onChange={(e) => setActual(e.target.value)}
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
         </div>
