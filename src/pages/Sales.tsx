@@ -103,7 +103,6 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
   return parsed.map(({ row, batch, lot }) => {
     const lotLabel = nestedLotLabel(lot as never);
     const recipeSku = nestedRecipeSku(lot);
-    const displayBatch = displayLotFirst(lotLabel, batch) || batch;
     const qtyHidden = row.quantity_on_hand == null;
     const qoh = Number(row.quantity_on_hand ?? 0);
     const res = Number(row.reserved_quantity ?? 0);
