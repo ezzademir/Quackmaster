@@ -19,6 +19,8 @@ import {
   ClipboardCheck,
   GitBranch,
   BarChart3,
+  PackageCheck,
+  Receipt,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 import { BottomNav } from './ui/BottomNav';
@@ -42,6 +44,13 @@ const supervisorBottomNav = [
   { path: '/sales', label: 'Sales', icon: CircleDollarSign, exact: true },
   { path: '/waste', label: 'Waste', icon: Trash2, exact: true },
   { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
+];
+
+const procurementNav = [
+  { path: '/procurement', label: 'Purchase orders', icon: ShoppingCart, exact: false },
+  { path: '/receiving', label: 'Receiving', icon: PackageCheck, exact: true },
+  { path: '/bills', label: 'Bills', icon: Receipt, exact: true },
+  { path: '/suppliers', label: 'Suppliers', icon: Truck, exact: true },
 ];
 
 const posCompareNav = [{ path: '/pos-compare', label: 'POS compare', icon: BarChart3, exact: true }];
@@ -128,7 +137,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const { profile, user, isAdmin, isSupervisor, signOut } = useAuth();
+  const { profile, user, isAdmin, isSupervisor, isProcurement, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -193,7 +202,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain px-2.5 py-4">
-          {isSupervisor ? (
+          {isProcurement ? (
+            <NavSection title="Procurement" collapsed={collapsed} items={procurementNav} />
+          ) : isSupervisor ? (
             <NavSection title="Outlet" collapsed={collapsed} items={outletNav} />
           ) : (
             <>

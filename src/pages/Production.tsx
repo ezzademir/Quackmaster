@@ -336,7 +336,7 @@ function NewRunModal({
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
-  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
+  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' | 'procurement' } | null;
   initialRecipeId?: string;
   initialPlannedOutput?: number;
   plannedBatchId?: string | null;
