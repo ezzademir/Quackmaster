@@ -1,7 +1,9 @@
 /*
   081 — Procurement receipt variance (forward-only; no historical rows touched).
 
-  1. purchase_order_items.quantity_ordered / quantity_received widened to numeric(14,4)
+  1. purchase_order_items.quantity_ordered / quantity_received widened to numeric(14,4),
+     unit_price widened to numeric(12,4) (repriced receipts keep 4dp; only dependent view on the
+     table is supplier_scorecard_metrics, which does not read unit_price)
      (supplier_scorecard_metrics depends on them: dropped + recreated, grants restored;
      'closed_short' now counts as a completed order).
   2. procurement_settings: single row, over_receipt_tolerance_pct (default 10).
@@ -27,7 +29,8 @@ DROP VIEW IF EXISTS public.supplier_scorecard_metrics;
 
 ALTER TABLE public.purchase_order_items
   ALTER COLUMN quantity_ordered TYPE numeric(14,4),
-  ALTER COLUMN quantity_received TYPE numeric(14,4);
+  ALTER COLUMN quantity_received TYPE numeric(14,4),
+  ALTER COLUMN unit_price TYPE numeric(12,4);
 
 CREATE VIEW public.supplier_scorecard_metrics AS
  SELECT s.id AS supplier_id,

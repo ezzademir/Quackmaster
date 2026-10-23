@@ -283,7 +283,8 @@ DROP TABLE IF EXISTS public.procurement_settings;
 DROP VIEW IF EXISTS public.supplier_scorecard_metrics;
 ALTER TABLE public.purchase_order_items
   ALTER COLUMN quantity_ordered TYPE numeric(10,2),
-  ALTER COLUMN quantity_received TYPE numeric(10,2);
+  ALTER COLUMN quantity_received TYPE numeric(10,2),
+  ALTER COLUMN unit_price TYPE numeric(12,2);
 CREATE VIEW public.supplier_scorecard_metrics AS
  SELECT s.id AS supplier_id, s.name AS supplier_name,
     count(po.id) FILTER (WHERE po.status = ANY (ARRAY['received'::text, 'partial'::text])) AS completed_orders,

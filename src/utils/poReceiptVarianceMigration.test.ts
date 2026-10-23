@@ -219,8 +219,8 @@ describe('081 PO-0032: 315 -> 320.974 kg at an unchanged invoice total', () => {
     const [l] = await line();
     expect(Number(l.qr)).toBe(320.974);
     expect(Number(l.lt)).toBe(945);
-    // unit price repriced over 320.974 (column is numeric(12,2) live -> 2.94)
-    expect(Number(l.up)).toBe(Math.round((945 / 320.974) * 100) / 100);
+    // unit price repriced over 320.974 at 4dp (numeric(12,4) after 081 -> 2.9442)
+    expect(Number(l.up)).toBe(Math.round((945 / 320.974) * 10000) / 10000);
     // average cost repriced: on-hand value unchanged, spread over the larger quantity
     const expectedWac = Math.round(((hubBefore * 3) / (hubBefore + 5.974)) * 10000) / 10000;
     expect(await wac()).toBe(expectedWac);
@@ -299,6 +299,33 @@ describe('081 adjust_po_receipt', () => {
   });
 });
 
+describe('081 column widening with dependent views', () => {
+  it('widens unit_price to numeric(12,4) with supplier_scorecard_metrics (the only dependent view) recreated, granted and correct', async () => {
+    const types = await q<{ a: string; t: string }>(`select attname a, format_type(atttypid, atttypmod) t from pg_attribute
+      where attrelid='purchase_order_items'::regclass and attname in ('unit_price','quantity_ordered','quantity_received') order by 1`);
+    expect(types).toEqual([
+      { a: 'quantity_ordered', t: 'numeric(14,4)' },
+      { a: 'quantity_received', t: 'numeric(14,4)' },
+      { a: 'unit_price', t: 'numeric(12,4)' },
+    ]);
+    const deps = await q<{ v: string }>(`select distinct v.relname v from pg_depend d join pg_rewrite r on r.oid=d.objid
+      join pg_class v on v.oid=r.ev_class where d.refobjid='purchase_order_items'::regclass and v.oid<>d.refobjid`);
+    expect(deps.map((d) => d.v)).toEqual(['supplier_scorecard_metrics']);
+    const [g] = await q<{ n: number }>(`select count(*)::int n from information_schema.role_table_grants
+      where table_name='supplier_scorecard_metrics' and grantee in ('authenticated','service_role') and privilege_type='SELECT'`);
+    expect(g.n).toBe(2);
+    await pg.exec(`update purchase_order_items set unit_price = 2.9442 where id='${L1}'`);
+    const [p] = await q<{ v: string }>(`select unit_price v from purchase_order_items where id='${L1}'`);
+    expect(Number(p.v)).toBe(2.9442);
+    await recv(300);
+    await pg.exec(`update purchase_orders set expected_delivery_date='2026-10-23', actual_delivery_date='2026-10-22'`);
+    const [m] = await q<{ c: number; o: string; f: string }>(`select completed_orders::int c, otif_rate o, avg_fill_rate f from supplier_scorecard_metrics`);
+    expect(m.c).toBe(1);
+    expect(Number(m.o)).toBe(1);
+    expect(Number(m.f)).toBeCloseTo(300 / 315, 6);
+  });
+});
+
 describe('081 grants and rollback', () => {
   it('does not let clients call the internal hub helper', async () => {
     const [r] = await q<{ ok: boolean }>(`select has_function_privilege('authenticated','public._po_apply_hub_delta(uuid,numeric,numeric)','EXECUTE') ok`);
@@ -310,6 +337,8 @@ describe('081 grants and rollback', () => {
     await pg.exec(ROLLBACK);
     const [t] = await q<{ t: string }>(`select format_type(atttypid, atttypmod) t from pg_attribute where attrelid='purchase_order_items'::regclass and attname='quantity_received'`);
     expect(t.t).toBe('numeric(10,2)');
+    const [u] = await q<{ t: string }>(`select format_type(atttypid, atttypmod) t from pg_attribute where attrelid='purchase_order_items'::regclass and attname='unit_price'`);
+    expect(u.t).toBe('numeric(12,2)');
     const [f] = await q<{ n: number }>(`select count(*)::int n from pg_proc where proname in ('close_po_short','adjust_po_receipt')`);
     expect(f.n).toBe(0);
     expect((await recv(320)).error).toBe('received_exceeds_ordered');
