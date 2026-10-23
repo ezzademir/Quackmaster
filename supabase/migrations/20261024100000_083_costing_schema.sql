@@ -1,11 +1,12 @@
 /*
-  082: costing schema (shared supplier catalogue + entity-tagged menu costing).
+  083: costing schema (shared supplier catalogue + entity-tagged menu costing).
 
-  Lands AFTER #88 (081_po_receipt_variance). Draft / held: not applied anywhere.
+  Lands after 081 (#88, merged) and 082 (numeric widening, separate held PR). Draft / held: not applied anywhere.
 
   Shared (no entity tag; one catalogue bought once, used by every entity):
     suppliers (existing, extended), ingredients, supplier_items, price_history (append-only).
-  Entity-tagged (Quackteow PLT, Quackteow Enterprise, Merdeka House PLT):
+  Entity-tagged (one cost book per brand: QT = Quackteow, MH = Merdeka House; Quackteow PLT and
+  Quackteow Enterprise share the QT book. New entities / tags are rows, not schema changes):
     menu_items, sub_recipes, bom_lines   -- status active / inactive / KIV.
   POs: purchase_orders.entity_code, purchase_order_items.supplier_item_id.
 
@@ -14,23 +15,36 @@
     - price_history is append-only: UPDATE / DELETE / TRUNCATE raise, and no grants exist for them.
     - A price more than 5% above the previous price for the same supplier item is FLAGGED for admin
       review (never blocked).
-    - Costing tables: read = admin | active staff (same as recipes / raw_materials today),
-      write = admin. 083 adds the procurement role, which is denied all of them.
+    - Costing tables (menu_items, sub_recipes, bom_lines, price_flag_reviews and the cost / COGS / drift /
+      usage views) are ADMIN-ONLY, read and write. Staff and procurement get nothing.
+    - Catalogue (ingredients, supplier_items, price_history): read = admin | active staff; write = admin.
+      084 adds tag-scoped procurement read of supplier_items / price_history.
     - Every view is security_invoker so the caller's RLS applies (no definer-view leak).
 */
 
 -- ---------------------------------------------------------------- entities
-CREATE TABLE IF NOT EXISTS public.business_entities (
-  code text PRIMARY KEY,
+-- Procurement tags (what a buyer is assigned to in 084). Extensible: add a row.
+CREATE TABLE IF NOT EXISTS public.procurement_tags (
+  tag text PRIMARY KEY CHECK (tag ~ '^[a-z][a-z0-9_]*$'),
   name text NOT NULL UNIQUE,
-  -- the procurement tag a buyer is assigned to (083): Quackteow (both legal entities) or Merdeka House
-  procurement_tag text NOT NULL CHECK (procurement_tag IN ('quackteow', 'merdeka_house')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO public.business_entities (code, name, procurement_tag) VALUES
-  ('QT_PLT', 'Quackteow PLT', 'quackteow'),
-  ('QT_ENT', 'Quackteow Enterprise', 'quackteow'),
-  ('MH_PLT', 'Merdeka House PLT', 'merdeka_house')
+INSERT INTO public.procurement_tags (tag, name) VALUES
+  ('quackteow', 'Quackteow'), ('merdeka_house', 'Merdeka House')
+ON CONFLICT (tag) DO NOTHING;
+
+-- Cost books. One per brand: Quackteow PLT and Quackteow Enterprise are NOT split (one QT book).
+-- Extensible: a new entity is a row here pointing at an existing or new procurement tag.
+CREATE TABLE IF NOT EXISTS public.business_entities (
+  code text PRIMARY KEY CHECK (code ~ '^[A-Z][A-Z0-9_]*$'),
+  name text NOT NULL UNIQUE,
+  procurement_tag text NOT NULL REFERENCES public.procurement_tags(tag),
+  legal_entities text,   -- informational, e.g. 'Quackteow PLT; Quackteow Enterprise'
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO public.business_entities (code, name, procurement_tag, legal_entities) VALUES
+  ('QT', 'Quackteow', 'quackteow', 'Quackteow PLT; Quackteow Enterprise'),
+  ('MH', 'Merdeka House', 'merdeka_house', 'Merdeka House PLT')
 ON CONFLICT (code) DO NOTHING;
 
 -- ---------------------------------------------------------------- shared: suppliers (extend)
@@ -64,7 +78,7 @@ CREATE TABLE IF NOT EXISTS public.supplier_items (
   supplier_id uuid NOT NULL REFERENCES public.suppliers(id) ON DELETE RESTRICT,
   ingredient_id uuid REFERENCES public.ingredients(id) ON DELETE SET NULL,
   -- who buys it (procurement visibility). Shared items are still bought under one tag.
-  procurement_tag text NOT NULL CHECK (procurement_tag IN ('quackteow', 'merdeka_house')),
+  procurement_tag text NOT NULL REFERENCES public.procurement_tags(tag),
   shared_ingredient boolean NOT NULL DEFAULT false,
   item_name text NOT NULL,
   pack_qty numeric(14,4),
@@ -268,6 +282,48 @@ ALTER TABLE public.purchase_orders
 ALTER TABLE public.purchase_order_items
   ADD COLUMN IF NOT EXISTS supplier_item_id uuid REFERENCES public.supplier_items(id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS purchase_orders_entity_idx ON public.purchase_orders (entity_code);
+
+-- Where a PO is delivered decides its cost book. Live POs have no destination column: every PO so far is
+-- delivered to the hub. delivery_outlet_id NULL = hub (today's behaviour); set it for outlet-direct POs.
+ALTER TABLE public.purchase_orders
+  ADD COLUMN IF NOT EXISTS delivery_outlet_id uuid REFERENCES public.outlets(id) ON DELETE RESTRICT;
+CREATE TABLE IF NOT EXISTS public.delivery_location_entities (
+  location_kind text NOT NULL CHECK (location_kind IN ('hub', 'outlet')),
+  outlet_id uuid REFERENCES public.outlets(id) ON DELETE CASCADE,
+  entity_code text NOT NULL REFERENCES public.business_entities(code),
+  CONSTRAINT delivery_location_entities_shape CHECK ((location_kind = 'hub') = (outlet_id IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS delivery_location_entities_uq
+  ON public.delivery_location_entities (location_kind, COALESCE(outlet_id, '00000000-0000-0000-0000-000000000000'::uuid));
+-- The hub is the Quackteow kitchen (it produces the QUACKTEOW SKU). Outlet rows are added by an admin when
+-- outlet-direct POs start; none exist today.
+INSERT INTO public.delivery_location_entities (location_kind, outlet_id, entity_code)
+SELECT 'hub', NULL, 'QT'
+WHERE NOT EXISTS (SELECT 1 FROM public.delivery_location_entities WHERE location_kind = 'hub');
+
+-- Backfill existing POs from their delivery location. Unresolved POs stay NULL (invisible to procurement)
+-- and are listed by v_po_entity_unresolved + a NOTICE here.
+UPDATE public.purchase_orders po
+SET entity_code = dle.entity_code
+FROM public.delivery_location_entities dle
+WHERE po.entity_code IS NULL
+  AND ((po.delivery_outlet_id IS NULL AND dle.location_kind = 'hub')
+    OR (po.delivery_outlet_id IS NOT NULL AND dle.location_kind = 'outlet' AND dle.outlet_id = po.delivery_outlet_id));
+
+CREATE OR REPLACE VIEW public.v_po_entity_unresolved WITH (security_invoker = true) AS
+SELECT po.id, po.order_number, po.status, po.order_date, po.delivery_outlet_id
+FROM public.purchase_orders po
+WHERE po.entity_code IS NULL AND public.is_profiles_admin();
+
+DO $$
+DECLARE v_list text;
+BEGIN
+  SELECT string_agg(COALESCE(order_number, id::text), ', ' ORDER BY order_number) INTO v_list
+  FROM public.purchase_orders WHERE entity_code IS NULL;
+  IF v_list IS NOT NULL THEN
+    RAISE NOTICE '083: POs with no entity after backfill: %', v_list;
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS purchase_order_items_supplier_item_idx ON public.purchase_order_items (supplier_item_id);
 
 -- A PO line may only use an APPROVED (active) supplier item; pending items wait for an admin.
@@ -285,6 +341,8 @@ CREATE TRIGGER po_line_supplier_item_active BEFORE INSERT OR UPDATE OF supplier_
   FOR EACH ROW EXECUTE FUNCTION public._po_line_supplier_item_active();
 
 -- ---------------------------------------------------------------- RLS
+ALTER TABLE public.procurement_tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.delivery_location_entities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.business_entities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ingredients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.supplier_items ENABLE ROW LEVEL SECURITY;
@@ -294,6 +352,18 @@ ALTER TABLE public.menu_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sub_recipes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bom_lines ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS delivery_location_entities_staff ON public.delivery_location_entities;
+CREATE POLICY delivery_location_entities_staff ON public.delivery_location_entities FOR SELECT TO authenticated
+  USING (public.is_authenticated_active_staff());
+DROP POLICY IF EXISTS delivery_location_entities_admin ON public.delivery_location_entities;
+CREATE POLICY delivery_location_entities_admin ON public.delivery_location_entities FOR ALL TO authenticated
+  USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
+DROP POLICY IF EXISTS procurement_tags_select ON public.procurement_tags;
+CREATE POLICY procurement_tags_select ON public.procurement_tags FOR SELECT TO authenticated
+  USING (public.is_authenticated_active_staff());
+DROP POLICY IF EXISTS procurement_tags_admin ON public.procurement_tags;
+CREATE POLICY procurement_tags_admin ON public.procurement_tags FOR ALL TO authenticated
+  USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
 DROP POLICY IF EXISTS business_entities_select ON public.business_entities;
 CREATE POLICY business_entities_select ON public.business_entities FOR SELECT TO authenticated
   USING (public.is_authenticated_active_staff());
@@ -301,12 +371,24 @@ DROP POLICY IF EXISTS business_entities_admin ON public.business_entities;
 CREATE POLICY business_entities_admin ON public.business_entities FOR ALL TO authenticated
   USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
 
+-- Catalogue: staff read, admin write.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['ingredients', 'supplier_items'] LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_staff_select', t);
+    EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.is_authenticated_active_staff())', t || '_staff_select', t);
+  END LOOP;
+END $$;
+
+-- Catalogue + costing: admin read / write. Costing tables have NO other policy, so they are admin-only.
 DO $$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['ingredients', 'supplier_items', 'menu_items', 'sub_recipes', 'bom_lines', 'price_flag_reviews'] LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_staff_select', t);
-    EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (public.is_authenticated_active_staff())', t || '_staff_select', t);
+    IF t NOT IN ('ingredients', 'supplier_items') THEN   -- remove any earlier draft's staff read
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_staff_select', t);
+    END IF;
     EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_admin_write', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR ALL TO authenticated USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin())', t || '_admin_write', t);
   END LOOP;
@@ -320,9 +402,12 @@ DROP POLICY IF EXISTS price_history_admin_insert ON public.price_history;
 CREATE POLICY price_history_admin_insert ON public.price_history FOR INSERT TO authenticated
   WITH CHECK (public.is_profiles_admin());
 
-REVOKE ALL ON public.business_entities, public.ingredients, public.supplier_items, public.price_history,
+REVOKE ALL ON public.delivery_location_entities, public.v_po_entity_unresolved FROM PUBLIC, anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.delivery_location_entities TO authenticated;
+GRANT SELECT ON public.v_po_entity_unresolved TO authenticated;
+REVOKE ALL ON public.procurement_tags, public.business_entities, public.ingredients, public.supplier_items, public.price_history,
   public.price_flag_reviews, public.menu_items, public.sub_recipes, public.bom_lines FROM PUBLIC, anon;
-GRANT SELECT ON public.business_entities TO authenticated;
+GRANT SELECT ON public.procurement_tags, public.business_entities TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.ingredients, public.supplier_items, public.menu_items,
   public.sub_recipes, public.bom_lines, public.price_flag_reviews TO authenticated;
 GRANT SELECT, INSERT ON public.price_history TO authenticated;   -- no UPDATE / DELETE / TRUNCATE
@@ -330,6 +415,8 @@ GRANT USAGE ON SEQUENCE public.price_history_id_seq TO authenticated;
 REVOKE UPDATE, DELETE, TRUNCATE ON public.price_history FROM authenticated, anon, PUBLIC;
 
 -- ---------------------------------------------------------------- views (security_invoker)
+-- v_recipe_cost / v_dish_cogs / v_cost_drift / v_ingredient_usage read only admin-only tables, so they return
+-- nothing to staff or procurement. v_price_flags_open is filtered to admins explicitly.
 -- Cost per serving of each dish / sub-recipe from snapshot line costs, with wastage and servings.
 -- Lines counted: active lines (inactive / KIV recipes keep their own lines for reference).
 -- food_cost_rm is NULL unless every counted line is complete; known_cost_rm is the partial figure, labelled as such.
@@ -414,7 +501,7 @@ CREATE OR REPLACE VIEW public.v_price_flags_open WITH (security_invoker = true) 
 SELECT ph.*, si.item_name, si.procurement_tag
 FROM public.price_history ph
 JOIN public.supplier_items si ON si.id = ph.supplier_item_id
-WHERE ph.flagged_over_5pct
+WHERE ph.flagged_over_5pct AND public.is_profiles_admin()
   AND NOT EXISTS (SELECT 1 FROM public.price_flag_reviews r WHERE r.price_history_id = ph.id);
 
 REVOKE ALL ON public.v_recipe_cost, public.v_dish_cogs, public.v_cost_drift, public.v_spend_by_supplier_ingredient,

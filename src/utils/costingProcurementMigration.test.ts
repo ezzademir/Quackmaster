@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
-import MIG082 from '../../supabase/migrations/20261024020000_082_costing_schema.sql?raw';
-import MIG083 from '../../supabase/migrations/20261024020100_083_procurement_role.sql?raw';
-import RB082 from '../../supabase/rollbacks/082_rollback.sql?raw';
+import MIG083 from '../../supabase/migrations/20261024100000_083_costing_schema.sql?raw';
+import MIG084 from '../../supabase/migrations/20261024100100_084_procurement_role.sql?raw';
 import RB083 from '../../supabase/rollbacks/083_rollback.sql?raw';
+import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
 import SEED from '../../supabase/seeds/costing_seed_20261023.sql?raw';
 
 const ADMIN = '00000000-0000-0000-0000-0000000000a1';
@@ -62,14 +62,29 @@ CREATE TABLE purchase_order_items (id uuid primary key default gen_random_uuid()
 CREATE TABLE hub_inventory (id uuid primary key default gen_random_uuid(), raw_material_id uuid, quantity_on_hand numeric,
   reserved_quantity numeric default 0, available_quantity numeric, last_updated timestamptz, updated_at timestamptz,
   created_at timestamptz default now());
-CREATE VIEW supplier_scorecard_metrics AS SELECT poi.quantity_received FROM purchase_order_items poi;
+CREATE VIEW supplier_scorecard_metrics AS SELECT po.supplier_id, count(po.id) n FROM purchase_orders po GROUP BY 1;
+CREATE TABLE outlets (id uuid primary key default gen_random_uuid(), name text);
+CREATE TABLE production_runs (id uuid primary key default gen_random_uuid(), run_number text);
+CREATE VIEW recipe_variance_by_run AS SELECT pr.run_number FROM production_runs pr;
+-- live-shaped (role list line is what 084 patches)
+CREATE FUNCTION public.admin_set_profile_role_and_outlet(p_user_id uuid, p_role text, p_assigned_outlet_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_norm text := lower(trim(p_role));
+BEGIN
+  IF NOT public.is_profiles_admin() THEN RETURN jsonb_build_object('success', false, 'error', 'forbidden'); END IF;
+  IF v_norm NOT IN ('admin', 'staff', 'supervisor') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_role');
+  END IF;
+  UPDATE profiles SET role = v_norm WHERE id = p_user_id;
+  RETURN jsonb_build_object('success', true, 'role', v_norm);
+END $$;
 CREATE TABLE recipes (id uuid primary key default gen_random_uuid(), name text);
 CREATE TABLE sales_journals (id uuid primary key default gen_random_uuid(), outlet_id uuid);
 CREATE TABLE outlet_inventory (id uuid primary key default gen_random_uuid(), outlet_id uuid, qty numeric);
 CREATE TABLE document_links (id uuid primary key default gen_random_uuid(), uploaded_by uuid, storage_path text);
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['suppliers','raw_materials','purchase_orders','purchase_order_items','hub_inventory',
-    'recipes','sales_journals','outlet_inventory','document_links'] LOOP
+    'recipes','sales_journals','outlet_inventory','document_links','outlets','production_runs'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     -- live today: "authenticated USING (true)" or "role <> pending" read policies
     EXECUTE format('CREATE POLICY %I ON %I FOR SELECT TO authenticated USING (true)', t || '_read', t);
@@ -77,7 +92,10 @@ DO $$ DECLARE t text; BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO authenticated', t);
   END LOOP;
 END $$;
-GRANT SELECT ON profiles TO authenticated;
+GRANT SELECT ON profiles, supplier_scorecard_metrics, recipe_variance_by_run TO authenticated;
+CREATE FUNCTION public._stock_take_sheet(p uuid) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path=public AS
+  $$ SELECT jsonb_agg(oi.qty) FROM outlet_inventory oi WHERE oi.outlet_id = p $$;
+GRANT EXECUTE ON FUNCTION public._stock_take_sheet(uuid) TO authenticated;
 INSERT INTO profiles (id, full_name, role) VALUES
   ('${ADMIN}','Admin','admin'), ('${ADMIN2}','Admin 2','admin'), ('${STAFF}','Staff','staff'),
   ('${BUYER_QT}','Buyer QT','pending'), ('${BUYER_MH}','Buyer MH','pending');
@@ -85,14 +103,17 @@ INSERT INTO suppliers (id, name) VALUES ('${SUP}', 'SRI TERNAK');
 INSERT INTO raw_materials VALUES ('${RM}', 'Garlic', 'kg', 3, 3, now());
 INSERT INTO recipes (name) VALUES ('Secret sauce');
 INSERT INTO sales_journals (outlet_id) VALUES (gen_random_uuid());
-INSERT INTO outlet_inventory (outlet_id, qty) VALUES (gen_random_uuid(), 5);
+INSERT INTO outlet_inventory (outlet_id, qty) VALUES ('00000000-0000-0000-0000-00000000c0c0', 5);
+INSERT INTO production_runs (run_number) VALUES ('RUN-1');
+-- pre-existing (live-style) POs: no entity column yet; 083 backfills them from the hub
+INSERT INTO purchase_orders (order_number, supplier_id, status) VALUES ('PO-LIVE-1','${SUP}','received'), ('PO-LIVE-2','${SUP}','partial');
 `;
 
 const POS = `
 UPDATE profiles SET role='procurement' WHERE id IN ('${BUYER_QT}','${BUYER_MH}');
 INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${BUYER_QT}','quackteow'), ('${BUYER_MH}','merdeka_house');
 INSERT INTO purchase_orders (id, order_number, supplier_id, status, entity_code) VALUES
-  ('${PO_QT}','PO-QT','${SUP}','ordered','QT_PLT'), ('${PO_MH}','PO-MH','${SUP}','ordered','MH_PLT'),
+  ('${PO_QT}','PO-QT','${SUP}','ordered','QT'), ('${PO_MH}','PO-MH','${SUP}','ordered','MH'),
   ('${PO_NONE}','PO-OLD','${SUP}','ordered',NULL);
 INSERT INTO purchase_order_items (id, purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price, line_total, purchase_uom)
   VALUES ('${L_QT}','${PO_QT}','${RM}',10,0,3,30,'kg');
@@ -100,12 +121,17 @@ INSERT INTO supplier_items (id, supplier_id, procurement_tag, item_name, base_un
   VALUES ('00000000-0000-0000-0000-00000000b0b1','${SUP}','quackteow','Garlic 1kg','g',1000,10,'active'),
          ('00000000-0000-0000-0000-00000000b0b2','${SUP}','merdeka_house','Rice 10kg','g',10000,31.5,'active');
 UPDATE purchase_order_items SET supplier_item_id='00000000-0000-0000-0000-00000000b0b1' WHERE id='${L_QT}';
-INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, due_date, amount_rm, amount_paid_rm)
-  VALUES ('QT_PLT','${SUP}','INV-1','2026-10-01','2026-10-02',100,40), ('MH_PLT','${SUP}','INV-2','2026-10-01',NULL,50,50);
+INSERT INTO supplier_bills (id, entity_code, supplier_id, bill_number, bill_date, due_date, amount_rm) VALUES
+  ('00000000-0000-0000-0000-0000000b1110','QT','${SUP}','INV-1','2026-10-01','2026-10-02',100),
+  ('00000000-0000-0000-0000-0000000b1120','MH','${SUP}','INV-2','2026-10-01',NULL,50);
+INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference) VALUES
+  ('00000000-0000-0000-0000-0000000b1110',40,'2026-10-02','bank_transfer','TX1'),
+  ('00000000-0000-0000-0000-0000000b1120',20,'2026-10-02','cash',NULL),
+  ('00000000-0000-0000-0000-0000000b1120',30,'2026-10-03','cheque','CHQ-9');
 `;
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['082', MIG082], ['083', MIG083], ['POS', POS]]) {
+  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['083', MIG083], ['084', MIG084], ['POS', POS]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -133,36 +159,46 @@ const err = async (p: Promise<unknown>) => {
   }
 };
 
-describe('082/083 procurement role RLS', () => {
+describe('083/084 procurement role RLS', () => {
   it('procurement cannot read costing, recipes, sales, outlet stock or other users', async () => {
     const pg = await db();
-    await pg.exec(`INSERT INTO menu_items (entity_code, name, source_sheet, selling_price_ex_sst_rm) VALUES ('MH_PLT','Nasi','F-NASI',12);
+    await pg.exec(`INSERT INTO menu_items (entity_code, name, source_sheet, selling_price_ex_sst_rm) VALUES ('MH','Nasi','F-NASI',12);
       INSERT INTO bom_lines (entity_code, menu_item_id, component_name, line_cost_rm, cost_complete)
-        SELECT 'MH_PLT', id, 'RICE', 1, true FROM menu_items;`);
+        SELECT 'MH', id, 'RICE', 1, true FROM menu_items;`);
     for (const t of ['menu_items', 'sub_recipes', 'bom_lines', 'v_recipe_cost', 'v_dish_cogs', 'v_cost_drift', 'v_ingredient_usage',
       'recipes', 'sales_journals', 'outlet_inventory', 'price_flag_reviews']) {
       expect(await as(pg, BUYER_MH, () => count(pg, `select * from ${t}`)), t).toBe(0);
     }
     expect(await as(pg, BUYER_MH, () => count(pg, 'select * from profiles'))).toBe(1);
-    // staff and admin still see them
-    expect(await as(pg, STAFF, () => count(pg, 'select * from v_recipe_cost'))).toBe(1);
+    // costing is admin-only: staff gets nothing either; production recipes stay staff-readable
+    for (const t of ['menu_items', 'sub_recipes', 'bom_lines', 'v_recipe_cost', 'v_dish_cogs', 'v_cost_drift', 'v_ingredient_usage', 'price_flag_reviews']) {
+      expect(await as(pg, STAFF, () => count(pg, `select * from ${t}`)), `staff ${t}`).toBe(0);
+    }
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from v_recipe_cost'))).toBe(1);
+    expect(await as(pg, STAFF, () => err(pg.exec(`UPDATE menu_items SET name='x'`)))).toBeNull();
+    expect((await rows(pg, 'select name from menu_items'))[0].name).toBe('Nasi');
     expect(await as(pg, STAFF, () => count(pg, 'select * from recipes'))).toBe(1);
     expect(await as(pg, ADMIN, () => count(pg, 'select * from profiles'))).toBe(5);
+    // raw_materials cost columns: procurement is denied the table and gets the cost-free catalogue view
+    expect(await as(pg, BUYER_MH, () => count(pg, 'select * from raw_materials'))).toBe(0);
+    expect(await as(pg, BUYER_MH, () => rows(pg, 'select * from v_raw_material_catalog'))).toEqual([{ id: RM, name: 'Garlic', unit_of_measure: 'kg' }]);
+    expect(await as(pg, STAFF, () => count(pg, 'select cost_price, weighted_avg_unit_cost from raw_materials'))).toBe(1);
     // and cannot write them
     expect(await as(pg, BUYER_MH, () => err(pg.exec(`INSERT INTO recipes (name) VALUES ('x')`)))).toMatch(/row-level security/);
   });
 
   it('procurement sees only POs, items, bills and supplier items of its own tags (untagged hidden)', async () => {
     const pg = await db();
-    expect(await as(pg, BUYER_QT, () => rows(pg, 'select order_number from purchase_orders order by 1'))).toEqual([{ order_number: 'PO-QT' }]);
+    expect(await as(pg, BUYER_QT, () => rows(pg, 'select order_number from purchase_orders order by 1')))
+      .toEqual([{ order_number: 'PO-LIVE-1' }, { order_number: 'PO-LIVE-2' }, { order_number: 'PO-QT' }]);
     expect(await as(pg, BUYER_MH, () => rows(pg, 'select order_number from purchase_orders order by 1'))).toEqual([{ order_number: 'PO-MH' }]);
     expect(await as(pg, BUYER_MH, () => count(pg, 'select * from purchase_order_items'))).toBe(0);
     expect(await as(pg, BUYER_QT, () => rows(pg, 'select item_name from supplier_items'))).toEqual([{ item_name: 'Garlic 1kg' }]);
     expect(await as(pg, BUYER_QT, () => rows(pg, 'select bill_number, payment_status from v_supplier_bill_status')))
       .toEqual([{ bill_number: 'INV-1', payment_status: 'overdue' }]);
-    expect(await as(pg, BUYER_MH, () => rows(pg, 'select payment_status from v_supplier_bill_status'))).toEqual([{ payment_status: 'paid' }]);
+    expect(await as(pg, BUYER_MH, () => rows(pg, 'select payment_status, paid_rm::float p from v_supplier_bill_status'))).toEqual([{ payment_status: 'paid', p: 50 }]);
     expect(await as(pg, BUYER_QT, () => count(pg, 'select * from price_history'))).toBe(1);
-    expect(await as(pg, ADMIN, () => count(pg, 'select * from purchase_orders'))).toBe(3);
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from purchase_orders'))).toBe(5);
     // a buyer with no tag sees nothing
     await pg.exec(`DELETE FROM user_entities WHERE user_id='${BUYER_QT}'`);
     expect(await as(pg, BUYER_QT, () => count(pg, 'select * from purchase_orders'))).toBe(0);
@@ -172,22 +208,22 @@ describe('082/083 procurement role RLS', () => {
     const pg = await db();
     const ins = (status: string, ent: string) =>
       pg.exec(`INSERT INTO purchase_orders (order_number, supplier_id, status, entity_code) VALUES ('N-${status}-${ent}','${SUP}','${status}','${ent}')`);
-    expect(await as(pg, BUYER_QT, () => err(ins('draft', 'MH_PLT')))).toMatch(/row-level security/);
-    expect(await as(pg, BUYER_QT, () => err(ins('ordered', 'QT_ENT')))).toMatch(/procurement_po_must_start_draft/);
-    expect(await as(pg, BUYER_QT, () => err(ins('draft', 'QT_ENT')))).toBeNull();
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET notes='x' WHERE order_number='N-draft-QT_ENT'`)))).toBeNull();
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE order_number='N-draft-QT_ENT'`)))).toBeNull();
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE order_number='N-draft-QT_ENT'`))))
+    expect(await as(pg, BUYER_QT, () => err(ins('draft', 'MH')))).toMatch(/row-level security/);
+    expect(await as(pg, BUYER_QT, () => err(ins('ordered', 'QT')))).toMatch(/procurement_po_must_start_draft/);
+    expect(await as(pg, BUYER_QT, () => err(ins('draft', 'QT')))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET notes='x' WHERE order_number='N-draft-QT'`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE order_number='N-draft-QT'`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE order_number='N-draft-QT'`))))
       .toMatch(/po_approval_admin_only/);
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET notes='y' WHERE order_number='N-draft-QT_ENT'`))))
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET notes='y' WHERE order_number='N-draft-QT'`))))
       .toMatch(/procurement_po_edit_draft_only/);
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='closed_short' WHERE id='${PO_QT}'`))))
       .toMatch(/procurement_po_status_change_not_allowed|closed_short/);
     // admin who created a PO cannot approve it; another admin can
-    await as(pg, ADMIN, () => pg.exec(`INSERT INTO purchase_orders (order_number, supplier_id, status, entity_code) VALUES ('A1','${SUP}','pending_approval','MH_PLT')`));
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO purchase_orders (order_number, supplier_id, status, entity_code) VALUES ('A1','${SUP}','pending_approval','MH')`));
     expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE order_number='A1'`)))).toMatch(/po_cannot_approve_own/);
-    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE order_number='N-draft-QT_ENT'`)))).toBeNull();
-    const [r] = await rows(pg, `select submitted_by, approved_by, created_by from purchase_orders where order_number='N-draft-QT_ENT'`);
+    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE order_number='N-draft-QT'`)))).toBeNull();
+    const [r] = await rows(pg, `select submitted_by, approved_by, created_by from purchase_orders where order_number='N-draft-QT'`);
     expect(r).toEqual({ submitted_by: BUYER_QT, approved_by: ADMIN2, created_by: BUYER_QT });
   });
 
@@ -201,7 +237,7 @@ describe('082/083 procurement role RLS', () => {
       .toMatch(/row-level security/);
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_items (id, supplier_id, procurement_tag, item_name, base_unit, status) VALUES ('00000000-0000-0000-0000-00000000b0b9','${SUP}','quackteow','Chili','g','pending')`))))
       .toBeNull();
-    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_orders (id, order_number, supplier_id, entity_code) VALUES ('00000000-0000-0000-0000-00000000f009','D','${SUP}','QT_PLT')`));
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_orders (id, order_number, supplier_id, entity_code) VALUES ('00000000-0000-0000-0000-00000000f009','D','${SUP}','QT')`));
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO purchase_order_items (purchase_order_id, raw_material_id, quantity_ordered, unit_price, supplier_item_id)
       VALUES ('00000000-0000-0000-0000-00000000f009','${RM}',1,1,'00000000-0000-0000-0000-00000000b0b9')`)))).toMatch(/supplier_item_not_approved/);
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO purchase_order_items (purchase_order_id, raw_material_id, quantity_ordered, unit_price, supplier_item_id)
@@ -224,27 +260,84 @@ describe('082/083 procurement role RLS', () => {
     const [ph] = await rows(pg, `select flagged_over_5pct, source, entered_by from price_history where source='receipt'`);
     expect(ph).toEqual({ flagged_over_5pct: true, source: 'receipt', entered_by: BUYER_QT });
     expect(await as(pg, ADMIN, () => count(pg, 'select * from v_price_flags_open'))).toBe(1);
-    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from v_price_flags_open'))).toBe(1);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from v_price_flags_open'))).toBe(0);
+    // the delivery moved the PO to partial via the RPC (no session flag involved)
+    expect((await rows(pg, `select status from purchase_orders where id='${PO_QT}'`))[0].status).toBe('partial');
+    // a line from another PO is refused by record_po_delivery itself
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"00000000-0000-0000-0000-000000000bad","quantity_received":1}]'::jsonb, 'DO') r`)))[0].r)
+      .toMatchObject({ success: false, error: 'line_not_on_po' });
+    // setting the old bypass flag does nothing now
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`SELECT set_config('app.po_rpc','on',false); UPDATE purchase_order_items SET quantity_received=9 WHERE id='${L_QT}'`))))
+      .toMatch(/procurement_po_edit_draft_only/);
+    await pg.exec(`RESET app.po_rpc`).catch(() => undefined);
     // direct writes to receipts / quantities / close short / adjust are refused
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET quantity_received=9 WHERE id='${L_QT}'`)))).toMatch(/procurement_po_edit_draft_only/);
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE po_receipt_records SET quantity_received=1`)))).toMatch(/permission denied/);
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`select receive_po_shipment('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1}]'::jsonb)`))))
-      .toMatch(/procurement_po_status_change_not_allowed|receive_via_record_po_delivery|procurement_po_edit_draft_only/);
+    // calling receive_po_shipment directly (skipping the DO / invoice rule) is refused: only record_po_delivery
+    // issues the one-shot receipt ticket that lets a procurement user through its guard
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select receive_po_shipment('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1}]'::jsonb) r`)))[0].r)
+      .toMatchObject({ success: false });
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO po_receipt_tickets (purchase_order_id, user_id, txid) VALUES ('${PO_QT}','${BUYER_QT}',txid_current())`))))
+      .toMatch(/permission denied/);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`select _consume_po_receipt_ticket('${PO_QT}')`)))).toMatch(/permission denied/);
+    expect(await c0(pg, 'select count(*) n from po_receipt_tickets')).toBe(0);
     expect((await as(pg, BUYER_QT, () => rows(pg, `select close_po_short('${PO_QT}', 'x') r`)))[0].r).toMatchObject({ success: false });
   });
 
-  it('bills: procurement records unpaid bills only and cannot mark paid', async () => {
+  it('bills + payments: procurement records bills, sees derived status only; payments admin-only, part payments, no overpay', async () => {
     const pg = await db();
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('QT_ENT','${SUP}','B9','2026-10-20',10)`)))).toBeNull();
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('MH_PLT','${SUP}','B8','2026-10-20',10)`)))).toMatch(/row-level security/);
-    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm, amount_paid_rm) VALUES ('QT_ENT','${SUP}','B7','2026-10-20',10,10)`)))).toMatch(/row-level security|bill_payment_admin_only/);
-    await as(pg, BUYER_QT, () => pg.exec(`UPDATE supplier_bills SET amount_paid_rm=10 WHERE bill_number='B9'`));
-    expect((await rows(pg, `select amount_paid_rm::float p from supplier_bills where bill_number='B9'`))[0].p).toBe(0);
-    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET amount_paid_rm=10, paid_at=now() WHERE bill_number='B9'`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('00000000-0000-0000-0000-0000000b1190','QT','${SUP}','B9','2026-10-20',10)`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('MH','${SUP}','B8','2026-10-20',10)`)))).toMatch(/row-level security/);
+    // payments: procurement can neither read nor write them; staff can read; admin writes
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from supplier_payments'))).toBe(0);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b1190',10,'2026-10-21','cash')`)))).toMatch(/row-level security/);
+    expect(await as(pg, STAFF, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b1190',10,'2026-10-21','cash')`)))).toMatch(/row-level security/);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from supplier_payments'))).toBe(3);
+    expect(await as(pg, BUYER_QT, () => rows(pg, `select payment_status from v_supplier_bill_status where bill_number='B9'`))).toEqual([{ payment_status: 'unpaid' }]);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference, document_path) VALUES ('00000000-0000-0000-0000-0000000b1190',4,'2026-10-21','duitnow','REF1','bills/b9.pdf')`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => rows(pg, `select payment_status, balance_rm::float b from v_supplier_bill_status where bill_number='B9'`))).toEqual([{ payment_status: 'part_paid', b: 6 }]);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b1190',7,'2026-10-22','cash')`)))).toMatch(/payment_exceeds_bill_balance/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b1190',6,'2026-10-22','cash')`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => rows(pg, `select payment_status from v_supplier_bill_status where bill_number='B9'`))).toEqual([{ payment_status: 'paid' }]);
+    const [p] = await rows(pg, `select created_by from supplier_payments where reference='REF1'`);
+    expect(p.created_by).toBe(ADMIN);
+    // no paid-amount field on bills any more; paid total leaks nothing outside the caller's scope
+    expect(await c0(pg, `select count(*) n from information_schema.columns where table_name='supplier_bills' and column_name in ('amount_paid_rm','paid_at','paid_by')`)).toBe(0);
+    expect((await as(pg, BUYER_MH, () => rows(pg, `select supplier_bill_paid_rm('00000000-0000-0000-0000-0000000b1110') v`)))[0].v).toBeNull();
+  });
+
+  it('leak audit fixes: definer views run as caller, internal stock helper not callable, role RPC + viewer', async () => {
+    const pg = await db();
+    expect(await as(pg, BUYER_MH, () => count(pg, 'select * from recipe_variance_by_run'))).toBe(0);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from recipe_variance_by_run'))).toBe(1);
+    // scorecard counts only the buyer's own POs (PO-MH), not the whole book
+    expect(await as(pg, BUYER_MH, () => count(pg, 'select * from supplier_scorecard_metrics'))).toBe(await as(pg, BUYER_MH, () => count(pg, 'select distinct supplier_id from purchase_orders')));
+    expect(await as(pg, BUYER_MH, () => c0(pg, "select (select c.reloptions::text from pg_class c where relname='supplier_scorecard_metrics') like '%security_invoker=true%' n"))).toBeTruthy();
+    expect(await as(pg, BUYER_MH, () => err(pg.exec(`select _stock_take_sheet('00000000-0000-0000-0000-00000000c0c0')`)))).toMatch(/permission denied/);
+    expect(await as(pg, STAFF, () => err(pg.exec(`select _stock_take_sheet('00000000-0000-0000-0000-00000000c0c0')`)))).toMatch(/permission denied/);
+    // every SECURITY DEFINER function 083/084 adds is gated: called by a user with no role it returns nothing
+    expect((await as(pg, STAFF, () => rows(pg, `select record_po_delivery('${PO_QT}', '[]'::jsonb) r`)))[0].r).toMatchObject({ success: false });
+    expect((await as(pg, BUYER_MH, () => rows(pg, `select procurement_has_po('${PO_QT}') v, procurement_has_tag('quackteow') t`)))[0]).toEqual({ v: false, t: false });
+    // admin can assign the new role through the existing RPC; 'viewer' (#81) is allowed by the constraint
+    expect((await as(pg, ADMIN, () => rows(pg, `select admin_set_profile_role_and_outlet('${STAFF}', 'procurement', NULL) r`)))[0].r).toMatchObject({ success: true });
+    expect(await err(pg.exec(`UPDATE profiles SET role='viewer' WHERE id='${STAFF}'`))).toBeNull();
+    expect(await err(pg.exec(`UPDATE profiles SET role='bogus' WHERE id='${STAFF}'`))).toMatch(/profiles_role_check/);
+  });
+
+  it('PO entity backfill: existing POs resolved from the hub; anything unresolved is listed for admins', async () => {
+    const pg = await db();
+    expect(await rows(pg, `select order_number, entity_code from purchase_orders where order_number like 'PO-LIVE%' order by 1`))
+      .toEqual([{ order_number: 'PO-LIVE-1', entity_code: 'QT' }, { order_number: 'PO-LIVE-2', entity_code: 'QT' }]);
+    expect(await as(pg, ADMIN, () => rows(pg, 'select order_number from v_po_entity_unresolved'))).toEqual([{ order_number: 'PO-OLD' }]);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from v_po_entity_unresolved'))).toBe(0);
+    expect(await rows(pg, 'select code, procurement_tag from business_entities order by 1'))
+      .toEqual([{ code: 'MH', procurement_tag: 'merdeka_house' }, { code: 'QT', procurement_tag: 'quackteow' }]);
+    // extensible: a new entity / tag is a row
+    expect(await err(pg.exec(`INSERT INTO procurement_tags VALUES ('new_brand','New Brand'); INSERT INTO business_entities (code, name, procurement_tag) VALUES ('NB','New Brand','new_brand')`))).toBeNull();
   });
 });
 
-describe('082 costing rules', () => {
+describe('083 costing rules', () => {
   it('price_history is append-only, even for admin and the owner', async () => {
     const pg = await db();
     expect(await as(pg, ADMIN, () => err(pg.exec('UPDATE price_history SET price_rm = 0')))).toMatch(/permission denied/);
@@ -257,19 +350,19 @@ describe('082 costing rules', () => {
     const pg = await db();
     await pg.exec(`
       INSERT INTO menu_items (id, entity_code, name, source_sheet, selling_price_ex_sst_rm, packaging_rule, pkg_takeaway_rm)
-        VALUES ('00000000-0000-0000-0000-0000000aaa01','MH_PLT','A','F-A',10,'takeaway only',0.5),
-               ('00000000-0000-0000-0000-0000000aaa02','MH_PLT','B','F-B',10,'takeaway only',NULL);
+        VALUES ('00000000-0000-0000-0000-0000000aaa01','MH','A','F-A',10,'takeaway only',0.5),
+               ('00000000-0000-0000-0000-0000000aaa02','MH','B','F-B',10,'takeaway only',NULL);
       INSERT INTO bom_lines (entity_code, menu_item_id, component_name, line_cost_rm, cost_complete) VALUES
-        ('MH_PLT','00000000-0000-0000-0000-0000000aaa01','x',2,true),
-        ('MH_PLT','00000000-0000-0000-0000-0000000aaa02','x',2,true),
-        ('MH_PLT','00000000-0000-0000-0000-0000000aaa02','chili paste',NULL,false);`);
+        ('MH','00000000-0000-0000-0000-0000000aaa01','x',2,true),
+        ('MH','00000000-0000-0000-0000-0000000aaa02','x',2,true),
+        ('MH','00000000-0000-0000-0000-0000000aaa02','chili paste',NULL,false);`);
     const r = await rows(pg, 'select name, cost_complete, food_cost_rm::float f, cogs_dine_in_pct::float d, cogs_takeaway_pct::float t from v_dish_cogs order by name');
     expect(r).toEqual([
       { name: 'A', cost_complete: true, f: 2, d: 20, t: 25 },
       { name: 'B', cost_complete: false, f: null, d: null, t: null },
     ]);
     expect(await err(pg.exec(`INSERT INTO bom_lines (entity_code, menu_item_id, component_name, cost_complete, price_basis)
-      VALUES ('MH_PLT','00000000-0000-0000-0000-0000000aaa01','y',true,'pending')`))).toMatch(/check constraint/);
+      VALUES ('MH','00000000-0000-0000-0000-0000000aaa01','y',true,'pending')`))).toMatch(/check constraint/);
   });
 
   it('seed script loads: counts, incomplete costs NULL, tags', async () => {
@@ -297,13 +390,15 @@ describe('082 costing rules', () => {
     expect(await c('select count(*) n from bom_lines')).toBe(560);
   });
 
-  it('rollbacks drop 083 then 082 cleanly', async () => {
+  it('rollbacks drop 084 then 083 cleanly', async () => {
     const pg = await db();
+    await pg.exec(RB084);
     await pg.exec(RB083);
-    await pg.exec(RB082);
-    expect(await c0(pg, `select count(*) n from pg_tables where tablename in ('supplier_items','price_history','menu_items','supplier_bills','user_entities')`)).toBe(0);
+    expect(await c0(pg, `select count(*) n from pg_tables where tablename in ('supplier_items','price_history','menu_items','supplier_bills','supplier_payments','user_entities','business_entities','procurement_tags','delivery_location_entities')`)).toBe(0);
+    const [a] = await rows(pg, `select position('procurement' in pg_get_functiondef('admin_set_profile_role_and_outlet(uuid,text,uuid)'::regprocedure)) p`);
+    expect(a.p).toBe(0);
     expect(await c0(pg, `select count(*) n from pg_policies where policyname like '%procurement%'`)).toBe(0);
-    const [d] = await rows(pg, `select position('procurement_has_po' in pg_get_functiondef('receive_po_shipment(uuid,jsonb)'::regprocedure)) p`);
+    const [d] = await rows(pg, `select position('_consume_po_receipt_ticket' in pg_get_functiondef('receive_po_shipment(uuid,jsonb)'::regprocedure)) p`);
     expect(d.p).toBe(0);
   });
 });
