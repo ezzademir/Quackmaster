@@ -10,6 +10,7 @@ import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validateP
 import { retryWithBackoff } from '../utils/errorHandling';
 import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
+import { DEFAULT_OVER_RECEIPT_TOLERANCE_PCT, planReceipt, rpcLines } from '../utils/poReceipt';
 import {
   cancelPurchaseOrderErrorMessage,
   extractAtomicRpcErrorCode,
@@ -33,10 +34,11 @@ function StatusBadge({ status }: { status: string }) {
     ordered: 'bg-blue-100 text-blue-700',
     partial: 'bg-amber-100 text-amber-700',
     received: 'bg-emerald-100 text-emerald-700',
+    closed_short: 'bg-orange-100 text-orange-700',
   };
   return (
     <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[status] ?? 'bg-stone-100 text-stone-700'}`}>
-      {status}
+      {status === 'closed_short' ? 'closed short' : status}
     </span>
   );
 }
@@ -847,8 +849,10 @@ function PODetailModal({
   onStatusChange,
   onEdit,
   onDelete,
+  isAdmin = false,
 }: {
   po: POWithDetails;
+  isAdmin?: boolean;
   onClose: () => void;
   onStatusChange: () => void;
   onEdit?: () => void;
@@ -860,89 +864,113 @@ function PODetailModal({
     Object.fromEntries((po.items ?? []).map((item) => [item.id, item.quantity_received?.toString() ?? '0']))
   );
 
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [tolerancePct, setTolerancePct] = useState(DEFAULT_OVER_RECEIPT_TOLERANCE_PCT);
+  const [closeReason, setCloseReason] = useState('');
+  const [adjustItem, setAdjustItem] = useState<string | null>(null);
+  const [adjustQty, setAdjustQty] = useState('');
+  const [adjustReason, setAdjustReason] = useState('');
+  const [adjustKeepTotal, setAdjustKeepTotal] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void supabase
+      .from('procurement_settings')
+      .select('over_receipt_tolerance_pct')
+      .maybeSingle()
+      .then(({ data }) => {
+        const v = Number(data?.over_receipt_tolerance_pct);
+        if (live && Number.isFinite(v)) setTolerancePct(v);
+      });
+    return () => { live = false; };
+  }, []);
+
+  const receiptInputs = (po.items ?? []).map((item) => ({
+    id: item.id,
+    name: item.material?.name ?? 'Unknown',
+    ordered: Number(item.quantity_ordered) || 0,
+    previous: Number(item.quantity_received) || 0,
+    entered: receivedQtys[item.id] ?? '0',
+    reason: reasons[item.id],
+  }));
+  const preview = planReceipt(receiptInputs, { tolerancePct, isAdmin });
+
+  function rpcFailure(rpcData: unknown, rpcErr: { message?: string } | null, fallback: string): string | null {
+    if (rpcErr) return extractAtomicRpcErrorCode(undefined, rpcErr.message) ?? rpcErr.message ?? fallback;
+    const r = rpcData as { success?: boolean; error?: string } | null;
+    if (r && r.success === false) return extractAtomicRpcErrorCode(r.error) ?? r.error ?? fallback;
+    return null;
+  }
+
   async function handleMarkReceived() {
     setSaving(true);
+    setError('');
     try {
-      let orderedTotal = 0;
-      let receivedTotal = 0;
-      const updates: Array<{ id: string; qty: number }> = [];
-
-      // First pass: validate all quantities
-      for (const item of po.items ?? []) {
-        const enteredQty = parseFloat(receivedQtys[item.id] ?? '0');
-        const qty = Math.max(0, Math.min(item.quantity_ordered, Number.isFinite(enteredQty) ? enteredQty : 0));
-
-        // Validate: quantity received cannot exceed quantity ordered
-        if (qty > item.quantity_ordered) {
-          setError(`Item ${item.material?.name ?? 'Unknown'}: quantity received exceeds quantity ordered`);
-          setSaving(false);
-          return;
-        }
-
-        orderedTotal += item.quantity_ordered;
-        receivedTotal += qty;
-        updates.push({ id: item.id, qty });
-      }
-
-      if (receivedTotal === 0) {
-        setError('At least one item must be marked as received');
+      const plan = planReceipt(receiptInputs, { tolerancePct, isAdmin });
+      if (!plan.ok) {
+        setError(plan.error);
         setSaving(false);
         return;
       }
-
-      const payload = updates.map((u) => ({
-        purchase_order_item_id: u.id,
-        quantity_received: u.qty,
-      }));
-
-      const nextStatus =
-        receivedTotal <= 0 ? 'ordered' : receivedTotal < orderedTotal ? 'partial' : 'received';
-
+      // Ledger row is written server-side by receive_po_shipment (entered, delta, reason).
       const { data: rpcData, error: rpcErr } = await retryWithBackoff(async () =>
-        supabase.rpc('receive_po_shipment', {
-          p_po_id: po.id,
-          p_lines: payload,
-        })
+        supabase.rpc('receive_po_shipment', { p_po_id: po.id, p_lines: rpcLines(plan) })
       );
-
-      if (rpcErr) {
-        setError(
-          extractAtomicRpcErrorCode(undefined, rpcErr.message) ??
-            rpcErr.message ??
-            'Receive shipment failed'
-        );
+      const fail = rpcFailure(rpcData, rpcErr, 'Receive shipment failed');
+      if (fail) {
+        setError(fail);
         setSaving(false);
         return;
       }
-
-      const rpcResult = rpcData as { success?: boolean; error?: string } | null;
-      if (rpcResult && rpcResult.success === false) {
-        setError(
-          extractAtomicRpcErrorCode(rpcResult.error) ?? 'Receive shipment failed'
-        );
-        setSaving(false);
-        return;
-      }
-
-      await writeLedgerEntry({
-        action: nextStatus === 'received' ? 'received' : 'updated',
-        entityType: 'purchase_order',
-        entityId: po.id,
-        module: 'procurement',
-        operation: 'update',
-        afterData: {
-          rpc: 'receive_po_shipment',
-          lines: payload,
-        },
-        metadata: { entity_label: po.order_number },
-      });
-
       setSaving(false);
       onStatusChange();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to mark received');
       setSaving(false);
     }
+  }
+
+  async function handleCloseShort() {
+    if (!isAdmin) {
+      setError('Only an admin can close an order short');
+      return;
+    }
+    if (!closeReason.trim()) {
+      setError('Enter a reason to close this order short');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    const { data, error: rpcErr } = await supabase.rpc('close_po_short', { p_po_id: po.id, p_reason: closeReason.trim() });
+    const fail = rpcFailure(data, rpcErr, 'Close short failed');
+    setSaving(false);
+    if (fail) setError(fail);
+    else onStatusChange();
+  }
+
+  async function handleAdjustReceipt() {
+    if (!adjustItem) return;
+    const qty = Number(adjustQty);
+    if (adjustQty.trim() === '' || !Number.isFinite(qty) || qty < 0) {
+      setError('Enter a corrected quantity of 0 or more');
+      return;
+    }
+    if (!adjustReason.trim()) {
+      setError('Enter a reason for the receipt correction');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    const { data, error: rpcErr } = await supabase.rpc('adjust_po_receipt', {
+      p_item_id: adjustItem,
+      p_new_qty: qty,
+      p_reason: adjustReason.trim(),
+      p_keep_line_total: adjustKeepTotal,
+    });
+    const fail = rpcFailure(data, rpcErr, 'Receipt correction failed');
+    setSaving(false);
+    if (fail) setError(fail);
+    else onStatusChange();
   }
 
   async function changeStatus(status: string) {
@@ -1008,13 +1036,29 @@ function PODetailModal({
                   <td className="font-medium">{item.material?.name ?? '—'}<span className="ml-1 text-xs text-stone-400">({item.material?.unit_of_measure})</span></td>
                   <td className="text-right">{item.quantity_ordered}</td>
                   <td className="text-right">
-                    {po.status !== 'received' ? (
-                      <input type="number" min="0" max={item.quantity_ordered} step="0.01"
-                        value={receivedQtys[item.id] ?? '0'}
-                        onChange={(e) => setReceivedQtys({ ...receivedQtys, [item.id]: e.target.value })}
-                        className="w-20 rounded border border-stone-300 px-2 py-1 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
+                    {po.status === 'ordered' || po.status === 'partial' ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <input type="number" min="0" step="0.0001"
+                          value={receivedQtys[item.id] ?? '0'}
+                          onChange={(e) => setReceivedQtys({ ...receivedQtys, [item.id]: e.target.value })}
+                          className="w-24 rounded border border-stone-300 px-2 py-1 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
+                        {Number(receivedQtys[item.id] ?? 0) > item.quantity_ordered * (1 + tolerancePct / 100) && (
+                          <input type="text" placeholder="Reason (admin)"
+                            value={reasons[item.id] ?? ''}
+                            onChange={(e) => setReasons({ ...reasons, [item.id]: e.target.value })}
+                            className="w-40 rounded border border-amber-400 px-2 py-1 text-xs" />
+                        )}
+                      </div>
                     ) : (
-                      <span>{item.quantity_received}</span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span>{item.quantity_received}</span>
+                        {isAdmin && (po.status === 'received' || po.status === 'closed_short') && (
+                          <button type="button" className="text-xs text-brand-700 underline"
+                            onClick={() => { setAdjustItem(item.id); setAdjustQty(String(item.quantity_received ?? 0)); setAdjustReason(''); }}>
+                            Edit receipt
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="text-right">MYR {item.unit_price.toFixed(2)}</td>
@@ -1024,6 +1068,39 @@ function PODetailModal({
             </tbody>
           </table>
         </div>
+        {(po.status === 'ordered' || po.status === 'partial') && preview.ok && preview.warnings.length > 0 && (
+          <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+            <p className="font-medium">Received differs from ordered — stock will post what you entered:</p>
+            <ul className="list-disc pl-5">{preview.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+          </div>
+        )}
+        {isAdmin && po.status === 'partial' && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 p-3">
+            <input type="text" placeholder="Reason for closing short (admin)" value={closeReason}
+              onChange={(e) => setCloseReason(e.target.value)}
+              className="min-w-[14rem] flex-1 rounded border border-stone-300 px-2 py-1 text-sm" />
+            <Button type="button" variant="secondary" onClick={handleCloseShort} disabled={saving}>
+              Close short (no more stock expected)
+            </Button>
+          </div>
+        )}
+        {adjustItem && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 p-3">
+            <span className="text-sm font-medium">Correct received quantity</span>
+            <input type="number" min="0" step="0.0001" value={adjustQty}
+              onChange={(e) => setAdjustQty(e.target.value)}
+              className="w-28 rounded border border-stone-300 px-2 py-1 text-right text-sm" />
+            <input type="text" placeholder="Reason (required)" value={adjustReason}
+              onChange={(e) => setAdjustReason(e.target.value)}
+              className="min-w-[14rem] flex-1 rounded border border-stone-300 px-2 py-1 text-sm" />
+            <label className="flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={adjustKeepTotal} onChange={(e) => setAdjustKeepTotal(e.target.checked)} />
+              Invoice total unchanged (reprice unit cost)
+            </label>
+            <Button type="button" onClick={handleAdjustReceipt} disabled={saving}>Save correction</Button>
+            <Button type="button" variant="secondary" onClick={() => setAdjustItem(null)} disabled={saving}>Cancel</Button>
+          </div>
+        )}
       </div>
 
       <div className="mt-6 flex flex-wrap justify-between gap-3">
@@ -1613,6 +1690,7 @@ export function Procurement() {
       )}
       {viewPO && (
         <PODetailModal
+          isAdmin={isAdmin}
           po={viewPO}
           onClose={() => setViewPO(null)}
           onStatusChange={() => {

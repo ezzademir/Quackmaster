@@ -62,7 +62,7 @@ export interface PurchaseOrder {
   id: string;
   order_number: string;
   supplier_id: string;
-  status: 'draft' | 'ordered' | 'received' | 'partial';
+  status: 'draft' | 'ordered' | 'received' | 'partial' | 'closed_short' | 'cancelled';
   order_date: string;
   expected_delivery_date?: string;
   actual_delivery_date?: string;
