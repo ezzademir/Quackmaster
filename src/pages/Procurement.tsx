@@ -870,6 +870,7 @@ function PODetailModal({
   const [adjustItem, setAdjustItem] = useState<string | null>(null);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
+  const [adjustKeepTotal, setAdjustKeepTotal] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -930,6 +931,10 @@ function PODetailModal({
   }
 
   async function handleCloseShort() {
+    if (!isAdmin) {
+      setError('Only an admin can close an order short');
+      return;
+    }
     if (!closeReason.trim()) {
       setError('Enter a reason to close this order short');
       return;
@@ -960,6 +965,7 @@ function PODetailModal({
       p_item_id: adjustItem,
       p_new_qty: qty,
       p_reason: adjustReason.trim(),
+      p_keep_line_total: adjustKeepTotal,
     });
     const fail = rpcFailure(data, rpcErr, 'Receipt correction failed');
     setSaving(false);
@@ -1068,9 +1074,9 @@ function PODetailModal({
             <ul className="list-disc pl-5">{preview.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
           </div>
         )}
-        {po.status === 'partial' && (
+        {isAdmin && po.status === 'partial' && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 p-3">
-            <input type="text" placeholder="Reason for closing short" value={closeReason}
+            <input type="text" placeholder="Reason for closing short (admin)" value={closeReason}
               onChange={(e) => setCloseReason(e.target.value)}
               className="min-w-[14rem] flex-1 rounded border border-stone-300 px-2 py-1 text-sm" />
             <Button type="button" variant="secondary" onClick={handleCloseShort} disabled={saving}>
@@ -1087,6 +1093,10 @@ function PODetailModal({
             <input type="text" placeholder="Reason (required)" value={adjustReason}
               onChange={(e) => setAdjustReason(e.target.value)}
               className="min-w-[14rem] flex-1 rounded border border-stone-300 px-2 py-1 text-sm" />
+            <label className="flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={adjustKeepTotal} onChange={(e) => setAdjustKeepTotal(e.target.checked)} />
+              Invoice total unchanged (reprice unit cost)
+            </label>
             <Button type="button" onClick={handleAdjustReceipt} disabled={saving}>Save correction</Button>
             <Button type="button" variant="secondary" onClick={() => setAdjustItem(null)} disabled={saving}>Cancel</Button>
           </div>

@@ -140,6 +140,7 @@ describe('081 receive_po_shipment v2', () => {
 describe('081 close_po_short', () => {
   it('closes a partial PO with a reason and posts no stock', async () => {
     await recv(313);
+    await asAdmin(true);
     expect((await rpc(`close_po_short('${PO}', '  ')`)).error).toBe('reason_required');
     const r = await rpc(`close_po_short('${PO}', 'supplier short 2kg')`);
     expect(r.status).toBe('closed_short');
@@ -149,7 +150,110 @@ describe('081 close_po_short', () => {
   });
 
   it('refuses a non-partial PO', async () => {
+    await asAdmin(true);
     expect((await rpc(`close_po_short('${PO}', 'x')`)).error).toBe('po_not_partial');
+  });
+});
+
+describe('081 close_po_short is admin-only (Ezzad, 23 Oct)', () => {
+  it('staff cannot close short: RPC refuses, PO stays partial, no ledger row, no stock change', async () => {
+    await recv(300);
+    const before = await hub();
+    const r = await rpc(`close_po_short('${PO}', 'supplier short')`);
+    expect(r).toEqual({ success: false, error: 'admin_required' });
+    const [po] = await q<{ status: string }>(`select status from purchase_orders`);
+    expect(po.status).toBe('partial');
+    const [l] = await q<{ n: number }>(`select count(*)::int n from data_ledger where action='closed_short'`);
+    expect(l.n).toBe(0);
+    expect(await hub()).toBe(before);
+  });
+
+  it('RLS: staff cannot write status closed_short directly; admin can', async () => {
+    await recv(300);
+    await pg.exec(`ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
+      DROP POLICY IF EXISTS t_all ON purchase_orders;
+      CREATE POLICY t_all ON purchase_orders FOR ALL TO authenticated USING (true) WITH CHECK (true);
+      GRANT SELECT, UPDATE ON purchase_orders, test_ctx TO authenticated;`);
+    try {
+      await pg.exec('SET ROLE authenticated');
+      await expect(pg.exec(`update purchase_orders set status='closed_short' where id='${PO}'`)).rejects.toThrow(/row-level security/);
+      await pg.exec(`update purchase_orders set updated_at=now() where id='${PO}'`); // other edits unaffected
+      await pg.exec('RESET ROLE');
+      await asAdmin(true);
+      await pg.exec('SET ROLE authenticated');
+      await pg.exec(`update purchase_orders set status='closed_short' where id='${PO}'`);
+    } finally {
+      await pg.exec('RESET ROLE; DROP POLICY t_all ON purchase_orders; ALTER TABLE purchase_orders DISABLE ROW LEVEL SECURITY;');
+    }
+    const [po] = await q<{ status: string }>(`select status from purchase_orders`);
+    expect(po.status).toBe('closed_short');
+  });
+});
+
+describe('081 PO-0032: 315 -> 320.974 kg at an unchanged invoice total', () => {
+  // seed: hub 100 kg @ avg 3 (50 reserved); PO line 315 kg @ 3 = 945
+  const num = async (sql: string) => Number((await q<{ v: string }>(sql))[0].v);
+  const line = () => q<{ qr: string; up: string; lt: string }>(
+    `select quantity_received qr, unit_price up, line_total lt from purchase_order_items where id='${L1}'`);
+  const wac = () => num(`select weighted_avg_unit_cost v from raw_materials where id='${RM}'`);
+  const hubValue = async () => (await hub()) * (await wac());
+
+  async function check(dispatched: number) {
+    await recv(315);
+    expect(await hub()).toBe(415);
+    expect(await wac()).toBe(3);
+    if (dispatched > 0) await pg.exec(`update hub_inventory set quantity_on_hand = quantity_on_hand - ${dispatched} where raw_material_id='${RM}'`);
+    const hubBefore = await hub();
+    const valueBefore = await hubValue();
+    const ledgerBefore = await num(`select count(*) v from data_ledger`);
+
+    await asAdmin(true);
+    const r = await rpc(`adjust_po_receipt('${L1}', 320.974, 'PO-0032 reweigh, invoice total unchanged', true)`);
+    expect(r.success).toBe(true);
+    expect(Number(r.posted_delta)).toBe(5.974);
+
+    // hub rises by exactly the difference
+    expect(Math.round(((await hub()) - hubBefore) * 10000) / 10000).toBe(5.974);
+    expect(await hub()).toBe(Math.round((hubBefore + 5.974) * 10000) / 10000);
+    // receipt total value unchanged
+    const [l] = await line();
+    expect(Number(l.qr)).toBe(320.974);
+    expect(Number(l.lt)).toBe(945);
+    // unit price repriced over 320.974 (column is numeric(12,2) live -> 2.94)
+    expect(Number(l.up)).toBe(Math.round((945 / 320.974) * 100) / 100);
+    // average cost repriced: on-hand value unchanged, spread over the larger quantity
+    const expectedWac = Math.round(((hubBefore * 3) / (hubBefore + 5.974)) * 10000) / 10000;
+    expect(await wac()).toBe(expectedWac);
+    expect(Math.abs((await hubValue()) - valueBefore)).toBeLessThan(0.05);
+    // one ledger row, delta only
+    expect((await num(`select count(*) v from data_ledger`)) - ledgerBefore).toBe(1);
+    const [led] = await q<{ d: Record<string, unknown> }>(`select delta_data d from data_ledger where action='receipt_adjusted'`);
+    expect(Number(led.d.posted_delta)).toBe(5.974);
+    expect(Number(led.d.line_total_before)).toBe(945);
+    expect(Number(led.d.line_total_after)).toBe(945);
+    return expectedWac;
+  }
+
+  it('nothing dispatched: +5.974 kg, value 945 kept, WAC = (100*3 + 945) / 420.974', async () => {
+    const w = await check(0);
+    // equals the other 100 kg @ 3 blended with the receipt repriced over 320.974
+    expect(w).toBe(Math.round(((100 * 3 + (945 / 320.974) * 320.974) / 420.974) * 10000) / 10000);
+    console.log(`PO-0032 (0 dispatched): hub ${await hub()} kg, WAC ${w}, line 320.974 kg = MYR 945`);
+  });
+
+  it('200 kg of the 315 already dispatched: still only +5.974 kg posted, value kept', async () => {
+    const w = await check(200);
+    expect(await hub()).toBe(220.974);
+    console.log(`PO-0032 (200 dispatched): hub ${await hub()} kg, WAC ${w}, line 320.974 kg = MYR 945`);
+  });
+
+  it('default (invoice total not kept) still posts the delta at the line price', async () => {
+    await recv(315);
+    await asAdmin(true);
+    await rpc(`adjust_po_receipt('${L1}', 320.974, 'extra delivered and invoiced')`);
+    const [l] = await line();
+    expect(Number(l.lt)).toBe(Math.round(320.974 * 3 * 100) / 100);
+    expect(await wac()).toBe(3);
   });
 });
 
@@ -188,8 +292,8 @@ describe('081 adjust_po_receipt', () => {
 
   it('keeps closed_short unless the line becomes fully received', async () => {
     await recv(300);
-    await rpc(`close_po_short('${PO}', 'short')`);
     await asAdmin(true);
+    await rpc(`close_po_short('${PO}', 'short')`);
     expect((await rpc(`adjust_po_receipt('${L1}', 305, 'found a sack')`)).status).toBe('closed_short');
     expect((await rpc(`adjust_po_receipt('${L1}', 315, 'rest found')`)).status).toBe('received');
   });

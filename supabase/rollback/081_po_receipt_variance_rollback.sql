@@ -6,7 +6,9 @@
 BEGIN;
 UPDATE public.purchase_orders SET status = 'partial', updated_at = now() WHERE status = 'closed_short';
 
+DROP FUNCTION IF EXISTS public.adjust_po_receipt(uuid, numeric, text, boolean);
 DROP FUNCTION IF EXISTS public.adjust_po_receipt(uuid, numeric, text);
+DROP POLICY IF EXISTS purchase_orders_closed_short_admin_only ON public.purchase_orders;
 DROP FUNCTION IF EXISTS public.close_po_short(uuid, text);
 
 -- restore receive_po_shipment exactly as deployed by 076 (md5(prosrc) a70b76f57cbf3d43dc9f8bc304dc33dd)

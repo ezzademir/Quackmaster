@@ -13,8 +13,11 @@
      - only ordered / partial POs (received POs -> adjust_po_receipt);
      - status is per line: every line >= ordered -> received, else partial;
      - ONE data_ledger row: entered, previous, posted delta, over/short, reason per line.
-  5. close_po_short(uuid, text): partial/ordered -> closed_short, reason required, no stock posting.
-  6. adjust_po_receipt(uuid, numeric, text): admin, reason required, posts delta only,
+  5. close_po_short(uuid, text): ADMIN ONLY (Ezzad, 23 Oct). partial -> closed_short, reason required,
+     no stock posting. RLS: restrictive policy so only admins can write status 'closed_short'.
+  6. adjust_po_receipt(uuid, numeric, text, boolean DEFAULT false): admin, reason required, posts delta only.
+     p_keep_line_total = true: invoice total unchanged (e.g. PO-0032 315 -> 320.974 kg); the delta qty
+     posts at zero added value, line_total kept, unit_price repriced = line_total / new qty.
      blocks hub going below reserved; ledger row carries before/after.
   Rollback: supabase/rollback/081_po_receipt_variance_rollback.sql
 */
@@ -305,8 +308,8 @@ DECLARE
   v_reason text := NULLIF(btrim(p_reason), '');
   v_short jsonb;
 BEGIN
-  IF NOT public.is_authenticated_active_staff() OR auth.uid() IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'error', 'forbidden');
+  IF auth.uid() IS NULL OR NOT public.is_profiles_admin() THEN
+    RETURN jsonb_build_object('success', false, 'error', 'admin_required');
   END IF;
   IF v_reason IS NULL THEN
     RETURN jsonb_build_object('success', false, 'error', 'reason_required');
@@ -343,7 +346,8 @@ END;
 $fn$;
 
 -- 6. adjust_po_receipt ---------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.adjust_po_receipt(p_item_id uuid, p_new_qty numeric, p_reason text)
+CREATE OR REPLACE FUNCTION public.adjust_po_receipt(p_item_id uuid, p_new_qty numeric, p_reason text,
+  p_keep_line_total boolean DEFAULT false)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -352,7 +356,7 @@ AS $fn$
 DECLARE
   v_reason text := NULLIF(btrim(p_reason), '');
   v_po uuid; v_status text; v_old numeric; v_ordered numeric; v_rm uuid; v_price numeric;
-  v_delta numeric; v_new_status text;
+  v_delta numeric; v_new_status text; v_line_total numeric; v_new_total numeric; v_new_price numeric;
 BEGIN
   IF auth.uid() IS NULL OR NOT public.is_profiles_admin() THEN
     RETURN jsonb_build_object('success', false, 'error', 'admin_required');
@@ -373,8 +377,8 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'error', 'po_not_adjustable', 'status', v_status);
   END IF;
 
-  SELECT quantity_received, quantity_ordered, raw_material_id, unit_price
-    INTO v_old, v_ordered, v_rm, v_price
+  SELECT quantity_received, quantity_ordered, raw_material_id, unit_price, line_total
+    INTO v_old, v_ordered, v_rm, v_price, v_line_total
   FROM public.purchase_order_items WHERE id = p_item_id FOR UPDATE;
 
   v_delta := p_new_qty - COALESCE(v_old, 0);
@@ -382,14 +386,27 @@ BEGIN
     RETURN jsonb_build_object('success', true, 'posted_delta', 0, 'status', v_status);
   END IF;
 
+  IF COALESCE(p_keep_line_total, false) THEN
+    IF p_new_qty <= 0 THEN
+      RETURN jsonb_build_object('success', false, 'error', 'keep_total_needs_positive_qty');
+    END IF;
+    v_new_total := COALESCE(v_line_total, COALESCE(v_old, 0) * COALESCE(v_price, 0));
+    v_new_price := v_new_total / p_new_qty;
+  ELSE
+    v_new_total := p_new_qty * COALESCE(v_price, 0);
+    v_new_price := v_price;
+  END IF;
+
   BEGIN
-    PERFORM public._po_apply_hub_delta(v_rm, v_delta, v_price);
+    -- value posted with the delta = change in the receipt's value (0 when the invoice total is kept)
+    PERFORM public._po_apply_hub_delta(v_rm, v_delta,
+      (v_new_total - COALESCE(v_line_total, COALESCE(v_old, 0) * COALESCE(v_price, 0))) / v_delta);
   EXCEPTION WHEN SQLSTATE 'P0001' THEN
     RETURN jsonb_build_object('success', false, 'error', SQLERRM);
   END;
 
   UPDATE public.purchase_order_items
-     SET quantity_received = p_new_qty, line_total = p_new_qty * COALESCE(v_price, 0)
+     SET quantity_received = p_new_qty, line_total = v_new_total, unit_price = v_new_price
    WHERE id = p_item_id;
 
   v_new_status := public._po_line_status(v_po);
@@ -403,7 +420,10 @@ BEGIN
     jsonb_build_object('quantity_received', COALESCE(v_old, 0), 'status', v_status),
     jsonb_build_object('quantity_received', p_new_qty, 'status', v_new_status),
     jsonb_build_object('purchase_order_item_id', p_item_id, 'raw_material_id', v_rm,
-                       'quantity_ordered', v_ordered, 'posted_delta', v_delta),
+                       'quantity_ordered', v_ordered, 'posted_delta', v_delta,
+                       'keep_line_total', COALESCE(p_keep_line_total, false),
+                       'line_total_before', v_line_total, 'line_total_after', v_new_total,
+                       'unit_price_before', v_price, 'unit_price_after', v_new_price),
     jsonb_build_object('rpc', 'adjust_po_receipt', 'reason', v_reason));
 
   RETURN jsonb_build_object('success', true, 'posted_delta', v_delta, 'status', v_new_status);
@@ -416,7 +436,14 @@ REVOKE ALL ON FUNCTION public._po_line_status(uuid) FROM PUBLIC, anon, authentic
 REVOKE ALL ON FUNCTION public._po_over_receipt_tolerance_pct() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.receive_po_shipment(uuid, jsonb) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.close_po_short(uuid, text) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.adjust_po_receipt(uuid, numeric, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.adjust_po_receipt(uuid, numeric, text, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.receive_po_shipment(uuid, jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.close_po_short(uuid, text) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.adjust_po_receipt(uuid, numeric, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.adjust_po_receipt(uuid, numeric, text, boolean) TO authenticated;
+
+-- RLS: closing short is admin-only (defence in depth; direct status writes are already admin-only live)
+DROP POLICY IF EXISTS purchase_orders_closed_short_admin_only ON public.purchase_orders;
+CREATE POLICY purchase_orders_closed_short_admin_only ON public.purchase_orders
+  AS RESTRICTIVE FOR UPDATE TO authenticated
+  USING (true)
+  WITH CHECK (status IS DISTINCT FROM 'closed_short' OR public.is_profiles_admin());
