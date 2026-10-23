@@ -6,7 +6,8 @@ import { Button, PageHeader, Tabs } from '../components/ui';
 import { HubAtpCompact } from '../components/HubAtpCompact';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
-import { isDateInRange, isCalendarDateInRange, type DateRange } from '../utils/dateRange';
+import { isDateInRange, isCalendarDateInRange, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
+import { allocateHubProductItems, compareHubBatches, isBatchExpired } from '../utils/hubBatchPick';
 import {
   dispatchSupplyOrder,
   confirmSupplyOrderReceipt,
@@ -138,46 +139,6 @@ function OutletModal({
   );
 }
 
-/** Split requested qty across hub product batches (FEFO by expiry then last_updated). */
-function allocateHubProductItems(
-  batches: {
-    id: string;
-    product_batch: string | null;
-    available: number;
-    last_updated?: string;
-    expiry_date?: string | null;
-    lot_label?: string | null;
-  }[],
-  quantity: number
-): { product_batch: string; hubInventoryId: string; quantity: number; lot_label?: string | null }[] | null {
-  const sorted = [...batches]
-    .filter((b) => b.available > 0)
-    .sort((a, b) => {
-      const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
-      const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
-      if (ae !== be) return ae - be;
-      return (a.last_updated ?? '').localeCompare(b.last_updated ?? '');
-    });
-  let remaining = quantity;
-  const items: { product_batch: string; hubInventoryId: string; quantity: number; lot_label?: string | null }[] = [];
-
-  for (const b of sorted) {
-    const take = Math.min(remaining, b.available);
-    if (take <= 0) continue;
-    items.push({
-      product_batch: b.product_batch ?? 'PRODUCT',
-      hubInventoryId: b.id,
-      quantity: take,
-      lot_label: b.lot_label ?? null,
-    });
-    remaining -= take;
-    if (remaining <= 1e-9) break;
-  }
-
-  if (remaining > 1e-6) return null;
-  return items.length > 0 ? items : null;
-}
-
 // ---- New Supply Order Modal ----
 function NewSupplyOrderModal({
   outlets,
@@ -195,12 +156,13 @@ function NewSupplyOrderModal({
     last_updated?: string;
     expiry_date?: string | null;
     lot_label?: string | null;
+    run_number?: string | null;
   }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
-  const [supply_date, setSupplyDate] = useState(new Date().toISOString().split('T')[0]);
+  const [supply_date, setSupplyDate] = useState(() => malaysiaCalendarDate());
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -229,7 +191,7 @@ function NewSupplyOrderModal({
   const allocationPreview = useMemo(() => {
     const q = parseFloat(quantity);
     if (!Number.isFinite(q) || q <= 0) return null;
-    return allocateHubProductItems(hubProductLines, q);
+    return allocateHubProductItems(hubProductLines, q, malaysiaCalendarDate());
   }, [quantity, hubProductLines]);
 
   async function handleSave() {
@@ -254,7 +216,7 @@ function NewSupplyOrderModal({
     setSaving(true);
 
     try {
-      const items = allocateHubProductItems(hubProductLines, qty);
+      const items = allocateHubProductItems(hubProductLines, qty, malaysiaCalendarDate());
       if (!items?.length) {
         setError(
           hubProductQty <= 0
@@ -341,16 +303,30 @@ function NewSupplyOrderModal({
           {allocationPreview != null && allocationPreview.length > 0 && (
             <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">FEFO allocation preview</p>
-              <p className="mt-1 text-xs text-stone-500">Uses hub batches sorted by expiry date first (FEFO), then oldest last_updated.</p>
+              <p className="mt-1 text-xs text-stone-500">
+                Preview only. Batches are picked again at dispatch: oldest expiry first, then lowest run number.
+              </p>
               <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm">
                 {allocationPreview.map((line, i) => (
                   <li key={`${line.hubInventoryId}-${i}`} className="flex justify-between gap-3 border-b border-stone-100 pb-1 text-stone-700 last:border-0">
-                    <span className="truncate font-medium">{line.lot_label || line.product_batch}</span>
+                    <span className="truncate font-medium">
+                      {line.lot_label || line.product_batch}
+                      {line.expired && (
+                        <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-red-700">
+                          Expired {line.expiry_date}
+                        </span>
+                      )}
+                    </span>
                     <span className="flex-shrink-0 font-semibold tabular-nums text-stone-900">{line.quantity}</span>
                   </li>
                 ))}
               </ul>
             </div>
+          )}
+          {allocationPreview?.some((l) => l.expired) && (
+            <p className="mt-2 text-xs font-medium text-red-700">
+              Warning: this preview includes expired batches. Dispatch will not be blocked, but the expired lines will be flagged.
+            </p>
           )}
           {Number.isFinite(qtyParsed) && qtyParsed > 0 && allocationPreview === null && (
             <p className="mt-2 text-xs text-amber-700">
@@ -395,7 +371,7 @@ function NewRawMaterialSupplyModal({
   onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
-  const [supply_date, setSupplyDate] = useState(new Date().toISOString().split('T')[0]);
+  const [supply_date, setSupplyDate] = useState(() => malaysiaCalendarDate());
   const [notes, setNotes] = useState('');
   const [qtyByHubId, setQtyByHubId] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -578,7 +554,16 @@ function SODetailModal({
 }) {
   const [saving, setSaving] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
-  const [lines, setLines] = useState<Array<{ id: string; quantity: number; product_batch: string | null; lot_label: string | null }>>([]);
+  const [lines, setLines] = useState<
+    Array<{
+      id: string;
+      quantity: number;
+      product_batch: string | null;
+      lot_label: string | null;
+      expiry_date: string | null;
+      expired_at_dispatch: boolean | null;
+    }>
+  >([]);
   const canHardDelete = isAdmin && supplyOrderAllowsAdminHardDelete(so.status);
 
   useEffect(() => {
@@ -586,22 +571,24 @@ function SODetailModal({
     void (async () => {
       const { data } = await supabase
         .from('supply_order_lines')
-        .select('id, quantity, product_batch, hub:hub_inventory_id(product_batch, lot:inventory_lots(product_batch_label))')
+        .select(
+          'id, quantity, product_batch, expired_at_dispatch, shipped_lot:lot_id(product_batch_label, expiry_date), hub:hub_inventory_id(product_batch, lot:inventory_lots(product_batch_label, expiry_date))'
+        )
         .eq('supply_order_id', so.id);
       if (cancelled) return;
       const rows = (data ?? []).map((ln) => {
-        const hubRaw = ln.hub as
-          | { product_batch?: string | null; lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null }
-          | { product_batch?: string | null; lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null }[]
-          | null;
-        const hub = Array.isArray(hubRaw) ? hubRaw[0] : hubRaw;
-        const lotRaw = hub?.lot;
-        const lot = Array.isArray(lotRaw) ? lotRaw[0] : lotRaw;
+        type LotEmbed = { product_batch_label?: string | null; expiry_date?: string | null };
+        const one = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
+        const hub = one(ln.hub as { product_batch?: string | null; lot?: LotEmbed | LotEmbed[] | null } | null);
+        // Prefer the batch recorded at dispatch (079); fall back to the hub row's lot.
+        const lot = one(ln.shipped_lot as LotEmbed | LotEmbed[] | null) ?? one(hub?.lot);
         return {
           id: ln.id as string,
           quantity: Number(ln.quantity ?? 0),
           product_batch: (ln.product_batch as string | null) ?? hub?.product_batch ?? null,
           lot_label: lot?.product_batch_label?.trim() || null,
+          expiry_date: lot?.expiry_date ?? null,
+          expired_at_dispatch: (ln.expired_at_dispatch as boolean | null) ?? null,
         };
       });
       setLines(rows);
@@ -662,6 +649,9 @@ function SODetailModal({
         alert(`Failed to dispatch: ${result.error}`);
         return;
       }
+      if (result.expiredWarning) {
+        alert(result.expiredWarning);
+      }
 
       await onStatusChange();
     } catch (err) {
@@ -706,6 +696,11 @@ function SODetailModal({
           {so.received_date && <div><p className="text-xs text-stone-500">Received date</p><p className="font-semibold text-stone-900">{formatSupplyCalendarDate(so.received_date)}</p></div>}
           {so.notes && <div className="sm:col-span-2"><p className="text-xs text-stone-500">Notes</p><p className="text-sm text-stone-900">{so.notes}</p></div>}
         </div>
+        {isPending && lines.length > 0 && (
+          <p className="text-xs text-stone-500">
+            Batches below are a preview. Dispatch re-picks the oldest-expiry batches (ties by run number) and records the batches actually shipped.
+          </p>
+        )}
         {lines.length > 0 && (
           <div className="overflow-x-auto">
             <table className="data-table">
@@ -720,6 +715,12 @@ function SODetailModal({
                   <tr key={ln.id}>
                     <td className="font-mono text-xs font-semibold">
                       {ln.lot_label || ln.product_batch || '—'}
+                      {(ln.expired_at_dispatch === true ||
+                        (isPending && isBatchExpired(ln.expiry_date, malaysiaCalendarDate()))) && (
+                        <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-sans text-[10px] font-semibold uppercase text-red-700">
+                          {ln.expired_at_dispatch === true ? 'Shipped expired' : 'Expired'} {ln.expiry_date ?? ''}
+                        </span>
+                      )}
                     </td>
                     <td className="text-right tabular-nums">{ln.quantity.toLocaleString()}</td>
                   </tr>
@@ -1370,7 +1371,7 @@ export function Distribution() {
       supabase
         .from('hub_inventory')
         .select(
-          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+          'id, product_batch, lot_id, available_quantity, quantity_on_hand, reserved_quantity, last_updated, lot:inventory_lots(expiry_date, product_batch_label, production_run:production_run_id(run_number, recipe:recipe_id(default_product_batch)))'
         )
         .is('raw_material_id', null),
       supabase
@@ -1419,7 +1420,13 @@ export function Distribution() {
       const reserved = Number(row.reserved_quantity ?? 0);
       const onHand = Number(row.quantity_on_hand ?? 0);
       const avail = hubRowAvailableQuantity(onHand, reserved, row.available_quantity);
-      const lot = row.lot as { expiry_date?: string | null; product_batch_label?: string | null } | null;
+      const lot = row.lot as {
+        expiry_date?: string | null;
+        product_batch_label?: string | null;
+        production_run?: { run_number?: string | null } | { run_number?: string | null }[] | null;
+      } | null;
+      const runRaw = lot?.production_run;
+      const run = Array.isArray(runRaw) ? runRaw[0] : runRaw;
       return {
         id: row.id,
         product_batch: row.product_batch,
@@ -1428,16 +1435,12 @@ export function Distribution() {
         last_updated: row.last_updated,
         expiry_date: lot?.expiry_date ?? null,
         lot_label: lot?.product_batch_label ?? null,
+        run_number: run?.run_number ?? null,
         recipe_sku: nestedRecipeSku(row.lot),
       };
     });
 
-    hubLines.sort((a, b) => {
-      const ad = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
-      const bd = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
-      if (ad !== bd) return ad - bd;
-      return (a.last_updated ?? '').localeCompare(b.last_updated ?? '');
-    });
+    hubLines.sort(compareHubBatches);
 
     const rmLinesForModal: HubRmLineRow[] = (hubRmRaw ?? []).map((row: Record<string, unknown>) => {
       const mat = row.material as { name?: string; unit_of_measure?: string } | null;

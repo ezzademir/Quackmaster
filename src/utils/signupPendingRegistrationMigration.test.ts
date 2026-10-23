@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG from '../../supabase/migrations/20261007130000_070_signup_pending_registration_trigger.sql?raw';
 
 const SCHEMA = `
@@ -17,8 +18,7 @@ const SCHEMA = `
 `;
 const U = (n: number) => `00000000-0000-0000-0000-00000000000${n}`;
 
-async function setup() {
-  const pg = new PGlite();
+const setup = pgliteTemplate(async (pg) => {
   await pg.exec(SCHEMA);
   // pre-migration state: hidden pending user, approved user, admin
   await pg.exec(`INSERT INTO auth.users (id,email,raw_user_meta_data) VALUES
@@ -28,8 +28,7 @@ async function setup() {
     INSERT INTO public.pending_registrations (user_id,email,full_name,status) VALUES ('${U(2)}','ok@x.com','Ok','approved');
     UPDATE public.profiles SET role='admin' WHERE id='${U(3)}';`);
   await pg.exec(MIG);
-  return pg;
-}
+});
 const regs = async (pg: PGlite) =>
   (await pg.query<{ user_id: string; status: string; email: string; full_name: string }>(
     'select user_id, status, email, full_name from public.pending_registrations order by user_id')).rows;

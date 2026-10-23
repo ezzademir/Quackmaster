@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG from '../../supabase/migrations/20261014130000_074_tighten_adjustments_ledger_writes.sql?raw';
 
 const U = {
@@ -39,12 +40,10 @@ const ENV = `
     ('${U.pending}','pending',true), ('${U.viewer}','viewer',true);
 `;
 
-async function setup() {
-  const db = new PGlite();
+const setup = pgliteTemplate(async (db) => {
   await db.exec(ENV);
   await db.exec(MIG);
-  return db;
-}
+});
 
 async function tryAs(db: PGlite, uid: string, sql: string): Promise<boolean> {
   await db.exec(`SET test.uid = '${uid}'; SET ROLE authenticated;`);
