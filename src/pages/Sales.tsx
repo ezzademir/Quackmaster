@@ -1059,7 +1059,7 @@ export function Sales() {
                   <input
                     type="number"
                     min={0}
-                    step="0.01"
+                    step="0.0001"
                     placeholder="Qty"
                     value={Number.isFinite(line.quantity_sold) ? line.quantity_sold : ''}
                     onChange={(e) => {
@@ -1428,7 +1428,7 @@ export function Sales() {
                         <input
                           type="number"
                           min={0}
-                          step="0.01"
+                          step="0.0001"
                           value={ln.quantity_sold || ''}
                           onChange={(e) => {
                             const v = parseFloat(e.target.value);

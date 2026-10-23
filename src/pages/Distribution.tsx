@@ -497,7 +497,7 @@ function NewRawMaterialSupplyModal({
                   <input
                     type="number"
                     min="0"
-                    step="0.01"
+                    step="0.0001"
                     placeholder="0"
                     value={qtyByHubId[line.id] ?? ''}
                     disabled={line.available <= 1e-9}
@@ -991,7 +991,7 @@ function NewOutletTransferModal({
                   <input
                     type="number"
                     min="0"
-                    step="0.01"
+                    step="0.0001"
                     placeholder="Qty"
                     value={line.qtyStr}
                     onChange={(e) => {

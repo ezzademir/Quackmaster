@@ -346,7 +346,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                       <input
                         type="number"
                         min={0}
-                        step="0.01"
+                        step="0.0001"
                         inputMode="decimal"
                         autoComplete="off"
                         aria-label={`Counted ${r.item_label}`}
@@ -384,7 +384,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 id={`count-${r.id}`}
                 type="number"
                 min={0}
-                step="0.01"
+                step="0.0001"
                 inputMode="decimal"
                 autoComplete="off"
                 value={r.countedStr}
