@@ -1,5 +1,5 @@
 /*
-  083: costing schema (shared supplier catalogue + entity-tagged menu costing).
+  084: costing schema (shared supplier catalogue + entity-tagged menu costing).
 
   Lands after 081 (#88, merged) and 082 (numeric widening, separate held PR). Draft / held: not applied anywhere.
 
@@ -18,12 +18,12 @@
     - Costing tables (menu_items, sub_recipes, bom_lines, price_flag_reviews and the cost / COGS / drift /
       usage views) are ADMIN-ONLY, read and write. Staff and procurement get nothing.
     - Catalogue (ingredients, supplier_items, price_history): read = admin | active staff; write = admin.
-      084 adds tag-scoped procurement read of supplier_items / price_history.
+      085 adds tag-scoped procurement read of supplier_items / price_history.
     - Every view is security_invoker so the caller's RLS applies (no definer-view leak).
 */
 
 -- ---------------------------------------------------------------- entities
--- Procurement tags (what a buyer is assigned to in 084). Extensible: add a row.
+-- Procurement tags (what a buyer is assigned to in 085). Extensible: add a row.
 CREATE TABLE IF NOT EXISTS public.procurement_tags (
   tag text PRIMARY KEY CHECK (tag ~ '^[a-z][a-z0-9_]*$'),
   name text NOT NULL UNIQUE,
@@ -321,7 +321,7 @@ BEGIN
   SELECT string_agg(COALESCE(order_number, id::text), ', ' ORDER BY order_number) INTO v_list
   FROM public.purchase_orders WHERE entity_code IS NULL;
   IF v_list IS NOT NULL THEN
-    RAISE NOTICE '083: POs with no entity after backfill: %', v_list;
+    RAISE NOTICE '084: POs with no entity after backfill: %', v_list;
   END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS purchase_order_items_supplier_item_idx ON public.purchase_order_items (supplier_item_id);
@@ -394,7 +394,7 @@ BEGIN
   END LOOP;
 END $$;
 
--- price_history: read staff/admin; insert admin (receipts insert via SECURITY DEFINER RPC in 083); never update/delete.
+-- price_history: read staff/admin; insert admin (receipts insert via SECURITY DEFINER RPC in 084); never update/delete.
 DROP POLICY IF EXISTS price_history_staff_select ON public.price_history;
 CREATE POLICY price_history_staff_select ON public.price_history FOR SELECT TO authenticated
   USING (public.is_authenticated_active_staff());

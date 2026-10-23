@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { pgliteTemplate } from '../test/pgliteTemplate';
 import LIVE_PRE086 from '../../supabase/tests/fixtures/append_data_ledger_live_pre086.sql?raw';
-import MIG086 from '../../supabase/migrations/20261024030000_086_append_data_ledger_system_actor.sql?raw';
+import MIG086 from '../../supabase/migrations/20261023183956_086_append_data_ledger_system_actor.sql?raw';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const SIG = 'public._append_data_ledger(text, text, text, text, text, text, jsonb, jsonb, jsonb, jsonb)';

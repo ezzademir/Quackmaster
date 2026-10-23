@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
-import MIG083 from '../../supabase/migrations/20261024100000_083_costing_schema.sql?raw';
-import MIG084 from '../../supabase/migrations/20261024100100_084_procurement_role.sql?raw';
-import RB083 from '../../supabase/rollbacks/083_rollback.sql?raw';
+import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.sql?raw';
+import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
+import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
 import SEED from '../../supabase/seeds/costing_seed_20261023.sql?raw';
 
 const ADMIN = '00000000-0000-0000-0000-0000000000a1';
@@ -20,7 +20,7 @@ const PO_MH = '00000000-0000-0000-0000-00000000f002';
 const PO_NONE = '00000000-0000-0000-0000-00000000f003';
 const L_QT = '00000000-0000-0000-0000-00000000e001';
 
-/** Minimal live-shaped schema: the tables / helpers 081-083 touch, with live-style permissive policies. */
+/** Minimal live-shaped schema: the tables / helpers 081-084 touch, with live-style permissive policies. */
 const BASE = `
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;
@@ -66,7 +66,7 @@ CREATE VIEW supplier_scorecard_metrics AS SELECT po.supplier_id, count(po.id) n 
 CREATE TABLE outlets (id uuid primary key default gen_random_uuid(), name text);
 CREATE TABLE production_runs (id uuid primary key default gen_random_uuid(), run_number text);
 CREATE VIEW recipe_variance_by_run AS SELECT pr.run_number FROM production_runs pr;
--- live-shaped (role list line is what 084 patches)
+-- live-shaped (role list line is what 085 patches)
 CREATE FUNCTION public.admin_set_profile_role_and_outlet(p_user_id uuid, p_role text, p_assigned_outlet_id uuid)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
 DECLARE v_norm text := lower(trim(p_role));
@@ -105,7 +105,7 @@ INSERT INTO recipes (name) VALUES ('Secret sauce');
 INSERT INTO sales_journals (outlet_id) VALUES (gen_random_uuid());
 INSERT INTO outlet_inventory (outlet_id, qty) VALUES ('00000000-0000-0000-0000-00000000c0c0', 5);
 INSERT INTO production_runs (run_number) VALUES ('RUN-1');
--- pre-existing (live-style) POs: no entity column yet; 083 backfills them from the hub
+-- pre-existing (live-style) POs: no entity column yet; 084 backfills them from the hub
 INSERT INTO purchase_orders (order_number, supplier_id, status) VALUES ('PO-LIVE-1','${SUP}','received'), ('PO-LIVE-2','${SUP}','partial');
 `;
 
@@ -131,7 +131,7 @@ INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference) V
 `;
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['083', MIG083], ['084', MIG084], ['POS', POS]]) {
+  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['084', MIG084], ['085', MIG085], ['POS', POS]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -159,7 +159,7 @@ const err = async (p: Promise<unknown>) => {
   }
 };
 
-describe('083/084 procurement role RLS', () => {
+describe('084/085 procurement role RLS', () => {
   it('procurement cannot read costing, recipes, sales, outlet stock or other users', async () => {
     const pg = await db();
     await pg.exec(`INSERT INTO menu_items (entity_code, name, source_sheet, selling_price_ex_sst_rm) VALUES ('MH','Nasi','F-NASI',12);
@@ -284,6 +284,54 @@ describe('083/084 procurement role RLS', () => {
     expect((await as(pg, BUYER_QT, () => rows(pg, `select close_po_short('${PO_QT}', 'x') r`)))[0].r).toMatchObject({ success: false });
   });
 
+  it('receipt ticket: single-use (no replay), expires with its transaction, bound to the user and their tags', async () => {
+    const pg = await db();
+    const ship = (po: string, line: string) =>
+      `select receive_po_shipment('${po}', '[{"purchase_order_item_id":"${line}","quantity_received":1}]'::jsonb) r`;
+    const L_MH = '00000000-0000-0000-0000-00000000e002';
+    await pg.exec(`INSERT INTO purchase_order_items (id, purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price, line_total, purchase_uom)
+      VALUES ('${L_MH}','${PO_MH}','${RM}',10,0,3,30,'kg')`);
+    // run fn inside ONE transaction: a ticket row is planted (as the owner, i.e. "a server function"), then the
+    // buyer calls receive_po_shipment directly, as a client could
+    const inTx = (uid: string, plant: string, calls: string[]) =>
+      pg.transaction(async (tx) => {
+        if (plant) await tx.exec(plant);
+        await tx.exec(`UPDATE test_ctx SET uid='${uid}'; SET LOCAL ROLE authenticated;`);
+        const out: unknown[] = [];
+        for (const q of calls) out.push((await tx.query<{ r: unknown }>(q)).rows[0].r);
+        return out;
+      });
+    const tk = (po: string, uid: string, txid = 'txid_current()') =>
+      `INSERT INTO po_receipt_tickets (purchase_order_id, user_id, txid) VALUES ('${po}','${uid}',${txid})`;
+
+    // replay: one ticket lets exactly one call through; the second call in the same transaction is refused
+    const [first, replay] = await inTx(BUYER_QT, tk(PO_QT, BUYER_QT), [ship(PO_QT, L_QT), ship(PO_QT, L_QT)]);
+    expect(first).toMatchObject({ success: true });
+    expect(replay).toMatchObject({ success: false });
+    expect(await c0(pg, 'select count(*) n from po_receipt_tickets')).toBe(0);
+
+    // expiry: a ticket left over from an earlier (committed) transaction is dead in any later one
+    await pg.exec(tk(PO_QT, BUYER_QT));
+    const [stale] = await inTx(BUYER_QT, '', [ship(PO_QT, L_QT)]);
+    expect(stale).toMatchObject({ success: false });
+    await pg.exec('DELETE FROM po_receipt_tickets');
+
+    // cross-tag: a QT ticket held by the MH buyer does not open the QT PO, and a QT buyer's ticket for the
+    // QT PO does not open the MH PO
+    const [crossUser] = await inTx(BUYER_MH, tk(PO_QT, BUYER_MH), [ship(PO_QT, L_QT)]);
+    expect(crossUser).toMatchObject({ success: false });
+    const [crossPo] = await inTx(BUYER_QT, tk(PO_QT, BUYER_QT), [ship(PO_MH, L_MH)]);
+    expect(crossPo).toMatchObject({ success: false });
+    // another user's ticket in the same transaction is not usable either
+    const [otherUser] = await inTx(BUYER_QT, tk(PO_QT, BUYER_MH), [ship(PO_QT, L_QT)]);
+    expect(otherUser).toMatchObject({ success: false });
+    // (unconsumed planted rows above are inert: bound to a txid that is now over)
+    await pg.exec('DELETE FROM po_receipt_tickets');
+    // record_po_delivery for the wrong tag never issues a ticket
+    await as(pg, BUYER_MH, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1}]'::jsonb, 'DO') r`));
+    expect(await c0(pg, 'select count(*) n from po_receipt_tickets')).toBe(0);
+  });
+
   it('bills + payments: procurement records bills, sees derived status only; payments admin-only, part payments, no overpay', async () => {
     const pg = await db();
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('00000000-0000-0000-0000-0000000b1190','QT','${SUP}','B9','2026-10-20',10)`)))).toBeNull();
@@ -315,7 +363,7 @@ describe('083/084 procurement role RLS', () => {
     expect(await as(pg, BUYER_MH, () => c0(pg, "select (select c.reloptions::text from pg_class c where relname='supplier_scorecard_metrics') like '%security_invoker=true%' n"))).toBeTruthy();
     expect(await as(pg, BUYER_MH, () => err(pg.exec(`select _stock_take_sheet('00000000-0000-0000-0000-00000000c0c0')`)))).toMatch(/permission denied/);
     expect(await as(pg, STAFF, () => err(pg.exec(`select _stock_take_sheet('00000000-0000-0000-0000-00000000c0c0')`)))).toMatch(/permission denied/);
-    // every SECURITY DEFINER function 083/084 adds is gated: called by a user with no role it returns nothing
+    // every SECURITY DEFINER function 084/085 adds is gated: called by a user with no role it returns nothing
     expect((await as(pg, STAFF, () => rows(pg, `select record_po_delivery('${PO_QT}', '[]'::jsonb) r`)))[0].r).toMatchObject({ success: false });
     expect((await as(pg, BUYER_MH, () => rows(pg, `select procurement_has_po('${PO_QT}') v, procurement_has_tag('quackteow') t`)))[0]).toEqual({ v: false, t: false });
     // admin can assign the new role through the existing RPC; 'viewer' (#81) is allowed by the constraint
@@ -337,7 +385,7 @@ describe('083/084 procurement role RLS', () => {
   });
 });
 
-describe('083 costing rules', () => {
+describe('084 costing rules', () => {
   it('price_history is append-only, even for admin and the owner', async () => {
     const pg = await db();
     expect(await as(pg, ADMIN, () => err(pg.exec('UPDATE price_history SET price_rm = 0')))).toMatch(/permission denied/);
@@ -390,10 +438,10 @@ describe('083 costing rules', () => {
     expect(await c('select count(*) n from bom_lines')).toBe(560);
   });
 
-  it('rollbacks drop 084 then 083 cleanly', async () => {
+  it('rollbacks drop 085 then 084 cleanly', async () => {
     const pg = await db();
+    await pg.exec(RB085);
     await pg.exec(RB084);
-    await pg.exec(RB083);
     expect(await c0(pg, `select count(*) n from pg_tables where tablename in ('supplier_items','price_history','menu_items','supplier_bills','supplier_payments','user_entities','business_entities','procurement_tags','delivery_location_entities')`)).toBe(0);
     const [a] = await rows(pg, `select position('procurement' in pg_get_functiondef('admin_set_profile_role_and_outlet(uuid,text,uuid)'::regprocedure)) p`);
     expect(a.p).toBe(0);

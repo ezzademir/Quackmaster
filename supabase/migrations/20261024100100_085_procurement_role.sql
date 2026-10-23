@@ -1,8 +1,8 @@
 /*
-  084: 'procurement' role, scoped by entity tag and enforced in RLS (not just the UI).
+  085: 'procurement' role, scoped by entity tag and enforced in RLS (not just the UI).
 
   Depends on 081 (#88, merged + live: receive_po_shipment v2, close_po_short, adjust_po_receipt), 082 (numeric
-  widening, separate PR) and 083 (costing schema).
+  widening, separate PR) and 084 (costing schema).
   Draft / held: not applied anywhere.
 
   - profiles.role gains 'procurement'. Procurement is NOT "active staff": is_authenticated_active_staff()
@@ -27,8 +27,8 @@
 
 -- ---------------------------------------------------------------- role
 -- Role list reconciled with #81 (073, 'viewer', held): the constraint is the union, so either landing order
--- works as long as 073 runs before 084. 073 as written re-creates the constraint WITHOUT 'procurement';
--- if 073 is applied after 084 it must be rebased to include 'procurement' (see PR body).
+-- works as long as 073 runs before 085. 073 as written re-creates the constraint WITHOUT 'procurement';
+-- if 073 is applied after 085 it must be rebased to include 'procurement' (see PR body).
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check
   CHECK (role IN ('admin', 'staff', 'pending', 'supervisor', 'viewer', 'procurement'));
@@ -44,7 +44,7 @@ BEGIN
   v_def := pg_get_functiondef('public.admin_set_profile_role_and_outlet(uuid, text, uuid)'::regprocedure);
   IF position(v_new IN v_def) > 0 THEN RETURN; END IF;
   IF (length(v_def) - length(replace(v_def, v_old, ''))) / length(v_old) <> 1 THEN
-    RAISE EXCEPTION '084: admin_set_profile_role_and_outlet role list not found exactly once';
+    RAISE EXCEPTION '085: admin_set_profile_role_and_outlet role list not found exactly once';
   END IF;
   EXECUTE replace(v_def, v_old, v_new);
 END $$;
@@ -282,7 +282,7 @@ WHERE public.is_po_operator();
 REVOKE ALL ON public.v_raw_material_catalog FROM PUBLIC, anon;
 GRANT SELECT ON public.v_raw_material_catalog TO authenticated;
 
--- ---------------------------------------------------------------- leak fixes found by the 084 audit
+-- ---------------------------------------------------------------- leak fixes found by the 085 audit
 -- Owner-rights views bypass RLS (incl. the procurement deny-list). Make them run with the caller's rights.
 DO $$ BEGIN
   IF to_regclass('public.supplier_scorecard_metrics') IS NOT NULL THEN
@@ -356,7 +356,7 @@ DECLARE
 BEGIN
   IF position(v_new IN v_def) > 0 THEN RETURN; END IF;     -- already patched (re-run)
   IF (length(v_def) - length(replace(v_def, v_old, ''))) / length(v_old) <> 1 THEN
-    RAISE EXCEPTION '084: receive_po_shipment guard not found exactly once; re-check against 081';
+    RAISE EXCEPTION '085: receive_po_shipment guard not found exactly once; re-check against 081';
   END IF;
   EXECUTE replace(v_def, v_old, v_new);
 END $$;
