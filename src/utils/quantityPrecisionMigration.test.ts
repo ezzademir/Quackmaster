@@ -10,6 +10,7 @@ import FUNCS079 from '../../supabase/migrations/20261019140100_079_batch_trace_f
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
 import MIG082 from '../../supabase/migrations/20261024013000_082_quantity_precision.sql?raw';
 import MIG082_OLD from '../../supabase/tests/fixtures/082_at_9fa0902.sql?raw';
+import MIG083 from '../../supabase/migrations/20261024020000_083_post_082_grants_and_ledger.sql?raw';
 import RB082 from '../../supabase/rollback/082_quantity_precision_rollback.sql?raw';
 
 /**
@@ -222,5 +223,88 @@ describe('082 trigger dependency (live 0A000 regression)', () => {
     expect(await one(pg, TRG_SQL)).toEqual({ d: LIVE_TRG, e: 'O' });
     expect(await typeOf(pg, 'outlet_inventory', 'quantity_on_hand')).toBe('numeric(10,2)');
     expect(await num(pg, `select count(*) v from pg_views where viewname='recipe_variance_by_run'`)).toBe(1);
+  });
+});
+
+const VIEW_GRANTS = `select grantee||':'||privilege_type g from information_schema.role_table_grants
+  where table_schema='public' and table_name='recipe_variance_by_run' and grantee in ('anon','authenticated','service_role','PUBLIC')
+  order by 1`;
+const PRE082_GRANTS = [
+  'authenticated:DELETE', 'authenticated:INSERT', 'authenticated:SELECT', 'authenticated:UPDATE',
+  'service_role:DELETE', 'service_role:INSERT', 'service_role:REFERENCES', 'service_role:SELECT',
+  'service_role:TRIGGER', 'service_role:TRUNCATE', 'service_role:UPDATE',
+];
+const grants = async (pg: PGlite) => (await pg.query<{ g: string }>(VIEW_GRANTS)).rows.map((r) => r.g);
+const CORR_ROWS = `select user_id u, user_email e, before_data b, after_data a, delta_data d, metadata m from data_ledger
+  where action='receipt_rounding_corrected' and entity_id='${HUB}'`;
+
+describe('083 post-082 fixes (grants + system ledger row)', () => {
+  /** Reproduce live after 082 at 8e5f2cf: stock at 194.524, no ledger row (helper skipped), default-privilege extras. */
+  async function liveAfter082(pg: PGlite) {
+    await pg.exec(`ALTER TABLE data_ledger ADD COLUMN user_id uuid, ADD COLUMN user_email text NOT NULL DEFAULT '',
+        ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
+      UPDATE hub_inventory SET quantity_on_hand = 194.52, available_quantity = 194.52 WHERE id = '${HUB}';
+      UPDATE raw_materials SET weighted_avg_unit_cost = 2.9079 WHERE id = '${RM}';
+      INSERT INTO data_ledger (id, action, entity_type, entity_id, module, operation)
+        VALUES ('${SRC_LEDGER}', 'receipt_adjusted', 'purchase_order', '${PO}', 'procurement', 'update');
+      -- live helper returns early when auth.uid() IS NULL
+      CREATE OR REPLACE FUNCTION public._append_data_ledger(p_action text, p_entity_type text, p_entity_id text, p_module text,
+        p_operation text, p_reference_id text, p_before jsonb, p_after jsonb, p_delta jsonb DEFAULT NULL, p_metadata jsonb DEFAULT NULL)
+        RETURNS void LANGUAGE sql AS $$ SELECT NULL::void $$;`);
+    await pg.exec(MIG082);
+    await pg.exec('GRANT REFERENCES, TRIGGER, TRUNCATE ON public.recipe_variance_by_run TO authenticated');
+    expect(await hubQoh(pg)).toBe(194.524);
+    expect(await num(pg, `select count(*) v from data_ledger where action='receipt_rounding_corrected'`)).toBe(0);
+    expect(await grants(pg)).toContain('authenticated:TRUNCATE');
+  }
+
+  it('restores the exact pre-082 grants on recipe_variance_by_run (extras revoked, nothing for anon/PUBLIC)', async () => {
+    const pg = await liveDb();
+    await liveAfter082(pg);
+    await pg.exec(MIG083);
+    expect(await grants(pg)).toEqual(PRE082_GRANTS);
+  });
+
+  it('writes exactly one system ledger row (no user) citing PO-0032 and 6daad5c0, and adds no stock', async () => {
+    const pg = await liveDb();
+    await liveAfter082(pg);
+    await pg.exec(MIG083);
+    const rows = (await pg.query<{ u: string | null; e: string; b: Record<string, number>; a: Record<string, number>;
+      d: Record<string, unknown>; m: Record<string, string> }>(CORR_ROWS)).rows;
+    expect(rows).toHaveLength(1);
+    const [r] = rows;
+    expect(r.u).toBeNull();
+    expect(r.e).toBe('');
+    expect(Number(r.b.quantity_on_hand)).toBe(194.52);
+    expect(Number(r.a.quantity_on_hand)).toBe(194.524);
+    expect(Number(r.d.posted_delta)).toBe(0.004);
+    expect(r.d.source_ledger_id).toBe(SRC_LEDGER);
+    expect(r.m).toMatchObject({ migration: '082', purchase_order: 'PO-0032', source_ledger_id: SRC_LEDGER, actor: 'system' });
+    expect(await hubQoh(pg)).toBe(194.524);
+    expect(await num(pg, `select weighted_avg_unit_cost v from raw_materials where id='${RM}'`)).toBe(2.9079);
+  });
+
+  it('is idempotent: re-running 083 (and the 082 correction block) changes nothing', async () => {
+    const pg = await liveDb();
+    await liveAfter082(pg);
+    await pg.exec(MIG083);
+    await pg.exec(MIG083);
+    await pg.exec(MIG082.slice(MIG082.indexOf('DO $corr$')));
+    expect(await num(pg, `select count(*) v from data_ledger where action='receipt_rounding_corrected'`)).toBe(1);
+    expect(await hubQoh(pg)).toBe(194.524);
+    expect(await grants(pg)).toEqual(PRE082_GRANTS);
+  });
+
+  it('skips the ledger row when the hub quantity is not 194.524', async () => {
+    const pg = await liveDb();
+    await liveAfter082(pg);
+    await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = 190, available_quantity = 190 WHERE id='${HUB}'`);
+    await pg.exec(MIG083);
+    expect(await num(pg, `select count(*) v from data_ledger where action='receipt_rounding_corrected'`)).toBe(0);
+    expect(await hubQoh(pg)).toBe(190);
+  });
+
+  it('never touches hub_inventory', () => {
+    expect(MIG083).not.toMatch(/UPDATE\s+public\.hub_inventory|INSERT\s+INTO\s+public\.hub_inventory/i);
   });
 });
