@@ -332,6 +332,67 @@ describe('084/085 procurement role RLS', () => {
     expect(await c0(pg, 'select count(*) n from po_receipt_tickets')).toBe(0);
   });
 
+  it('receipt ticket: po_receipt_tickets is empty after every path through record_po_delivery (commit and rollback)', async () => {
+    const pg = await db();
+    const tickets = () => c0(pg, 'select count(*) n from po_receipt_tickets');
+    const line = (q: string, extra = '') => `[{"purchase_order_item_id":"${L_QT}","quantity_received":${q}${extra}}]`;
+    const call = (po: string, lines: string, doc = "'DO-T'") =>
+      `select record_po_delivery('${po}', '${lines}'::jsonb, ${doc}) r`;
+    // runs the call in ONE transaction as uid; checks the table inside the transaction (before end), then
+    // commits or rolls back. Raising calls run under a savepoint so the outer transaction can still commit.
+    const run = async (uid: string, sql: string, end: 'commit' | 'rollback') => {
+      const out: { r?: unknown; error?: string; inside?: number } = {};
+      await pg
+        .transaction(async (tx) => {
+          await tx.exec(`UPDATE test_ctx SET uid='${uid}'; SET LOCAL ROLE authenticated; SAVEPOINT s;`);
+          try {
+            out.r = (await tx.query<{ r: unknown }>(sql)).rows[0].r;
+          } catch (e) {
+            out.error = (e as Error).message;
+            await tx.exec('ROLLBACK TO SAVEPOINT s');
+          }
+          await tx.exec('RESET ROLE');
+          out.inside = Number((await tx.query<{ n: number }>('select count(*) n from po_receipt_tickets')).rows[0].n);
+          if (end === 'rollback') throw new Error('__rollback__');
+        })
+        .catch((e) => {
+          if ((e as Error).message !== '__rollback__') throw e;
+        });
+      return out;
+    };
+    const paths: [string, string, string, (o: { r?: unknown; error?: string }) => void][] = [
+      ['not_authorized (wrong tag)', BUYER_MH, call(PO_QT, line('1')), (o) => expect(o.r).toMatchObject({ error: 'not_authorized' })],
+      ['not_authorized (no scope PO)', BUYER_QT, call(PO_NONE, line('1')), (o) => expect(o.r).toMatchObject({ error: 'not_authorized' })],
+      ['no_lines', BUYER_QT, call(PO_QT, '[]'), (o) => expect(o.r).toMatchObject({ error: 'no_lines' })],
+      ['do_or_invoice_required', BUYER_QT, call(PO_QT, line('1'), 'NULL'), (o) => expect(o.r).toMatchObject({ error: 'do_or_invoice_required' })],
+      ['line_not_on_po', BUYER_QT, call(PO_QT, `[{"purchase_order_item_id":"00000000-0000-0000-0000-000000000bad","quantity_received":1}]`),
+        (o) => expect(o.r).toMatchObject({ error: 'line_not_on_po' })],
+      // ticket issued, receive_po_shipment soft-fails
+      ['over_tolerance (after ticket)', BUYER_QT, call(PO_QT, line('12')), (o) => expect(o.r).toMatchObject({ success: false })],
+      ['negative qty (after ticket)', BUYER_QT, call(PO_QT, line('-1')), (o) => expect(o.r ?? o.error).toBeTruthy()],
+      // RAISE before the ticket (bad uuid cast in the line check)
+      ['RAISE: invalid line id', BUYER_QT, call(PO_QT, `[{"purchase_order_item_id":"nope","quantity_received":1}]`), (o) => expect(o.error).toMatch(/uuid/)],
+      // RAISE after ticket + shipment (bad price cast in the receipt insert)
+      ['RAISE: invalid invoice price', BUYER_QT, call(PO_QT, line('1', ',"invoice_unit_price":"abc"')), (o) => expect(o.error).toMatch(/numeric/)],
+      ['RAISE: invalid quantity', BUYER_QT, call(PO_QT, line('"abc"')), (o) => expect(o.error).toBeTruthy()],
+      // success paths: procurement (ticket issued + consumed) and staff (no ticket)
+      ['success (procurement)', BUYER_QT, call(PO_QT, line('1')), (o) => expect(o.r).toMatchObject({ success: true })],
+      ['success (staff)', STAFF, call(PO_QT, line('1')), (o) => expect(o.r).toMatchObject({ success: true })],
+    ];
+    for (const end of ['rollback', 'commit'] as const) {
+      for (const [name, uid, sql, check] of paths) {
+        const o = await run(uid, sql, end);
+        check(o);
+        expect({ name, end, inside: o.inside }).toEqual({ name, end, inside: 0 });
+        expect({ name, end, after: await tickets() }).toEqual({ name, end, after: 0 });
+      }
+    }
+    // and outside any explicit transaction (autocommit), success and soft-fail after the ticket
+    await as(pg, BUYER_QT, () => rows(pg, call(PO_QT, line('1'))));
+    await as(pg, BUYER_QT, () => rows(pg, call(PO_QT, line('99'))));
+    expect(await tickets()).toBe(0);
+  });
+
   it('bills + payments: procurement records bills, sees derived status only; payments admin-only, part payments, no overpay', async () => {
     const pg = await db();
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('00000000-0000-0000-0000-0000000b1190','QT','${SUP}','B9','2026-10-20',10)`)))).toBeNull();
