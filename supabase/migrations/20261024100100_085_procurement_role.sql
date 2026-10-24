@@ -101,30 +101,83 @@ REVOKE ALL ON FUNCTION public.is_procurement_user(), public.procurement_has_tag(
 GRANT EXECUTE ON FUNCTION public.is_procurement_user(), public.procurement_has_tag(text), public.procurement_has_entity(text),
   public.procurement_has_po(uuid), public.is_po_operator() TO authenticated;
 
--- ---------------------------------------------------------------- deny-list: tables procurement must never read or write
-DO $$
-DECLARE t text;
+-- ---------------------------------------------------------------- default-deny for procurement (S9)
+-- Procurement is denied on EVERY public table that has RLS unless the table is explicitly allowed here. Replaces the old
+-- static list of ~45 table names, which silently left any table added later (or missed) open to a policy like
+-- USING (true). The allow-list holds only tables with deliberate procurement policies elsewhere in this migration.
+-- A future migration that creates a public table must either (a) call public.procurement_default_deny_sweep() at its end
+-- (adds the RESTRICTIVE deny), or (b) insert the table into procurement_table_allow with a note and write explicit,
+-- tag-scoped policies. A repo test fails when a migration after 085 creates a table and does neither, and
+-- v_procurement_unclassified_tables must always be empty.
+CREATE TABLE IF NOT EXISTS public.procurement_table_allow (
+  table_name text PRIMARY KEY,
+  note text NOT NULL
+);
+ALTER TABLE public.procurement_table_allow ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS procurement_table_allow_admin ON public.procurement_table_allow;
+CREATE POLICY procurement_table_allow_admin ON public.procurement_table_allow FOR SELECT TO authenticated
+  USING (public.is_profiles_admin());
+DROP POLICY IF EXISTS procurement_table_allow_deny_procurement ON public.procurement_table_allow;
+CREATE POLICY procurement_table_allow_deny_procurement ON public.procurement_table_allow AS RESTRICTIVE FOR ALL TO authenticated
+  USING (NOT public.is_procurement_user()) WITH CHECK (NOT public.is_procurement_user());
+REVOKE ALL ON public.procurement_table_allow FROM PUBLIC, anon;
+GRANT SELECT ON public.procurement_table_allow TO authenticated;
+INSERT INTO public.procurement_table_allow (table_name, note) VALUES
+  ('purchase_orders', 'draft/submit workflow, tag-scoped (purchase_orders_procurement_*)'),
+  ('purchase_order_items', 'lines of in-scope POs (purchase_order_items_procurement_*)'),
+  ('suppliers', 'own proposals + suppliers with items in own tags (suppliers_procurement_*)'),
+  ('supplier_items', 'own tags, new items start pending (supplier_items_procurement_*)'),
+  ('price_history', 'read price history of own-tag items'),
+  ('supplier_bills', 'record + read bills of own entities'),
+  ('supplier_payments', 'read payments of own-entity bills'),
+  ('user_entities', 'a user reads own tag rows'),
+  ('po_receipt_records', 'receipt records of in-scope POs'),
+  ('profiles', 'own row only (profiles_procurement_own_only)'),
+  ('document_links', 'own uploads only (document_links_procurement_own)')
+ON CONFLICT (table_name) DO NOTHING;
+
+-- (Re)applies the default-deny: a RESTRICTIVE <table>_deny_procurement policy on every public RLS table that is not
+-- allow-listed, and removes a stale deny from a table that has since been allow-listed. Idempotent. Owner-run only.
+CREATE OR REPLACE FUNCTION public.procurement_default_deny_sweep()
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE r record; n integer := 0; v_no_rls text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY[
-    'recipes', 'recipe_ingredients', 'menu_items', 'sub_recipes', 'bom_lines', 'price_flag_reviews',
-    'sales_journals', 'sales_journal_lines', 'storehub_product_map', 'storehub_store_map', 'storehub_sync_runs',
-    'storehub_sync_events', 'storehub_sync_settings',
-    'outlets', 'outlet_inventory', 'outlet_inventory_snapshots', 'outlet_stock_movements', 'outlet_par',
-    'outlet_stock_take_sessions', 'outlet_stock_take_lines', 'outlet_stock_take_open_balances',
-    'outlet_transfers', 'outlet_transfer_lines', 'supply_orders', 'supply_order_lines',
-    'hub_inventory', 'hub_inventory_reservations', 'inventory_lots', 'inventory_adjustments',
-    'production_runs', 'production_run_materials', 'production_resources', 'production_qc_observations', 'planned_batches',
-    'waste_events', 'waste_lines', 'pending_registrations', 'activity_logs', 'data_ledger',
-    'qc_audit_settings', 'stock_take_settings', 'raw_materials', 'procurement_settings'
-  ] LOOP
-    IF to_regclass('public.' || t) IS NOT NULL THEN
-      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_deny_procurement', t);
-      EXECUTE format('CREATE POLICY %I ON public.%I AS RESTRICTIVE FOR ALL TO authenticated '
-                     'USING (NOT public.is_procurement_user()) WITH CHECK (NOT public.is_procurement_user())',
-                     t || '_deny_procurement', t);
-    END IF;
+  FOR r IN SELECT c.relname FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+           WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relrowsecurity
+             AND NOT EXISTS (SELECT 1 FROM public.procurement_table_allow a WHERE a.table_name = c.relname) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', r.relname || '_deny_procurement', r.relname);
+    EXECUTE format('CREATE POLICY %I ON public.%I AS RESTRICTIVE FOR ALL TO authenticated '
+                   'USING (NOT public.is_procurement_user()) WITH CHECK (NOT public.is_procurement_user())',
+                   r.relname || '_deny_procurement', r.relname);
+    n := n + 1;
   END LOOP;
+  FOR r IN SELECT p.tablename, p.policyname FROM pg_policies p
+           WHERE p.schemaname = 'public' AND p.policyname = p.tablename || '_deny_procurement'
+             AND EXISTS (SELECT 1 FROM public.procurement_table_allow a WHERE a.table_name = p.tablename) LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', r.policyname, r.tablename);
+  END LOOP;
+  -- a table with RLS off cannot be fenced by a policy: surface it instead of failing silently
+  SELECT string_agg(c.relname, ', ') INTO v_no_rls FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+    WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relrowsecurity;
+  IF v_no_rls IS NOT NULL THEN
+    RAISE WARNING 'procurement default-deny: tables WITHOUT row level security (policies cannot fence them): %', v_no_rls;
+  END IF;
+  RETURN n;
 END $$;
+REVOKE ALL ON FUNCTION public.procurement_default_deny_sweep() FROM PUBLIC, anon, authenticated;
+-- (the sweep itself runs at the very END of this migration, after every table 085 creates exists)
+
+-- Monitoring: public tables that are neither allow-listed nor carrying the deny policy. Must be empty. rls_enabled = false
+-- rows are tables a policy cannot fence at all (the sweep also warns about them): enable RLS on them or allow-list them.
+CREATE OR REPLACE VIEW public.v_procurement_unclassified_tables WITH (security_invoker = true) AS
+SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled
+FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p')
+  AND NOT EXISTS (SELECT 1 FROM public.procurement_table_allow a WHERE a.table_name = c.relname)
+  AND NOT EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = c.relname
+                  AND p.policyname = c.relname || '_deny_procurement');
+REVOKE ALL ON public.v_procurement_unclassified_tables FROM PUBLIC, anon;
+GRANT SELECT ON public.v_procurement_unclassified_tables TO authenticated;
 
 -- profiles: procurement sees only its own row.
 DROP POLICY IF EXISTS profiles_procurement_own_only ON public.profiles;
@@ -734,3 +787,6 @@ BEGIN
                    'FOR EACH ROW EXECUTE FUNCTION public._procurement_audit()', t);
   END LOOP;
 END $$;
+
+-- ---------------------------------------------------------------- apply the default-deny (S9): keep this LAST
+SELECT public.procurement_default_deny_sweep();

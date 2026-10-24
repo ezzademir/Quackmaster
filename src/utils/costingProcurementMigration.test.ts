@@ -74,6 +74,7 @@ CREATE POLICY "Admins can view all" ON profiles FOR SELECT TO authenticated USIN
 CREATE POLICY "Own" ON profiles FOR SELECT TO authenticated USING (auth.uid() = id);
 CREATE TABLE data_ledger (id serial, action text, entity_type text, entity_id text, module text, operation text,
   reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb, metadata jsonb, user_id uuid);
+ALTER TABLE data_ledger ENABLE ROW LEVEL SECURITY;   -- live: RLS on, no client policies
 -- like live: SECURITY DEFINER, not callable by clients (only definer functions can write the ledger)
 CREATE FUNCTION public._append_data_ledger(a text, et text, eid text, m text, op text, ref text,
   b jsonb, af jsonb, d jsonb, md jsonb) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path=public AS
@@ -997,6 +998,64 @@ describe('S8: record_po_delivery validates unit of measure and survives a null i
     }
     expect(await hub(pg)).toBe(0);
     expect(await c0(pg, `select count(*) n from po_receipt_tickets`)).toBe(0);
+  });
+});
+
+describe('S9: procurement is default-deny on every table that is not explicitly allowed', () => {
+  it('no public RLS table is unclassified: each is allow-listed or carries <table>_deny_procurement', async () => {
+    const pg = await db();
+    expect(await rows(pg, `select table_name from v_procurement_unclassified_tables`)).toEqual([{ table_name: 'test_ctx' }]);   // fixture helper, no RLS; live has 46/46 tables with RLS
+    const allow = (await rows(pg, `select table_name from procurement_table_allow order by 1`)).map((r) => r.table_name);
+    expect(allow).toContain('purchase_orders');
+    expect(allow).not.toContain('data_ledger');
+    // every allow-listed table has no blanket deny; everything else has one
+    expect(await c0(pg, `select count(*) n from pg_policies p where policyname = tablename || '_deny_procurement' and tablename in (select table_name from procurement_table_allow)`)).toBe(0);
+    expect(await c0(pg, `select count(*) n from pg_tables t where schemaname='public' and rowsecurity and tablename not in (select table_name from procurement_table_allow) and not exists (select 1 from pg_policies p where p.tablename=t.tablename and p.policyname=t.tablename||'_deny_procurement')`)).toBe(0);
+    // the allow-list itself is not readable by procurement
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from procurement_table_allow'))).toBe(0);
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from procurement_table_allow'))).toBe(allow.length);
+  });
+  it('a table added later with a permissive USING (true) policy is flagged, leaks to procurement until swept, and is denied after the sweep', async () => {
+    const pg = await db();
+    await pg.exec(`CREATE TABLE zz_new_costs (id int primary key, secret text);
+      INSERT INTO zz_new_costs VALUES (1, 'margin');
+      ALTER TABLE zz_new_costs ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY zz_read ON zz_new_costs FOR SELECT TO authenticated USING (true);
+      GRANT SELECT ON zz_new_costs TO authenticated;`);
+    expect(await rows(pg, `select table_name from v_procurement_unclassified_tables where table_name <> 'test_ctx' order by 1`)).toEqual([{ table_name: 'zz_new_costs' }]);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from zz_new_costs'))).toBe(1);              // the gap a static list leaves
+    expect((await rows(pg, `select public.procurement_default_deny_sweep() n`))[0].n).toBeGreaterThan(0);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from zz_new_costs'))).toBe(0);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from zz_new_costs'))).toBe(1);
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from zz_new_costs'))).toBe(1);
+    expect(await rows(pg, `select table_name from v_procurement_unclassified_tables where table_name <> 'test_ctx'`)).toEqual([]);
+    // idempotent, and not callable by clients
+    await pg.exec(`select public.procurement_default_deny_sweep()`);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`select public.procurement_default_deny_sweep()`)))).toMatch(/permission denied/);
+  });
+  it('allow-listing a table removes its blanket deny on the next sweep', async () => {
+    const pg = await db();
+    await pg.exec(`CREATE TABLE zz_shared (id int); ALTER TABLE zz_shared ENABLE ROW LEVEL SECURITY; CREATE POLICY p ON zz_shared FOR SELECT TO authenticated USING (true);
+      GRANT SELECT ON zz_shared TO authenticated; INSERT INTO zz_shared VALUES (1); SELECT public.procurement_default_deny_sweep();`);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from zz_shared'))).toBe(0);
+    await pg.exec(`INSERT INTO procurement_table_allow VALUES ('zz_shared','test'); SELECT public.procurement_default_deny_sweep();`);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from zz_shared'))).toBe(1);
+  });
+  it('repo guard: every migration after 085 that creates a public table classifies it (explicit deny, allow row, or sweep call)', () => {
+    const files = import.meta.glob('../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+    const after = Object.entries(files).filter(([f]) => /\/(\d{14})_/.exec(f)![1] > '20261024100100');
+    expect(after.length).toBeGreaterThan(0);                       // 087, 088 at least
+    const bad: string[] = [];
+    for (const [f, sql] of after) {
+      const body = sql.replace(/--.*$/gm, '');
+      for (const m of body.matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?([a-z_0-9]+)/gi)) {
+        const t = m[1];
+        const ok = new RegExp(`${t}_deny_procurement`).test(body) || /procurement_default_deny_sweep\s*\(/.test(body) ||
+          new RegExp(`procurement_table_allow[^;]*'${t}'`, 's').test(body);
+        if (!ok) bad.push(`${f.split('/').pop()}: ${t}`);
+      }
+    }
+    expect(bad).toEqual([]);
   });
 });
 
