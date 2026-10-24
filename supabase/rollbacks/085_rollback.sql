@@ -12,6 +12,10 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- Rollback 085 (procurement role). Procurement profiles are set back to 'pending' (locked out), not deleted.
+-- NOT BYTE-IDENTICAL to the pre-084 schema: the rollbacks restore function and table BEHAVIOUR, and leave these intended leftovers: the two leak-fix views
+-- recipe_variance_by_run and supplier_scorecard_metrics keep security_invoker = true; the backup table suppliers_status_backup_084 (RLS on, no grants) stays;
+-- profiles_role_check is written with the five roles incl. 'viewer' (check live with the read-only pg_get_constraintdef item in the pre-apply list first).
+-- 090_rollback also restores the live-captured profiles guard body, so three comments inside profiles_enforce_privileged_columns are gone (cosmetic).
 DROP FUNCTION IF EXISTS public.record_po_delivery(uuid, jsonb, text, text, text);
 DROP FUNCTION IF EXISTS public._canon_uom(text);
 DO $$
