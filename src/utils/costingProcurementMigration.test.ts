@@ -611,6 +611,47 @@ describe('PR #92 review fixes: B2 received quantity is cumulative and can never 
   });
 });
 
+describe('PR #92 review fixes: S2 / S3 PO line guard', () => {
+  const DRAFT = '00000000-0000-0000-0000-00000000f0b1';
+  const LINE_D = '00000000-0000-0000-0000-00000000e0b1';
+  const mkDraft = async (pg: PGlite) => {
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_orders (id, order_number, supplier_id, entity_code) VALUES ('${DRAFT}','PD','${SUP}','QT')`));
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_order_items (id, purchase_order_id, raw_material_id, quantity_ordered, unit_price) VALUES ('${LINE_D}','${DRAFT}','${RM}',5,2)`));
+  };
+
+  it('S2: a line cannot be moved out of an ordered PO into a draft (source PO is checked, not just the destination)', async () => {
+    const pg = await db();
+    await mkDraft(pg);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET purchase_order_id='${DRAFT}' WHERE id='${L_QT}'`)))).toMatch(/procurement_po_edit_draft_only/);
+    expect((await rows(pg, `select purchase_order_id from purchase_order_items where id='${L_QT}'`))[0].purchase_order_id).toBe(PO_QT);
+    // and the reverse: a draft line cannot be moved into an ordered PO
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET purchase_order_id='${PO_QT}' WHERE id='${LINE_D}'`)))).toMatch(/procurement_po_edit_draft_only/);
+    // ordinary edits of a draft line still work
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET quantity_ordered=6 WHERE id='${LINE_D}'`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`DELETE FROM purchase_order_items WHERE id='${LINE_D}'`)))).toBeNull();
+  });
+
+  it('S2: moving a line between two drafts is allowed; admin is unaffected by the procurement-only rule', async () => {
+    const pg = await db();
+    await mkDraft(pg);
+    const D2 = '00000000-0000-0000-0000-00000000f0b2';
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_orders (id, order_number, supplier_id, entity_code) VALUES ('${D2}','PD2','${SUP}','QT')`));
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET purchase_order_id='${D2}' WHERE id='${LINE_D}'`)))).toBeNull();
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE purchase_order_items SET purchase_order_id='${D2}' WHERE id='${L_QT}'`)))).toBeNull();
+  });
+
+  it('S3: procurement cannot change quantity_received on a draft line (UPDATE), only 0 on insert and untouched on edit', async () => {
+    const pg = await db();
+    await mkDraft(pg);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET quantity_received=5 WHERE id='${LINE_D}'`)))).toMatch(/receive_via_record_po_delivery/);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_order_items SET quantity_received=0 WHERE id='${LINE_D}'`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO purchase_order_items (purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price) VALUES ('${DRAFT}','${RM}',1,1,1)`)))).toMatch(/receive_via_record_po_delivery/);
+    expect(Number((await rows(pg, `select quantity_received::float q from purchase_order_items where id='${LINE_D}'`))[0].q)).toBe(0);
+    // the sanctioned path still moves received quantity (runs as the function owner)
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1,"quantity_uom":"kg"}]'::jsonb, 'DO') r`)))[0].r).toMatchObject({ success: true });
+  });
+});
+
 describe('PR #92 review fixes: S1 UI-facing DB surface', () => {
   it('v_my_entities: procurement sees only its own entities (cannot read business_entities); staff and admin see all', async () => {
     const pg = await db();

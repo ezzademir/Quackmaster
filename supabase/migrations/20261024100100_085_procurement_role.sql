@@ -259,12 +259,25 @@ BEGIN
   IF TG_OP = 'UPDATE' THEN NEW.entered_by := OLD.entered_by; NEW.last_edited_by := auth.uid(); END IF;
   -- direct client writes only (see _po_procurement_workflow); RPC writes run as the function owner
   IF public.is_procurement_user() AND current_user IN ('authenticated', 'anon') THEN
-    SELECT status INTO v_status FROM public.purchase_orders
-      WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.purchase_order_id ELSE NEW.purchase_order_id END;
-    IF v_status IS DISTINCT FROM 'draft' THEN
-      RAISE EXCEPTION 'procurement_po_edit_draft_only' USING ERRCODE = 'P0001';
+    -- the PO a line is moving TO (INSERT / UPDATE) and the PO it is leaving (UPDATE / DELETE) must both be
+    -- drafts: a line cannot be pulled out of an ordered PO into a draft, nor edited in a non-draft PO
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+      SELECT status INTO v_status FROM public.purchase_orders WHERE id = NEW.purchase_order_id;
+      IF v_status IS DISTINCT FROM 'draft' THEN
+        RAISE EXCEPTION 'procurement_po_edit_draft_only' USING ERRCODE = 'P0001';
+      END IF;
     END IF;
+    IF TG_OP IN ('UPDATE', 'DELETE') THEN
+      SELECT status INTO v_status FROM public.purchase_orders WHERE id = OLD.purchase_order_id;
+      IF v_status IS DISTINCT FROM 'draft' THEN
+        RAISE EXCEPTION 'procurement_po_edit_draft_only' USING ERRCODE = 'P0001';
+      END IF;
+    END IF;
+    -- received quantities move only through record_po_delivery (hub stock, tolerance, receipt record)
     IF TG_OP = 'INSERT' AND COALESCE(NEW.quantity_received, 0) <> 0 THEN
+      RAISE EXCEPTION 'receive_via_record_po_delivery' USING ERRCODE = 'P0001';
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.quantity_received IS DISTINCT FROM OLD.quantity_received THEN
       RAISE EXCEPTION 'receive_via_record_po_delivery' USING ERRCODE = 'P0001';
     END IF;
   END IF;
