@@ -2,12 +2,16 @@
 -- PRIMARY path, with 090 STILL LIVE (last-admin guard on, fully ledgered, no rollback): promote a replacement, then demote the lost account,
 -- in ONE transaction that aborts unless at least one active admin remains.
 --
--- 1. Replace the two UUIDs below (profiles.id of the replacement and of the lost admin). The replacement must be an ACTIVE, approved user who is
+-- 1. Edit ONLY the two DECLARE lines (v_new, v_lost) below: set the profiles.id of the replacement and of the lost admin. Do NOT use a global find-and-replace of the
+--    zero UUID, it also rewrites the placeholder checks (the run then aborts safe, but nothing is fixed). The replacement must be an ACTIVE, approved user who is
 --    NOT a procurement user (a promoted procurement user would keep stale business-tag rows). A typo in either id aborts the whole thing.
 -- 2. Send the whole file as ONE batch (Supabase SQL editor "Run", or psql -v ON_ERROR_STOP=1 -f; the file has its own BEGIN/COMMIT).
---    Never paste it a line at a time, never plain psql -f without ON_ERROR_STOP.
+--    Never paste it a line at a time, never plain psql -f without ON_ERROR_STOP. Do NOT add -1: the file has its own BEGIN/COMMIT, so -1 only adds two
+--    harmless warnings (25001, 25P01); the end state is still correct.
 -- 3. Afterwards: SELECT id, role, is_active FROM public.profiles WHERE role = 'admin';  and check data_ledger has role_changed (x2) and deactivated.
 --    If anything raises, the transaction is aborted and NOTHING has changed (in an interactive session type ROLLBACK;).
+--    If the lost account may be compromised, also ban it in Auth (dashboard, or the admin_set_user_active function after the new admin signs in): this file
+--    clears its sessions and refresh tokens and deactivates the profile, but does not set deactivated_by or an Auth ban.
 --    The transaction-local claim below is the same state a service-key request has; it ends at COMMIT/ROLLBACK.
 BEGIN;
 SELECT set_config('request.jwt.claim.role', 'service_role', true);

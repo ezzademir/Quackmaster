@@ -1,6 +1,6 @@
 -- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090). This file also runs safely AFTER 085's rollback (it skips the 085-owned
--- RUN AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f <this file> (or one Supabase SQL editor / execute_sql call). NEVER plain `psql -f`: it keeps going after an error (e.g. past a raised guard) and leaves a half-done rollback.
 -- procurement_exposure_allow row when that table is already gone); the other direction is the supported one.
+-- RUN AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f <this file> (or one Supabase SQL editor / execute_sql call). NEVER plain `psql -f`: it keeps going after an error (e.g. past a raised guard) and leaves a half-done rollback.
 -- Rollback 088 (stock entity tags). Drops the tag columns and the hub movement ledger created by 088
 -- (tags written to inventory_lots / outlet_stock_movements since 088 are lost). Old rows are untouched.
 -- cancel_purchase_order: restore the live definition captured read-only on 24 Oct 2026 (pre-088, untagged reversal, always deletes)
