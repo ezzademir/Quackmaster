@@ -8,6 +8,7 @@ import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.
 import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
 import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
+import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB090 from '../../supabase/rollbacks/090_rollback.sql?raw';
 import LIVE from './__fixtures__/live_profiles_guard_20261024.sql?raw';
@@ -591,6 +592,35 @@ describe('090 hardening: pg_temp last, 087 pre-check, whole-function overwrite d
     expect(RB090).toMatch(/does not reverse the 090 patch/);
     expect(MIG090.slice(0, MIG090.indexOf('*/'))).toMatch(/OVERWRITING THE WHOLE FUNCTION/);
     expect(MIG090.slice(0, MIG090.indexOf('*/'))).toMatch(/087 \(is_profiles_admin\)/);
+  });
+});
+
+describe('085_rollback refuses to run while 090 is live', () => {
+  it('raises with an instruction to run 090_rollback first, and changes nothing', async () => {
+    const pg = await db();
+    const before = await one(pg, `select (select count(*) from pg_proc where pronamespace='public'::regnamespace)::int f, (select count(*) from pg_trigger where not tgisinternal)::int t, to_regclass('public.user_entities') is not null ue`);
+    const msg = await err(pg.exec(RB085));
+    expect(msg).toMatch(/085_rollback refused: migration 090 is still live/);
+    expect(msg).toMatch(/090_rollback\.sql first/);
+    const after = await one(pg, `select (select count(*) from pg_proc where pronamespace='public'::regnamespace)::int f, (select count(*) from pg_trigger where not tgisinternal)::int t, to_regclass('public.user_entities') is not null ue`);
+    expect(after).toEqual(before);
+    expect(after.ue).toBe(true);
+  });
+  it('refuses when only part of 090 remains (any one 090 function is enough)', async () => {
+    const pg = await db();
+    await pg.exec('DROP FUNCTION public.admin_set_procurement_tags(uuid, text[]);');
+    expect(await err(pg.exec(RB085))).toMatch(/refused/);
+  });
+  it('after 090_rollback the guard stays silent (this fixture has no purchase_orders, so the rest of 085_rollback is exercised by costingProcurementMigration.test.ts)', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    expect(String(await err(pg.exec(RB085)))).not.toMatch(/085_rollback refused/);
+  });
+  it('the guard is the first statement after the header comments, and the header says so', () => {
+    const body = RB085.split('\n').filter((l) => !l.startsWith('--')).join('\n').trimStart();
+    expect(body.startsWith('DO $$ BEGIN')).toBe(true);
+    expect(body.slice(0, 700)).toMatch(/migration 090 is still live/);
+    expect(RB085).toMatch(/GUARD: refuses to run while 090 is live/);
   });
 });
 

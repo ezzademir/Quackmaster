@@ -1,4 +1,15 @@
 -- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090); 088's rollback also tolerates running after this one.
+-- GUARD: refuses to run while 090 is live. 090's triggers/RPC live on public.user_entities and the 'procurement' role that this file removes; dropping
+-- 085 under them strands the profiles guard. Run 090_rollback.sql first (and 089's, if applied), then this file. Raises before touching anything.
+DO $$ BEGIN
+  IF to_regprocedure('public.admin_set_procurement_tags(uuid, text[])') IS NOT NULL
+     OR to_regprocedure('public.profiles_guard_role_change()') IS NOT NULL
+     OR to_regprocedure('public.user_entities_guard_write()') IS NOT NULL
+     OR to_regprocedure('public.profiles_audit_role_change()') IS NOT NULL
+     OR to_regprocedure('public.user_entities_audit_write()') IS NOT NULL THEN
+    RAISE EXCEPTION '085_rollback refused: migration 090 is still live. Run supabase/rollbacks/090_rollback.sql first (order: 090 -> 088 -> 087 -> 085 -> 084).';
+  END IF;
+END $$;
 -- Rollback 085 (procurement role). Procurement profiles are set back to 'pending' (locked out), not deleted.
 DROP FUNCTION IF EXISTS public.record_po_delivery(uuid, jsonb, text, text, text);
 DROP FUNCTION IF EXISTS public._canon_uom(text);
