@@ -129,6 +129,8 @@ const STEPS: [string, string][] = [
   ['policies', PROFILES_POLICIES],
   ['grants', `GRANT SELECT ON public.profiles TO anon; GRANT EXECUTE ON FUNCTION public.admin_set_profile_role_and_outlet(uuid,text,uuid) TO authenticated;
               GRANT EXECUTE ON FUNCTION public.get_users_management_data() TO authenticated;`],
+  // Supabase default privileges hand new public tables to the client roles in full (incl. TRUNCATE, REFERENCES, TRIGGER); 090 must take them back
+  ['default privileges', `GRANT ALL ON public.user_entities TO authenticated, anon;`],
   ['seed', SEED],
   // what the functions looked like BEFORE 090 (compared with the live capture)
   ['pre-090 defs', `CREATE TABLE zz_pre AS SELECT p.proname, pg_get_functiondef(p.oid) AS def FROM pg_proc p
@@ -177,6 +179,7 @@ const asService = async <T>(pg: PGlite, fn: () => Promise<T>) => {
   await pg.exec(`SELECT set_config('test.jwt_role','service_role',false)`);
   try { return await fn(); } finally { await pg.exec(`SELECT set_config('test.jwt_role','',false)`); }
 };
+const count = async (pg: PGlite) => ((await one(pg, 'select count(*)::int n from user_entities')).n as number);
 const GRANT_WRITES = `GRANT INSERT, UPDATE, DELETE ON public.user_entities TO authenticated`;
 
 describe('090 fixture is the real thing', () => {
@@ -456,6 +459,44 @@ describe('090 the last active admin cannot be demoted, deactivated or removed (n
     await apply(pg, ADMIN, ADMIN2, true);
     expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`)))).toBeNull();
     expect(await one(pg, `select is_active from profiles where id='${ADMIN}'`)).toEqual({ is_active: false });
+  });
+});
+
+describe('090 H1: user_entities grants (REVOKE ALL, then SELECT only)', () => {
+  const priv = async (pg: PGlite, role: string) => Object.fromEntries(await Promise.all(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'].map(async (p) =>
+    [p, (await one(pg, `select has_table_privilege('${role}','public.user_entities','${p}') b`)).b])));
+  it('the fixture starts with Supabase-style default privileges (so the test can see a partial revoke)', async () => {
+    const pg = await db();
+    await pg.exec(`CREATE TABLE zz_probe (x int); GRANT ALL ON zz_probe TO authenticated`);
+    expect(await one(pg, `select has_table_privilege('authenticated','zz_probe','TRUNCATE') b`)).toEqual({ b: true });
+    // the pre-090 snapshot kept in the template: re-granting ALL and re-applying 090 ends at SELECT only
+    await pg.exec(`GRANT ALL ON public.user_entities TO authenticated, anon, PUBLIC`);
+    expect((await priv(pg, 'authenticated')).TRUNCATE).toBe(true);
+    await pg.exec(MIG090);
+    expect((await priv(pg, 'authenticated')).TRUNCATE).toBe(false);
+  });
+  it('after 090 authenticated holds SELECT and nothing else; anon and PUBLIC hold nothing (no TRUNCATE, REFERENCES or TRIGGER either)', async () => {
+    const pg = await db();
+    expect(await priv(pg, 'authenticated')).toEqual({ SELECT: true, INSERT: false, UPDATE: false, DELETE: false, TRUNCATE: false, REFERENCES: false, TRIGGER: false });
+    expect(Object.values(await priv(pg, 'anon')).some(Boolean)).toBe(false);
+    expect(await rows(pg, `select a.grantee::regrole::text g, a.privilege_type p from pg_class c, aclexplode(c.relacl) a where c.oid='public.user_entities'::regclass and a.grantee = 0`)).toEqual([]);
+  });
+  it('a signed-in client cannot TRUNCATE the table, and it is still there with its rows afterwards', async () => {
+    const pg = await db();
+    for (const uid of [ADMIN, BUYER_QT, STAFF]) {
+      expect(await as(pg, uid, () => err(pg.exec('TRUNCATE public.user_entities')))).toMatch(/permission denied/);
+    }
+    expect(await as(pg, ADMIN, () => err(pg.exec('TRUNCATE public.user_entities')), 'authenticated')).not.toBeNull();
+    expect(await count(pg)).toBe(2);
+  });
+  it('the 090 text states REVOKE ALL (PUBLIC, anon, authenticated) then GRANT SELECT, and no INSERT/UPDATE/DELETE grant', () => {
+    expect(MIG090).toMatch(/REVOKE ALL ON public\.user_entities FROM PUBLIC, anon, authenticated;\s*GRANT SELECT ON public\.user_entities TO authenticated;/);
+    expect(MIG090).not.toMatch(/GRANT (INSERT|UPDATE|DELETE|ALL|TRUNCATE)[^;]*user_entities/i);
+  });
+  it('the rollback gives back 085\'s explicit write grants but not TRUNCATE/REFERENCES/TRIGGER', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    expect(await priv(pg, 'authenticated')).toEqual({ SELECT: true, INSERT: true, UPDATE: true, DELETE: true, TRUNCATE: false, REFERENCES: false, TRIGGER: false });
   });
 });
 

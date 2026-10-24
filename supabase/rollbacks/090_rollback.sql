@@ -8,7 +8,8 @@
 -- same way 087_rollback restores is_profiles_admin(). 090 itself did not change the profiles guard function or its trigger,
 -- so re-creating them is idempotent and guarantees the post-rollback state equals live.
 -- What this removes: trg_profiles_role_guard / trg_profiles_role_audit (profiles), trg_user_entities_guard / _audit, their four
--- functions, admin_set_procurement_tags and its allow-list row. What it restores: authenticated INSERT/UPDATE/DELETE on user_entities.
+-- functions, admin_set_procurement_tags and its allow-list row. What it restores: authenticated INSERT/UPDATE/DELETE on user_entities (085's own explicit grant set, with SELECT). It deliberately does NOT
+-- hand back TRUNCATE/REFERENCES/TRIGGER, which only Supabase default privileges ever gave (090 revoked them) and which 085 never granted.
 -- Tags cleared by 090 when a user left procurement, and the ledger rows 090 wrote, are NOT restored/deleted (the ledger is append-only).
 
 DROP TRIGGER IF EXISTS trg_profiles_role_audit ON public.profiles;

@@ -36,7 +36,8 @@
     3. user_entities: BEFORE trigger (signed-in callers: admin only, never their own row, target must be a procurement user) and
        AFTER statement triggers (one ledger entry per user per statement: action tags_changed, operation 'update', before/after full tag lists;
        a replace that both adds and removes is two statements, so two chained entries).
-       INSERT/UPDATE/DELETE are revoked from authenticated: clients change tags only through admin_set_procurement_tags().
+       ALL privileges are revoked from PUBLIC/anon/authenticated (no INSERT/UPDATE/DELETE, and no TRUNCATE/REFERENCES/TRIGGER) and only SELECT is
+       granted back: clients change tags only through admin_set_procurement_tags().
     4. admin_set_procurement_tags(user, tags[]): admin only, not self, target must be a procurement user, at least one tag,
        every tag must exist in procurement_tags; replaces the set.
     5. get_users_management_data(): each approved user also carries entity_tags (patched in place, nothing else changes).
@@ -217,7 +218,11 @@ CREATE TRIGGER trg_user_entities_audit_del AFTER DELETE ON public.user_entities
   REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION public.user_entities_audit_write();
 
 -- Clients no longer write this table directly: tag changes go through admin_set_procurement_tags (085 granted all four).
-REVOKE INSERT, UPDATE, DELETE ON public.user_entities FROM authenticated;
+-- REVOKE ALL, not just INSERT/UPDATE/DELETE: Supabase's default privileges on public also hand authenticated TRUNCATE, REFERENCES and
+-- TRIGGER, and TRUNCATE skips RLS, row triggers and the audit triggers above. Then give back the one verb clients need (own-row
+-- and admin SELECT is filtered by the 085 policies).
+REVOKE ALL ON public.user_entities FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.user_entities TO authenticated;
 
 -- ---------------------------------------------------------------- admin RPC: replace a procurement user's tags
 CREATE OR REPLACE FUNCTION public.admin_set_procurement_tags(p_target_user_id uuid, p_tags text[])
