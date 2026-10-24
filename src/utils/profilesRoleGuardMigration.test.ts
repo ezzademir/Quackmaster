@@ -555,7 +555,7 @@ describe('090 H2: a failed ledger insert rolls the change back (fail closed); th
     const d = String((await one(pg, `select pg_get_functiondef('public._append_data_ledger(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb)'::regprocedure) d`)).d);
     expect(defOf(d)).toBe(defOf(LIVE_LEDGER));
     expect(MIG090).not.toMatch(/PERFORM public\._append_data_ledger/);
-    expect(MIG090.match(/INSERT INTO public\.data_ledger/g)?.length).toBe(2);
+    expect(MIG090.match(/INSERT INTO public\.data_ledger/g)?.length).toBe(3);   // role/outlet, tags, direct is_active
     expect(MIG090).toMatch(/Ledger \(fail closed\)/);
   });
 });
@@ -678,6 +678,95 @@ describe('090 break-glass: lost or locked only admin (rollback, then promote, th
     expect(head).toMatch(/090_rollback\.sql[\s\S]*promote the replacement[\s\S]*RE-APPLY/);
     expect(head).not.toMatch(/Recovery means deliberately dropping the trigger/);
     expect(RB090).toMatch(/BREAK-GLASS use:[\s\S]*ONLY on Ezzad's explicit word[\s\S]*No trigger drop/);
+  });
+});
+
+describe('090 H10: no admin deactivates their own row (any path); another admin still can; direct changes are ledgered fail-closed', () => {
+  const apply = (pg: PGlite, actor: string, target: string, active: boolean) =>
+    one(pg, `select public.admin_apply_user_active('${actor}','${target}',${active},'test') r`).then((x) => x.r as Record<string, unknown>);
+  const active = async (pg: PGlite, id: string) => (await one(pg, `select is_active a from profiles where id='${id}'`)).a;
+
+  it('(a) with two admins, a direct UPDATE deactivating your own row is refused (and leaves nothing behind)', async () => {
+    const pg = await db();
+    await pg.exec('DELETE FROM data_ledger');
+    for (const sql of [`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`, `UPDATE profiles SET is_active=false, deactivated_at=now(), deactivated_by='${ADMIN}' WHERE id='${ADMIN}'`]) {
+      expect(await as(pg, ADMIN, () => err(pg.exec(sql))), sql).toMatch(/cannot deactivate your own account/);
+    }
+    expect(await active(pg, ADMIN)).toBe(true);
+    expect(await ledger(pg)).toEqual([]);
+  });
+  it('(a) the bypass flag does not skip it, and neither does the RPC path (own id)', async () => {
+    const pg = await db();
+    const sql = `SET quackmaster.bypass_profile_privilege_guard='on'; UPDATE profiles SET is_active=false WHERE id='${ADMIN}'; SET quackmaster.bypass_profile_privilege_guard='off'`;
+    expect(await as(pg, ADMIN, () => err(pg.exec(sql)))).toMatch(/cannot deactivate your own account/);
+    await pg.exec(`SET quackmaster.bypass_profile_privilege_guard='off'`);
+    expect(await apply(pg, ADMIN, ADMIN, false)).toMatchObject({ success: false, error: 'invalid_target' });
+    expect(await active(pg, ADMIN)).toBe(true);
+  });
+  it('(a) multi-row UPDATE containing your own row is refused as a whole', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id in ('${ADMIN}','${STAFF}')`)))).toMatch(/cannot deactivate your own account/);
+    expect(await active(pg, STAFF)).toBe(true);
+  });
+  it('(b) another admin deactivating that admin still works, directly and through the RPC, and the direct change is ledgered', async () => {
+    const pg = await db();
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE profiles SET is_active=false, deactivated_at=now() WHERE id='${ADMIN}'`)))).toBeNull();
+    expect(await active(pg, ADMIN)).toBe(false);
+    const l = await ledger(pg, 'deactivated');
+    expect(l.length).toBe(1);
+    expect(l[0]).toMatchObject({ entity_type: 'profile', entity_id: ADMIN, module: 'users', operation: 'update', user_id: ADMIN2, b: { is_active: true }, a: { is_active: false }, m: { source: 'profiles_trigger' } });
+    await asService(pg, () => pg.exec(`UPDATE profiles SET is_active=true, deactivated_at=null WHERE id='${ADMIN}'`));   // service_role maintenance, then the RPC path
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await apply(pg, ADMIN2, ADMIN, false)).toMatchObject({ success: true });
+    const r = await ledger(pg, 'deactivated');
+    expect(r.length).toBe(1);                                               // the RPC writes its own row; the trigger does not double it
+    expect(r[0].m).toMatchObject({ source: 'admin_set_user_active' });
+  });
+  it('a non-admin cannot deactivate anyone, and the last-admin guard still comes first for the sole admin', async () => {
+    const pg = await db();
+    expect(await as(pg, STAFF, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${STAFF}'`)))).toMatch(/cannot change|privileged|only an admin|permission/i);
+    expect(await active(pg, STAFF)).toBe(true);
+    await as(pg, ADMIN, () => setRole(pg, ADMIN2, 'staff'));
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`)))).toMatch(/last_active_admin/);
+  });
+  it('service_role maintenance is unchanged: it can deactivate and reactivate a non-last admin (ledgered as system)', async () => {
+    const pg = await db();
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN2}'`)))).toBeNull();
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET is_active=true WHERE id='${ADMIN2}'`)))).toBeNull();
+    expect((await ledger(pg)).map((x) => [x.action, x.user_id, x.m])).toEqual([
+      ['deactivated', null, { source: 'profiles_trigger', actor: 'system' }],
+      ['reactivated', null, { source: 'profiles_trigger', actor: 'system' }]]);
+  });
+  it('signup, last_login / full_name updates and other non-role/non-active updates write nothing and are not blocked', async () => {
+    const pg = await db();
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET last_login=now(), full_name='A' WHERE id='${ADMIN}'`)))).toBeNull();
+    expect(await as(pg, STAFF, () => err(pg.exec(`UPDATE profiles SET last_login=now() WHERE id='${STAFF}'`)))).toBeNull();
+    await pg.exec(`INSERT INTO auth.users (id, email) VALUES ('${NOBODY}', 'n@x.test') ON CONFLICT DO NOTHING`);
+    expect(await as(pg, NOBODY, () => err(pg.exec(`INSERT INTO profiles (id, full_name, role) VALUES ('${NOBODY}','N','admin')`)))).toBeNull();
+    expect(await ledger(pg)).toEqual([]);
+  });
+  it('an auth.users cascade (delete of a non-last admin) is unchanged and the last admin is still protected', async () => {
+    const pg = await db();
+    expect(await err(pg.exec(`DELETE FROM profiles WHERE id='${ADMIN2}'`))).toBeNull();
+    expect(await err(pg.exec(`DELETE FROM profiles WHERE id='${ADMIN}'`))).toMatch(/last_active_admin/);
+  });
+  it('fail closed: with the ledger broken, a direct deactivation by another admin is rolled back', async () => {
+    const pg = await db();
+    await pg.exec(`ALTER TABLE data_ledger ADD CONSTRAINT zz_ledger_down2 CHECK (action NOT IN ('deactivated','reactivated')) NOT VALID`);
+    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`)))).toMatch(/zz_ledger_down2|data_ledger/);
+    expect(await active(pg, ADMIN)).toBe(true);
+    expect(MIG090).toMatch(/H10: a direct is_active change/);
+  });
+  it('the header documents it, and the rollback removes it (the 071 behaviour is back: no self-deactivation guard, no direct ledger)', async () => {
+    expect(MIG090.slice(0, MIG090.indexOf('*/'))).toMatch(/cannot deactivate their OWN row on any path/);
+    const pg = await db();
+    await pg.exec(RB090);
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`)))).toBeNull();
+    expect(await ledger(pg)).toEqual([]);
   });
 });
 

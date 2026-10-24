@@ -38,6 +38,8 @@
          - the last ACTIVE admin cannot be demoted, deactivated or deleted, for ANY caller (including service_role and the owner),
            and the quackmaster.bypass_profile_privilege_guard flag does not skip it. Recovery is the written BREAK-GLASS step below
            (never an improvised trigger drop).
+         - an admin cannot deactivate their OWN row on any path (direct UPDATE or RPC); another admin still can. A direct is_active change
+           (not through the 071 RPC, which writes its own entry) is ledgered by this trigger (deactivated / reactivated, fail closed).
     2. profiles AFTER UPDATE trigger trg_profiles_role_audit: every role / outlet change writes one data_ledger entry
        (action role_changed, operation 'update') with before/after role, outlet and tags. Moving a user AWAY from procurement
        CLEARS their tags (each removal is its own ledgered entry, below).
@@ -62,10 +64,10 @@
     5. Write down who, when and why: 090's audit triggers are off between steps 2 and 4, so the role changes made in step 3 get NO data_ledger row.
   (Note, tested: with 090 live, a service_role promote of a replacement admin is itself allowed; only demoting/deactivating/deleting the LAST active admin
   is refused. If a replacement can be promoted first, the lost account can then be demoted with 090 still live and the rollback is not needed.)
-  Ledger (fail closed): only the allowed operations (insert/update/delete/event) are used, and the two audit triggers INSERT INTO
+  Ledger (fail closed): only the allowed operations (insert/update/delete/event) are used, and the audit triggers (role/outlet, tags, direct is_active) INSERT INTO
   data_ledger DIRECTLY (not through _append_data_ledger, which swallows a failed insert into a WARNING and is left untouched). If the
   ledger insert fails, the role / outlet / tag change is rolled back with it, on every path (role RPC, direct update, admin_set_procurement_tags,
-  clearing tags on leaving procurement, service_role). Consequence to know: if data_ledger is broken, role and tag changes stop until it is fixed.
+  clearing tags on leaving procurement, direct deactivate/reactivate, service_role). Consequence to know: if data_ledger is broken, role and tag changes stop until it is fixed.
 */
 
 DO $$ BEGIN
@@ -92,6 +94,7 @@ DECLARE
   v_uid uuid := auth.uid();
   v_jwt_role text := coalesce(auth.jwt() ->> 'role', current_setting('request.jwt.claim.role', true), '');
   v_others integer;
+  v_email text := '';
 BEGIN
   IF TG_OP = 'UPDATE'
      AND (NEW.role IS DISTINCT FROM OLD.role OR NEW.assigned_outlet_id IS DISTINCT FROM OLD.assigned_outlet_id)
@@ -112,6 +115,29 @@ BEGIN
     IF v_others < 1 THEN
       RAISE EXCEPTION 'last_active_admin: the last active administrator cannot be demoted, deactivated or removed' USING ERRCODE = '23514';
     END IF;
+  END IF;
+
+  -- H10: an admin cannot deactivate their OWN row on any path (direct UPDATE, RPC, ...). Another admin still can (and the last one is protected above).
+  -- The bypass flag does not skip this; service_role / the owner have no auth.uid() and are not affected.
+  IF TG_OP = 'UPDATE' AND v_uid IS NOT NULL AND OLD.id = v_uid AND OLD.role = 'admin' AND OLD.is_active AND NOT NEW.is_active THEN
+    RAISE EXCEPTION 'profiles: you cannot deactivate your own account' USING ERRCODE = '42501';
+  END IF;
+
+  -- H10: a direct is_active change (not the 071 RPC, which sets the bypass flag and writes its own entry) is ledgered here. Direct insert, so a
+  -- failed audit aborts the change (fail closed).
+  IF TG_OP = 'UPDATE' AND NEW.is_active IS DISTINCT FROM OLD.is_active
+     AND coalesce(current_setting('quackmaster.bypass_profile_privilege_guard', true), '') <> 'on' THEN
+    IF v_uid IS NOT NULL THEN
+      BEGIN   -- only the e-mail lookup is best-effort; the ledger insert below is not
+        SELECT COALESCE(u.email::text, '') INTO v_email FROM auth.users u WHERE u.id = v_uid;
+      EXCEPTION WHEN OTHERS THEN v_email := '';
+      END;
+    END IF;
+    INSERT INTO public.data_ledger (user_id, user_email, action, entity_type, entity_id, module, operation, before_data, after_data, metadata)
+    VALUES (v_uid, COALESCE(v_email, ''), CASE WHEN NEW.is_active THEN 'reactivated' ELSE 'deactivated' END, 'profile', OLD.id::text, 'users', 'update',
+      jsonb_build_object('is_active', OLD.is_active, 'deactivated_at', OLD.deactivated_at),
+      jsonb_build_object('is_active', NEW.is_active, 'deactivated_at', NEW.deactivated_at),
+      CASE WHEN v_uid IS NULL THEN jsonb_build_object('source', 'profiles_trigger', 'actor', 'system') ELSE jsonb_build_object('source', 'profiles_trigger') END);
   END IF;
 
   IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
