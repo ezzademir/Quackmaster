@@ -624,6 +624,63 @@ describe('085_rollback refuses to run while 090 is live', () => {
   });
 });
 
+describe('090 break-glass: lost or locked only admin (rollback, then promote, then re-apply)', () => {
+  const only = async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => setRole(pg, ADMIN2, 'staff'));      // ADMIN is now the only active admin; assume nobody can sign in as them
+    return pg;
+  };
+  const triggers = async (pg: PGlite, tbl: string) => (await rows(pg, `select tgname from pg_trigger where tgrelid='public.${tbl}'::regclass and not tgisinternal order by 1`)).map((r) => r.tgname);
+  const activeAdmins = async (pg: PGlite) => ((await one(pg, `select count(*)::int n from profiles where role='admin' and is_active`)).n as number);
+  it('with 090 live the lost only admin cannot be demoted, deactivated or deleted by anyone, service_role included', async () => {
+    const pg = await only();
+    for (const sql of [`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`, `UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`, `DELETE FROM profiles WHERE id='${ADMIN}'`]) {
+      expect(await asService(pg, () => err(pg.exec(sql))), sql).toMatch(/last_active_admin/);
+    }
+    expect(await activeAdmins(pg)).toBe(1);
+  });
+  it('rollback 090, then promote the replacement and demote the lost account as service_role: works, with the 062/071 guard still in place and no trigger dropped', async () => {
+    const pg = await only();
+    const triggersBefore = await triggers(pg, 'profiles');
+    await pg.exec(RB090);
+    expect(await triggers(pg, 'profiles')).toEqual(['trg_profiles_enforce_privileged_columns']);
+    expect(await asService(pg, () => err(pg.exec(`BEGIN; UPDATE profiles SET role='admin' WHERE id='${STAFF}'; UPDATE profiles SET role='staff', is_active=false, deactivated_at=now() WHERE id='${ADMIN}'; COMMIT;`)))).toBeNull();
+    expect(await roleOf(pg, STAFF)).toBe('admin');
+    expect(await roleOf(pg, ADMIN)).toBe('staff');
+    expect(await activeAdmins(pg)).toBe(1);
+    // the untouched 062/071 protection still holds: a non-admin signed-in user cannot promote themselves
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE profiles SET role='admin' WHERE id='${BUYER_QT}'`)))).toMatch(/cannot change/);
+    // re-apply: the guard is back, the new admin is the protected last one, and the audit works again
+    expect(await err(pg.exec(MIG090))).toBeNull();
+    expect(await triggers(pg, 'profiles')).toEqual(triggersBefore);
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${STAFF}'`)))).toMatch(/last_active_admin/);
+    expect(await as(pg, STAFF, () => setRole(pg, BUYER_MH, 'staff'))).toMatchObject({ success: true });
+    expect((await ledger(pg, 'role_changed')).length).toBeGreaterThanOrEqual(2);
+  });
+  it('the role changes made while 090 is off are not ledgered (the runbook says to record them by hand)', async () => {
+    const pg = await only();
+    await pg.exec(RB090);
+    await pg.exec('DELETE FROM data_ledger');
+    await asService(pg, () => pg.exec(`UPDATE profiles SET role='admin' WHERE id='${STAFF}'`));
+    expect(await ledger(pg, 'role_changed')).toEqual([]);
+  });
+  it('a service_role promote of a replacement is already allowed with 090 live (then the lost admin can be demoted without any rollback)', async () => {
+    const pg = await only();
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='admin' WHERE id='${STAFF}'`)))).toBeNull();
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`)))).toBeNull();
+    expect(await activeAdmins(pg)).toBe(1);
+  });
+  it('the written step is in the migration header and the rollback header: only on Ezzad\'s word, rollback then promote, no improvised trigger drop', () => {
+    const head = MIG090.slice(0, MIG090.indexOf('*/'));
+    expect(head).toMatch(/BREAK-GLASS/);
+    expect(head).toMatch(/ONLY on Ezzad's explicit word/);
+    expect(head).toMatch(/never improvise a\s+trigger drop/);
+    expect(head).toMatch(/090_rollback\.sql[\s\S]*promote the replacement[\s\S]*RE-APPLY/);
+    expect(head).not.toMatch(/Recovery means deliberately dropping the trigger/);
+    expect(RB090).toMatch(/BREAK-GLASS use:[\s\S]*ONLY on Ezzad's explicit word[\s\S]*No trigger drop/);
+  });
+});
+
 describe('090 rollback (exact restore) and order independence', () => {
   const triggers = async (pg: PGlite, t: string) => (await rows(pg, `select tgname from pg_trigger where tgrelid='public.${t}'::regclass and not tgisinternal order by 1`)).map((r) => r.tgname);
   const defs = async (pg: PGlite) => Object.fromEntries((await rows(pg, `select proname, pg_get_functiondef(oid) def from pg_proc where pronamespace='public'::regnamespace`)).map((r) => [r.proname as string, String(r.def)]));
@@ -683,6 +740,15 @@ describe('090 files: documented order, snapshot, pre-apply requirement, version 
     const st = Object.fromEntries(stamps);
     expect(st['090'] > st['088']).toBe(true);
     if (st['089']) expect(st['089'] > st['090']).toBe(true);
+  });
+  it('the pre-apply checklist names every item Clive asked for', () => {
+    const head = MIG090.slice(0, MIG090.indexOf('*/'));
+    expect(head).toMatch(/BYPASSRLS/);
+    expect(head).toMatch(/no TRUNCATE|NO privilege at all[^\n]*TRUNCATE/);
+    expect(head).toMatch(/'email' line exactly once/);
+    expect(head).toMatch(/data_ledger ACCEPTS the new rows/);
+    expect(head).toMatch(/REVERSE-ORDER|reverse-order ROLLBACK REHEARSAL/i);
+    expect(head).toMatch(/exactly 32 untagged purchase orders/);
   });
   it('the migration header documents apply order, rollback order, the live snapshot, the seeded-copy JWT run and the scope', () => {
     const head = MIG090.slice(0, MIG090.indexOf('*/'));

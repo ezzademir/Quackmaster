@@ -23,14 +23,21 @@
   PRE-APPLY REQUIREMENT: a run on a SEEDED COPY of live with REAL JWTs (an admin, a staff user, a procurement user, and the only admin)
   must pass before this is applied to live: the PGlite tests simulate auth.uid() and cannot prove the PostgREST/JWT path.
   Checklist: procurement and staff each fail to change their own role/tags (RPC and direct update); admin changes another user's role and
-  tags and both appear in data_ledger with old and new values; the sole active admin cannot be demoted, deactivated or deleted.
+  tags and both appear in data_ledger with old and new values; the sole active admin cannot be demoted, deactivated or deleted. ALSO, on that copy:
+    a. the owner of each new SECURITY DEFINER function has BYPASSRLS (pg_roles.rolbypassrls) and the functions carry search_path = public, pg_temp;
+    b. authenticated and anon hold NO privilege at all on user_entities except SELECT for authenticated (no TRUNCATE, REFERENCES, TRIGGER);
+    c. get_users_management_data() contains the 'email' line exactly once (the in-place patch did not duplicate it);
+    d. data_ledger ACCEPTS the new rows (role_changed and tags_changed, operation 'update'): one real role change and one tag change as admin, both ledgered;
+    e. a reverse-order ROLLBACK REHEARSAL: 090, 088, 087, 085, 084 in that order (and 085 refuses while 090 is live), then apply 084, 085, 087, 088, 090 again;
+    f. a same-day count of exactly 32 untagged purchase orders (the number the tag backfill was written against) before 084/085 are applied.
 
   What it does
     1. profiles BEFORE UPDATE/DELETE trigger trg_profiles_role_guard:
          - role / assigned_outlet_id change: signed-in callers must be an active admin AND not the row's own user. Applies to the
            admin RPC AND to direct table updates (the existing 062/071 trigger stays; this closes the admin self-edit gap).
          - the last ACTIVE admin cannot be demoted, deactivated or deleted, for ANY caller (including service_role and the owner),
-           and the quackmaster.bypass_profile_privilege_guard flag does not skip it. Recovery means deliberately dropping the trigger.
+           and the quackmaster.bypass_profile_privilege_guard flag does not skip it. Recovery is the written BREAK-GLASS step below
+           (never an improvised trigger drop).
     2. profiles AFTER UPDATE trigger trg_profiles_role_audit: every role / outlet change writes one data_ledger entry
        (action role_changed, operation 'update') with before/after role, outlet and tags. Moving a user AWAY from procurement
        CLEARS their tags (each removal is its own ledgered entry, below).
@@ -45,6 +52,16 @@
        NOTE: 090_rollback.sql puts the live get_users_management_data back by OVERWRITING THE WHOLE FUNCTION with the captured live text; it does
        not reverse the patch. Any later migration that changes that function must be rolled back (or re-based) before 090 is rolled back.
     All new SECURITY DEFINER functions pin search_path = public, pg_temp (pg_temp last).
+  BREAK-GLASS (the only active admin is lost or locked out and must be removed or replaced). Run ONLY on Ezzad's explicit word; never improvise a
+  trigger drop, a DISABLE TRIGGER, or a bypass flag (the flag does not skip this guard anyway).
+    1. Confirm in SQL (read-only) that exactly one active admin exists and that the account is really unreachable.
+    2. Run supabase/rollbacks/090_rollback.sql (restores the pre-090 guard; the last-admin rule is gone with it).
+    3. As service_role / the owner, in one transaction: promote the replacement (UPDATE profiles SET role='admin' WHERE id = <replacement>), then
+       demote or deactivate the lost account. This goes through the existing 062/071 guard, which stays in place.
+    4. Check: SELECT count(*) FROM profiles WHERE role='admin' AND is_active  -> at least 1 (the replacement), then RE-APPLY this file (090 is re-runnable).
+    5. Write down who, when and why: 090's audit triggers are off between steps 2 and 4, so the role changes made in step 3 get NO data_ledger row.
+  (Note, tested: with 090 live, a service_role promote of a replacement admin is itself allowed; only demoting/deactivating/deleting the LAST active admin
+  is refused. If a replacement can be promoted first, the lost account can then be demoted with 090 still live and the rollback is not needed.)
   Ledger (fail closed): only the allowed operations (insert/update/delete/event) are used, and the two audit triggers INSERT INTO
   data_ledger DIRECTLY (not through _append_data_ledger, which swallows a failed insert into a WARNING and is left untouched). If the
   ledger insert fails, the role / outlet / tag change is rolled back with it, on every path (role RPC, direct update, admin_set_procurement_tags,

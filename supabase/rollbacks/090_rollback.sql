@@ -13,6 +13,9 @@
 -- OVERWRITES get_users_management_data() WHOLE with the captured live text (it does not reverse the 090 patch). If a later migration has changed that
 -- function since 090, roll that migration back (or re-base this file's copy) first, or its change is erased here. 090 did not change
 -- profiles_enforce_privileged_columns, so re-creating it is a no-op today.
+-- BREAK-GLASS use: this file is also the written step for a lost/locked ONLY admin (see the BREAK-GLASS section in the 090 migration header):
+-- run it ONLY on Ezzad's explicit word, then promote the replacement admin as service_role (existing 062/071 guard), demote the lost account, check that
+-- an active admin exists, and re-apply 090. No trigger drop, no DISABLE TRIGGER. Role changes made while 090 is off are not ledgered.
 -- Tags cleared by 090 when a user left procurement, and the ledger rows 090 wrote, are NOT restored/deleted (the ledger is append-only).
 
 DROP TRIGGER IF EXISTS trg_profiles_role_audit ON public.profiles;
