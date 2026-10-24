@@ -551,8 +551,15 @@ BEGIN
         'purchase_order_item_id', v_line->>'purchase_order_item_id',
         'message', 'Invoice unit price must be a number (0 or more), or left blank.');
     END IF;
-    -- optional optimistic check: the screen sends the total it showed; if someone else received since, refuse
-    -- instead of silently overwriting (e.g. +4 typed on a stale 5 would otherwise land on 9 when it is now 9)
+    -- optimistic check: the screen sends the total it showed; if someone else received since, refuse instead of silently
+    -- overwriting (e.g. +4 typed on a stale 5 would otherwise land on 9 when it is now 9). MANDATORY for procurement
+    -- (round 2, F8: the cumulative-total contract is exactly where a stale screen or a retried request double-posts);
+    -- optional for admin / staff, whose own tools (adjust_po_receipt, scripts) send totals they just read.
+    IF public.is_procurement_user() AND NULLIF(btrim(v_line->>'expected_previous_received'), '') IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'error', 'expected_previous_received_required',
+        'purchase_order_item_id', v_line->>'purchase_order_item_id', 'current_received', v_cur,
+        'message', 'Send expected_previous_received (the received total you saw) with every line.');
+    END IF;
     IF NULLIF(v_line->>'expected_previous_received', '') IS NOT NULL
        AND (v_line->>'expected_previous_received')::numeric <> v_cur THEN
       RETURN jsonb_build_object('success', false, 'error', 'stale_received_quantity',

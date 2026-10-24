@@ -8,6 +8,7 @@ import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_adm
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
 import { receivingUom } from './procurementPayloads';
+import { buildDeliveryLines } from './receiving';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
@@ -210,6 +211,12 @@ const err = async (p: Promise<unknown>) => {
   }
 };
 
+
+// F8: procurement callers must send expected_previous_received. This builds a one-line payload the way the screen does:
+// it reads the line's current received total and sends it back. `body` is the JSON members after the item id.
+const withPrev = (line: string, body: string) =>
+  `('[{"purchase_order_item_id":"${line}",' || '"expected_previous_received":' || (select quantity_received from purchase_order_items where id='${line}')::text || ',' || '${body}' || '}]')`;
+
 describe('084/085 procurement role RLS', () => {
   it('procurement cannot read costing, recipes, sales, outlet stock or other users', async () => {
     const pg = await db();
@@ -300,7 +307,7 @@ describe('084/085 procurement role RLS', () => {
   it('receives within tolerance with DO + invoice price; > 5% price is flagged not blocked; no over-tolerance, no direct receipt edits', async () => {
     const pg = await db();
     const recv = (qty: number, price: number, doc = "'DO-1'") =>
-      rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":${qty},"quantity_uom":"kg","invoice_unit_price":${price}}]'::jsonb, ${doc}) r`);
+      rows(pg, `select record_po_delivery('${PO_QT}', ${withPrev(L_QT, `"quantity_received":${qty},"quantity_uom":"kg","invoice_unit_price":${price}`)}::jsonb, ${doc}) r`);
     expect((await as(pg, BUYER_QT, () => recv(5, 10, 'NULL')))[0].r).toMatchObject({ success: false, error: 'do_or_invoice_required' });
     expect((await as(pg, BUYER_QT, () => recv(12, 10)))[0].r).toMatchObject({ success: false, error: 'over_tolerance_needs_admin_reason' });
     expect((await as(pg, BUYER_MH, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1}]'::jsonb, 'DO') r`)))[0].r)
@@ -386,7 +393,7 @@ describe('084/085 procurement role RLS', () => {
   it('receipt ticket: po_receipt_tickets is empty after every path through record_po_delivery (commit and rollback)', async () => {
     const pg = await db();
     const tickets = () => c0(pg, 'select count(*) n from po_receipt_tickets');
-    const line = (q: string, extra = '') => `[{"purchase_order_item_id":"${L_QT}","quantity_received":${q}${extra}}]`;
+    const line = (q: string, extra = '') => `[{"purchase_order_item_id":"${L_QT}","quantity_received":${q},"expected_previous_received":0${extra}}]`;
     const call = (po: string, lines: string, doc = "'DO-T'") =>
       `select record_po_delivery('${po}', '${lines}'::jsonb, ${doc}) r`;
     // runs the call in ONE transaction as uid; checks the table inside the transaction (before end), then
@@ -429,7 +436,7 @@ describe('084/085 procurement role RLS', () => {
       ['RAISE: invalid quantity', BUYER_QT, call(PO_QT, line('"abc"')), (o) => expect(o.error).toBeTruthy()],
       // success paths: procurement (ticket issued + consumed) and staff (no ticket)
       ['success (procurement)', BUYER_QT, call(PO_QT, line('1')), (o) => expect(o.r).toMatchObject({ success: true })],
-      ['success (staff)', STAFF, call(PO_QT, line('1')), (o) => expect(o.r).toMatchObject({ success: true })],
+      ['success (staff, no expected_previous_received needed)', STAFF, call(PO_QT, `[{"purchase_order_item_id":"${L_QT}","quantity_received":1}]`), (o) => expect(o.r).toMatchObject({ success: true })],
     ];
     for (const end of ['rollback', 'commit'] as const) {
       for (const [name, uid, sql, check] of paths) {
@@ -579,7 +586,7 @@ describe('PR #92 review fixes: B1 pending supplier blocked on POs and bills (DB 
     const pg = await db();
     await pg.exec(`UPDATE suppliers SET status='inactive' WHERE id='${SUP}'`);
     const r = await as(pg, BUYER_QT, () =>
-      rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":2,"quantity_uom":"kg"}]'::jsonb, 'DO-1') r`));
+      rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":2,"expected_previous_received":0,"quantity_uom":"kg"}]'::jsonb, 'DO-1') r`));
     expect(r[0].r).toMatchObject({ success: true });
   });
 
@@ -601,7 +608,7 @@ describe('PR #92 review fixes: B1 pending supplier blocked on POs and bills (DB 
 
 describe('PR #92 review fixes: B2 received quantity is cumulative and can never go down via record_po_delivery', () => {
   const recv = (pg: PGlite, qty: number | string, extra = '', po = PO_QT, line = L_QT) =>
-    rows(pg, `select record_po_delivery('${po}', '[{"purchase_order_item_id":"${line}","quantity_received":${qty},"quantity_uom":"kg"${extra}}]'::jsonb, 'DO-B2') r`);
+    rows(pg, `select record_po_delivery('${po}', ${withPrev(line, `"quantity_received":${qty},"quantity_uom":"kg"${extra}`)}::jsonb, 'DO-B2') r`);
   const hub = async (pg: PGlite) => Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${RM}'`))[0].q);
   const lineQty = async (pg: PGlite) => Number((await rows(pg, `select quantity_received::float q from purchase_order_items where id='${L_QT}'`))[0].q);
   const tickets = (pg: PGlite) => c0(pg, 'select count(*) n from po_receipt_tickets');
@@ -700,7 +707,7 @@ describe('PR #92 review fixes: S2 / S3 PO line guard', () => {
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO purchase_order_items (purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price) VALUES ('${DRAFT}','${RM}',1,1,1)`)))).toMatch(/receive_via_record_po_delivery/);
     expect(Number((await rows(pg, `select quantity_received::float q from purchase_order_items where id='${LINE_D}'`))[0].q)).toBe(0);
     // the sanctioned path still moves received quantity (runs as the function owner)
-    expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1,"quantity_uom":"kg"}]'::jsonb, 'DO') r`)))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1,"expected_previous_received":0,"quantity_uom":"kg"}]'::jsonb, 'DO') r`)))[0].r).toMatchObject({ success: true });
   });
 });
 
@@ -1024,7 +1031,7 @@ describe('S7: procurement actions are ledgered server-side (data_ledger is close
 
 describe('S8: record_po_delivery validates unit of measure and survives a null invoice price', () => {
   const recv = (pg: PGlite, extra: string, qty = 2) =>
-    rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":${qty}${extra}}]'::jsonb, 'DO-S8') r`);
+    rows(pg, `select record_po_delivery('${PO_QT}', ${withPrev(L_QT, `"quantity_received":${qty}${extra}`)}::jsonb, 'DO-S8') r`);
   const hub = async (pg: PGlite) => Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${RM}'`))[0].q);
   it('a unit that is not the PO line unit is refused and nothing is posted; matching (any case) or omitted unit works and defaults to the line unit', async () => {
     const pg = await db();                                     // line L_QT is purchased in kg
@@ -1528,5 +1535,34 @@ describe('F7: the default-deny also covers VIEWS and SECURITY DEFINER functions 
     expect(/SECURITY\s+DEFINER/i.test(leak.slice(0, leak.indexOf('AS $')))).toBe(true);
     expect(/security_invoker\s*=\s*(true|on)/i.test(leak.slice(leak.indexOf('CREATE VIEW'), leak.indexOf(' AS', leak.indexOf('CREATE VIEW'))))).toBe(false);
     expect(new RegExp(`REVOKE\\s+(?:ALL|EXECUTE)\\s+ON\\s+FUNCTION\\s+(?:public\\.)?leaky\\b[^;]*FROM[^;]*\\bPUBLIC\\b[^;]*\\bauthenticated\\b`, 'i').test(leak)).toBe(false);
+  });
+});
+
+describe('F8: expected_previous_received is mandatory for procurement callers', () => {
+  const hub = async (pg: PGlite) => Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${RM}'`))[0].q);
+  const send = (pg: PGlite, qty: number, extra: string) =>
+    rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":${qty}${extra}}]'::jsonb, 'DO-F8') r`);
+  it('procurement: missing, null or blank is refused, nothing posts; a number goes through; a stale one is still stale', async () => {
+    const pg = await db();
+    for (const extra of ['', ',"expected_previous_received":null', ',"expected_previous_received":""', ',"expected_previous_received":"  "']) {
+      expect((await as(pg, BUYER_QT, () => send(pg, 3, extra)))[0].r)
+        .toMatchObject({ success: false, error: 'expected_previous_received_required', current_received: 0 });
+    }
+    expect(await hub(pg)).toBe(0);
+    expect(await c0(pg, 'select count(*) n from po_receipt_records')).toBe(0);
+    expect(await c0(pg, 'select count(*) n from po_receipt_tickets')).toBe(0);
+    expect((await as(pg, BUYER_QT, () => send(pg, 3, ',"expected_previous_received":0')))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, BUYER_QT, () => send(pg, 5, ',"expected_previous_received":0')))[0].r).toMatchObject({ success: false, error: 'stale_received_quantity', current_received: 3 });
+    expect(await hub(pg)).toBe(3);
+  });
+  it('admin and staff are not forced (their tools send totals they just read), the check is by caller', async () => {
+    const pg = await db();
+    expect((await as(pg, ADMIN, () => send(pg, 2, '')))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, STAFF, () => send(pg, 4, '')))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(4);
+  });
+  it('the screen payload builder always sends it (so the mandatory rule never blocks the UI)', () => {
+    const lines = buildDeliveryLines([{ id: 'a', quantity_received: 5 }, { id: 'b', quantity_received: null }], { a: { qty: '4' }, b: { qty: '1' } });
+    expect(lines.map((l) => l.expected_previous_received)).toEqual([5, 0]);
   });
 });
