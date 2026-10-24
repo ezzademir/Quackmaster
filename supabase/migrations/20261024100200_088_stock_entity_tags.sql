@@ -327,11 +327,14 @@ DECLARE
   v_lines jsonb := '[]'::jsonb;
   v_before jsonb;
 BEGIN
-  IF NOT public.is_authenticated_active_staff() THEN
-    RETURN jsonb_build_object('success', false, 'error', 'forbidden', 'message', 'Active admin or staff required');
-  END IF;
   IF auth.uid() IS NULL THEN
     RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
+  END IF;
+  -- ADMIN ONLY (Ezzad, 24 Oct 2026: "nobody can cancel the purchase order without the approval of the admin"). The live function
+  -- also let plain active staff cancel any PO; that is closed here, in the database, so a direct RPC call by staff, procurement
+  -- or anon is refused too. (A request / approval path for non-admins is a separate follow-up, 089.)
+  IF NOT public.is_profiles_admin() THEN
+    RETURN jsonb_build_object('success', false, 'error', 'forbidden', 'message', 'Only an admin can cancel a purchase order');
   END IF;
 
   IF p_po_id IS NULL THEN
@@ -345,7 +348,6 @@ BEGIN
   IF v_po.status = 'cancelled' THEN
     RETURN jsonb_build_object('success', false, 'error', 'already_cancelled');
   END IF;
-
   SELECT COALESCE(
     jsonb_agg(
       jsonb_build_object(

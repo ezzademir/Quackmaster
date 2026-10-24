@@ -1349,7 +1349,7 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     await as(pg, BUYER_QT, () => deliver(pg, 6, PO_QT, L_QT, 4));
     expect(await split(pg)).toEqual([{ entity_code: 'MH', q: 5 }, { entity_code: 'QT', q: 6 }]);
     expect(await poState(pg)).toEqual([{ status: 'partial', rcv: 6 }]);
-    expect((await as(pg, STAFF, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true, po_kept_as_cancelled: true });
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true, po_kept_as_cancelled: true });
     expect(await split(pg)).toEqual([{ entity_code: 'MH', q: 5 }]);             // MH untouched, QT back to 0, no UNTAGGED
     expect(await qoh(pg)).toBe(5);
     expect(await poState(pg)).toEqual([{ status: 'cancelled', rcv: 0 }]);
@@ -1436,6 +1436,40 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     expect(def).toMatch(/DELETE FROM public\.purchase_orders/);
     expect(await err(pg.exec(`SELECT 1 FROM pg_proc WHERE proname='_po_cancel_plan'`))).toBeNull();
     expect(await count(pg, `select * from pg_proc where proname='_po_cancel_plan'`)).toBe(0);
+  });
+  it('G2 (Ezzad): only an admin can cancel, in the database: staff, procurement (any tag) and anon are refused, even by direct RPC; nothing changes', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 4));
+    const snap = async () => ({ mov: await mov(pg), qoh: await qoh(pg), po: await poState(pg), rec: await count(pg, 'select * from po_receipt_records'),
+      ledger: await count(pg, `select * from data_ledger where entity_type='purchase_order' and action='cancelled'`) });
+    const before = await snap();
+    for (const uid of [STAFF, BUYER_QT, BUYER_MH]) {
+      expect((await as(pg, uid, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: false, error: 'forbidden', message: expect.stringMatching(/only an admin/i) });
+    }
+    // anon: no EXECUTE at all (and the body would refuse a caller without auth.uid() anyway)
+    await pg.exec('SET ROLE anon');
+    const anonErr = await err(pg.query(CANCEL(PO_QT)));
+    await pg.exec('RESET ROLE');
+    expect(anonErr).toMatch(/permission denied/);
+    // an unauthenticated authenticated-role call (no uid) is refused as not_authenticated, ahead of the role check
+    await pg.exec(`UPDATE test_ctx SET uid=NULL; SET ROLE authenticated`);
+    const noUid = (await rows(pg, CANCEL(PO_QT)))[0].r;
+    await pg.exec('RESET ROLE');
+    expect(noUid).toMatchObject({ success: false, error: 'not_authenticated' });
+    expect(await snap()).toEqual(before);
+    // an active admin still can (and an inactive admin cannot)
+    await pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`);
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: false, error: 'forbidden' });
+    await pg.exec(`UPDATE profiles SET is_active=true WHERE id='${ADMIN}'`);
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true });
+  });
+  it('G2: the 088 rollback restores the live behaviour (staff could cancel) in either rollback order', async () => {
+    for (const order of [['088'], ['085', '088']]) {
+      const pg = await db();                       // no receipt records: the live cancel (which always deletes) can succeed
+      for (const n of order) await pg.exec(n === '085' ? RB085 : RB088);
+      expect(String((await rows(pg, `select pg_get_functiondef('public.cancel_purchase_order(uuid)'::regprocedure) d`))[0].d)).toMatch(/is_authenticated_active_staff\(\)/);
+      expect((await as(pg, STAFF, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true });
+    }
   });
   it('G6: cancel_purchase_order grants are stated by 088: authenticated only, no PUBLIC, no anon (and they survive the rollback)', async () => {
     const pg = await db();

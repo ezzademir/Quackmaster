@@ -83,6 +83,8 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
       return 'Cannot cancel: hub inventory row is missing for a received material.';
     case 'po_not_found':
       return 'This purchase order no longer exists.';
+    case 'forbidden':
+      return 'Only an admin can cancel a purchase order.';
     default:
       return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
   }
