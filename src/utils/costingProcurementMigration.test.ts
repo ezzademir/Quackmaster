@@ -36,8 +36,14 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT uid FRO
 CREATE TABLE profiles (id uuid primary key, full_name text, role text NOT NULL DEFAULT 'pending',
   is_active boolean NOT NULL DEFAULT true, assigned_outlet_id uuid,
   CONSTRAINT profiles_role_check CHECK (role IN ('admin','staff','pending','supervisor')));
-CREATE FUNCTION public.is_profiles_admin() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS
-  $$ SELECT EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin' AND is_active) $$;
+-- verbatim live definition (pg_get_functiondef, project fknrfntqycfrkaihwngg, 2026-10-24): VOLATILE, SECURITY DEFINER,
+-- proconfig = {search_path=public} and NO function-level row_security setting, so the SET LOCAL leaks to the end of the transaction.
+CREATE FUNCTION public.is_profiles_admin() RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' VOLATILE AS
+  $$ DECLARE ok boolean; BEGIN
+       SET LOCAL row_security = off;
+       SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active) INTO ok;
+       RETURN COALESCE(ok, false);
+     END; $$;
 CREATE FUNCTION public.is_authenticated_active_staff() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS
   $$ SELECT auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin','staff') AND is_active) $$;
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -649,6 +655,55 @@ describe('PR #92 review fixes: S2 / S3 PO line guard', () => {
     expect(Number((await rows(pg, `select quantity_received::float q from purchase_order_items where id='${LINE_D}'`))[0].q)).toBe(0);
     // the sanctioned path still moves received quantity (runs as the function owner)
     expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":1,"quantity_uom":"kg"}]'::jsonb, 'DO') r`)))[0].r).toMatchObject({ success: true });
+  });
+});
+
+describe('PR #92 review fixes: S4 is_profiles_admin() row_security leak', () => {
+  // Proposed (NOT applied live): scope row_security to the call with a function-level SET, drop the body-level SET LOCAL.
+  const PROPOSED_FIX = `
+    CREATE OR REPLACE FUNCTION public.is_profiles_admin() RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+      SET search_path TO 'public' SET row_security TO 'off' VOLATILE AS $$
+    DECLARE ok boolean;
+    BEGIN
+      SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active) INTO ok;
+      RETURN COALESCE(ok, false);
+    END; $$;`;
+  const BATCH = `BEGIN; SELECT public.is_profiles_admin() a; SELECT current_setting('row_security') rs; SELECT count(*) FROM suppliers; COMMIT;`;
+  const runBatch = (pg: PGlite, uid: string) => as(pg, uid, async () => {
+    try {
+      const r = await pg.exec(BATCH);
+      return { rs: r.map((x) => x.rows[0]?.rs).find((v) => v !== undefined) as string, error: null as string | null };
+    } catch (e) {
+      await pg.exec('ROLLBACK');
+      return { rs: null, error: (e as Error).message };
+    }
+  });
+
+  it('fixture is_profiles_admin() matches the live definition (VOLATILE definer, SET LOCAL row_security, no function-level row_security)', async () => {
+    const pg = await db();
+    const f = (await rows(pg, `select provolatile, prosecdef, proconfig::text cfg, prosrc from pg_proc where proname='is_profiles_admin'`))[0];
+    expect(f.provolatile).toBe('v');
+    expect(f.prosecdef).toBe(true);
+    expect(f.cfg).toBe('{search_path=public}');
+    expect(String(f.prosrc)).toMatch(/SET LOCAL row_security = off/);
+  });
+
+  it('LIVE BEHAVIOUR (documents S4): after is_profiles_admin() the rest of the transaction runs with row_security=off, so invoker queries on RLS tables fail', async () => {
+    const pg = await db();
+    for (const uid of [BUYER_QT, STAFF, ADMIN]) {
+      expect((await runBatch(pg, uid)).error).toMatch(/query would be affected by row-level security policy/);
+    }
+  });
+
+  it('PROPOSED FIX: function-level SET row_security restores the setting on return; admin checks still correct', async () => {
+    const pg = await db();
+    await pg.exec(PROPOSED_FIX);
+    for (const uid of [BUYER_QT, STAFF, ADMIN]) {
+      expect(await runBatch(pg, uid)).toEqual({ rs: 'on', error: null });
+    }
+    expect(await as(pg, ADMIN, () => rows(pg, 'select public.is_profiles_admin() a'))).toEqual([{ a: true }]);
+    expect(await as(pg, STAFF, () => rows(pg, 'select public.is_profiles_admin() a'))).toEqual([{ a: false }]);
+    expect(await as(pg, BUYER_QT, () => rows(pg, 'select public.is_profiles_admin() a'))).toEqual([{ a: false }]);
   });
 });
 
