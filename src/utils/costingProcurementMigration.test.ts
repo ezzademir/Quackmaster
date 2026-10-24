@@ -864,7 +864,7 @@ describe('S5: rollbacks are exact', () => {
     expect(after).toEqual(before);                                       // 081's policies untouched, 085's deny gone
     expect(await as(pg, STAFF, () => count(pg, 'select * from procurement_settings'))).toBe(1);
     expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE procurement_settings SET over_receipt_tolerance_pct = 12`)))).toBeNull();
-    expect(await c0(pg, `select count(*) n from pg_policies where policyname like '%\_deny\_procurement'`)).toBe(0);
+    expect(await c0(pg, `select count(*) n from pg_policies where policyname like '%!_deny!_procurement' escape '!'`)).toBe(0);
     expect(await c0(pg, `select count(*) n from pg_policies where policyname in ('profiles_procurement_own_only','document_links_procurement_own','purchase_orders_procurement_scope','purchase_orders_procurement_rw','suppliers_procurement_scope')`)).toBe(0);
   });
   it('084 rollback preserves suppliers.status in a backup table and warns about pending suppliers', async () => {
