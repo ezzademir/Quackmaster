@@ -214,6 +214,7 @@ BEGIN
 END;
 $function$;
 DROP FUNCTION IF EXISTS public._po_cancel_plan(uuid);
+DELETE FROM public.procurement_exposure_allow WHERE kind = 'function' AND name = 'set_stock_tag_enforcement';
 DROP VIEW IF EXISTS public.v_stock_movements, public.v_hub_stock_by_entity;
 DROP TRIGGER IF EXISTS outlet_movement_entity_guard ON public.outlet_stock_movements;
 DROP TRIGGER IF EXISTS inventory_lot_entity_guard ON public.inventory_lots;

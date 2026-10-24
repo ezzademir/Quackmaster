@@ -807,5 +807,62 @@ BEGIN
   END LOOP;
 END $$;
 
+-- ---------------------------------------------------------------- exposure guard: views + SECURITY DEFINER functions (round 2, F7)
+/*
+  The default-deny above fences TABLES. Two other objects bypass table policies and reach a procurement user (who is just
+  'authenticated'):
+    - a VIEW that is not security_invoker (and any materialized view) reads its tables as the owner, past RLS;
+    - a SECURITY DEFINER function executable by authenticated runs as the owner, past RLS (the PUBLIC default grants it).
+  Convention for every migration after 085: a new view is WITH (security_invoker = true), a new SECURITY DEFINER function is
+  REVOKEd from PUBLIC / anon / authenticated, and anything deliberately client-facing is recorded in
+  procurement_exposure_allow with the reason it is safe for procurement (gated in its body, or tag-scoped). The views below list
+  whatever is neither, and a repo test fails when a migration adds one without classifying it.
+  Baseline: everything that already existed when 085 ran (live pre-PR objects + 084) is recorded as 'baseline' = NOT reviewed
+  by this change. Review those one by one (see the PR description); the guard only stops NEW leaks.
+*/
+CREATE TABLE IF NOT EXISTS public.procurement_exposure_allow (
+  kind text NOT NULL CHECK (kind IN ('function', 'view')),
+  name text NOT NULL,
+  note text NOT NULL,
+  PRIMARY KEY (kind, name)
+);
+ALTER TABLE public.procurement_exposure_allow ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS procurement_exposure_allow_admin ON public.procurement_exposure_allow;
+CREATE POLICY procurement_exposure_allow_admin ON public.procurement_exposure_allow FOR SELECT TO authenticated
+  USING (public.is_profiles_admin());
+DROP POLICY IF EXISTS procurement_exposure_allow_deny_procurement ON public.procurement_exposure_allow;
+CREATE POLICY procurement_exposure_allow_deny_procurement ON public.procurement_exposure_allow AS RESTRICTIVE FOR ALL TO authenticated
+  USING (NOT public.is_procurement_user()) WITH CHECK (NOT public.is_procurement_user());
+REVOKE ALL ON public.procurement_exposure_allow FROM PUBLIC, anon;
+GRANT SELECT ON public.procurement_exposure_allow TO authenticated;
+
+INSERT INTO public.procurement_exposure_allow (kind, name, note)
+SELECT DISTINCT 'function', p.proname, 'baseline: existed when 085 ran, client-executable SECURITY DEFINER, NOT reviewed for procurement here'
+FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+WHERE ns.nspname = 'public' AND p.prosecdef
+  AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+ON CONFLICT (kind, name) DO NOTHING;
+INSERT INTO public.procurement_exposure_allow (kind, name, note)
+SELECT 'view', c.relname, 'baseline: existed when 085 ran, not security_invoker, NOT reviewed for procurement here'
+FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+WHERE ns.nspname = 'public' AND c.relkind IN ('v', 'm')
+  AND NOT COALESCE(c.reloptions::text[] && ARRAY['security_invoker=true', 'security_invoker=on'], false)
+ON CONFLICT (kind, name) DO NOTHING;
+
+CREATE OR REPLACE VIEW public.v_procurement_unclassified_routines WITH (security_invoker = true) AS
+SELECT DISTINCT p.proname AS function_name
+FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+WHERE ns.nspname = 'public' AND p.prosecdef
+  AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+  AND NOT EXISTS (SELECT 1 FROM public.procurement_exposure_allow a WHERE a.kind = 'function' AND a.name = p.proname);
+CREATE OR REPLACE VIEW public.v_procurement_unclassified_views WITH (security_invoker = true) AS
+SELECT c.relname AS view_name, c.relkind = 'm' AS materialized
+FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+WHERE ns.nspname = 'public' AND c.relkind IN ('v', 'm')
+  AND (c.relkind = 'm' OR NOT COALESCE(c.reloptions::text[] && ARRAY['security_invoker=true', 'security_invoker=on'], false))
+  AND NOT EXISTS (SELECT 1 FROM public.procurement_exposure_allow a WHERE a.kind = 'view' AND a.name = c.relname);
+REVOKE ALL ON public.v_procurement_unclassified_routines, public.v_procurement_unclassified_views FROM PUBLIC, anon;
+GRANT SELECT ON public.v_procurement_unclassified_routines, public.v_procurement_unclassified_views TO authenticated;
+
 -- ---------------------------------------------------------------- apply the default-deny (S9): keep this LAST
 SELECT public.procurement_default_deny_sweep();

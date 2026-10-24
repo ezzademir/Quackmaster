@@ -1443,3 +1443,90 @@ describe('F6: migration versions follow the migration numbers (084 < 085 < 087 <
     for (const n of ['084', '085', '087', '088']) expect(rb.some((f) => f.endsWith(`/${n}_rollback.sql`))).toBe(true);
   });
 });
+
+describe('F7: the default-deny also covers VIEWS and SECURITY DEFINER functions (exposure guard)', () => {
+  const unclassified = async (pg: PGlite) => ({
+    fns: (await rows(pg, `select function_name from v_procurement_unclassified_routines order by 1`)).map((r) => r.function_name),
+    views: (await rows(pg, `select view_name from v_procurement_unclassified_views order by 1`)).map((r) => r.view_name),
+    tables: (await rows(pg, `select table_name from v_procurement_unclassified_tables where table_name <> 'test_ctx' order by 1`)).map((r) => r.table_name),
+  });
+
+  it('after every migration nothing is unclassified: tables, views and client-executable definer functions', async () => {
+    const pg = await db();
+    expect(await unclassified(pg)).toEqual({ fns: [], views: [], tables: [] });
+  });
+  it('objects that existed before 085 are recorded as baseline (not reviewed), 088\'s admin RPC with its reason', async () => {
+    const pg = await db();
+    expect(await rows(pg, `select kind, note from procurement_exposure_allow where name='is_profiles_admin'`)).toEqual([{ kind: 'function', note: expect.stringMatching(/^baseline/) }]);
+    expect(await rows(pg, `select note from procurement_exposure_allow where name='set_stock_tag_enforcement'`)).toEqual([{ note: expect.stringMatching(/is_profiles_admin/) }]);
+  });
+  it('a later SECURITY DEFINER function executable by clients is flagged; REVOKE or an allow row (with a reason) clears it', async () => {
+    const pg = await db();
+    await pg.exec(`CREATE FUNCTION public.zz_leaky() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path=public AS $$ SELECT count(*)::int FROM suppliers $$;
+                   CREATE FUNCTION public.zz_invoker() RETURNS int LANGUAGE sql SET search_path=public AS $$ SELECT 1 $$;`);   // invoker functions run with the caller's rights: not a bypass
+    expect((await unclassified(pg)).fns).toEqual(['zz_leaky']);
+    expect(await as(pg, BUYER_QT, () => rows(pg, `select zz_leaky() n`))).toEqual([{ n: expect.any(Number) }]);     // the leak the guard exists for
+    await pg.exec(`REVOKE ALL ON FUNCTION public.zz_leaky() FROM PUBLIC, anon, authenticated`);
+    expect((await unclassified(pg)).fns).toEqual([]);
+    await pg.exec(`GRANT EXECUTE ON FUNCTION public.zz_leaky() TO authenticated`);
+    expect((await unclassified(pg)).fns).toEqual(['zz_leaky']);
+    await pg.exec(`INSERT INTO procurement_exposure_allow VALUES ('function','zz_leaky','test: gated in body')`);
+    expect((await unclassified(pg)).fns).toEqual([]);
+  });
+  it('a later view that is not security_invoker (or any materialized view) is flagged; security_invoker or an allow row clears it', async () => {
+    const pg = await db();
+    await pg.exec(`CREATE VIEW public.zz_open_view AS SELECT id, name FROM suppliers;
+                   CREATE VIEW public.zz_safe_view WITH (security_invoker = true) AS SELECT id FROM suppliers;
+                   CREATE MATERIALIZED VIEW public.zz_matview AS SELECT id FROM suppliers;`);
+    expect((await unclassified(pg)).views).toEqual(['zz_matview', 'zz_open_view']);
+    await pg.exec(`DROP MATERIALIZED VIEW public.zz_matview; ALTER VIEW public.zz_open_view SET (security_invoker = true)`);
+    expect((await unclassified(pg)).views).toEqual([]);
+    await pg.exec(`CREATE VIEW public.zz_open2 AS SELECT 1 AS x; INSERT INTO procurement_exposure_allow VALUES ('view','zz_open2','test: constant')`);
+    expect((await unclassified(pg)).views).toEqual([]);
+  });
+  it('the exposure tables are closed to procurement', async () => {
+    const pg = await db();
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from procurement_exposure_allow`))).toBe(0);
+    expect(await as(pg, ADMIN, () => count(pg, `select * from procurement_exposure_allow`))).toBeGreaterThan(0);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO procurement_exposure_allow VALUES ('function','x','y')`)))).toMatch(/permission denied|row-level security/);
+  });
+
+  // The same rule, enforced on the migration files themselves so a violation fails before it is ever applied.
+  it('repo guard: every view / SECURITY DEFINER function created after 085 is security_invoker, revoked from clients, or allow-listed', () => {
+    const files = import.meta.glob('../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+    // in-place replacements of functions that already exist on live (grants unchanged by CREATE OR REPLACE): baseline, not new exposure
+    const REPLACES_LIVE = new Set(['is_profiles_admin', 'cancel_purchase_order']);
+    const bad: string[] = [];
+    let fnSeen = 0, viewSeen = 0;
+    for (const [f, sql] of Object.entries(files)) {
+      if (/\/(\d{14})_/.exec(f)![1] <= '20261024100100') continue;
+      const body = sql.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      const file = f.split('/').pop();
+      for (const m of body.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?(\w+)\s*\(/gi)) {
+        const name = m[1];
+        const header = body.slice(m.index!, body.indexOf('AS $', m.index!));
+        if (!/SECURITY\s+DEFINER/i.test(header) || REPLACES_LIVE.has(name)) continue;
+        fnSeen++;
+        const revoked = new RegExp(`REVOKE\\s+(?:ALL|EXECUTE)\\s+ON\\s+FUNCTION\\s+(?:public\\.)?${name}\\b[^;]*FROM[^;]*\\bPUBLIC\\b[^;]*\\bauthenticated\\b`, 'i').test(body);
+        const allowed = new RegExp(`procurement_exposure_allow[^;]*'function'\\s*,\\s*'${name}'`, 'is').test(body);
+        if (!revoked && !allowed) bad.push(`${file}: function ${name}`);
+      }
+      for (const m of body.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?(MATERIALIZED\s+)?VIEW\s+(?:public\.)?(\w+)/gi)) {
+        viewSeen++;
+        const header = body.slice(m.index!, body.indexOf(' AS', m.index!));
+        const invoker = !m[1] && /security_invoker\s*=\s*(true|on)/i.test(header);
+        const allowed = new RegExp(`procurement_exposure_allow[^;]*'view'\\s*,\\s*'${m[2]}'`, 'is').test(body);
+        if (!invoker && !allowed) bad.push(`${file}: view ${m[2]}`);
+      }
+    }
+    expect(fnSeen).toBeGreaterThan(5);
+    expect(viewSeen).toBeGreaterThanOrEqual(2);
+    expect(bad).toEqual([]);
+  });
+  it('the repo guard itself rejects a leaky definer function and an open view (self-test of the regexes)', () => {
+    const leak = `CREATE FUNCTION public.leaky() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;\nCREATE VIEW public.open_v AS SELECT 1;`;
+    expect(/SECURITY\s+DEFINER/i.test(leak.slice(0, leak.indexOf('AS $')))).toBe(true);
+    expect(/security_invoker\s*=\s*(true|on)/i.test(leak.slice(leak.indexOf('CREATE VIEW'), leak.indexOf(' AS', leak.indexOf('CREATE VIEW'))))).toBe(false);
+    expect(new RegExp(`REVOKE\\s+(?:ALL|EXECUTE)\\s+ON\\s+FUNCTION\\s+(?:public\\.)?leaky\\b[^;]*FROM[^;]*\\bPUBLIC\\b[^;]*\\bauthenticated\\b`, 'i').test(leak)).toBe(false);
+  });
+});

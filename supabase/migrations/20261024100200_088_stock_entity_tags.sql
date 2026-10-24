@@ -65,6 +65,9 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.set_stock_tag_enforcement(text, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.set_stock_tag_enforcement(text, boolean) TO authenticated;
+INSERT INTO public.procurement_exposure_allow (kind, name, note)
+VALUES ('function', 'set_stock_tag_enforcement', 'admin only: refuses unless is_profiles_admin() (a procurement user is never an admin)')
+ON CONFLICT (kind, name) DO UPDATE SET note = EXCLUDED.note;
 
 -- ---------------------------------------------------------------- columns (nullable: old rows stay untagged)
 ALTER TABLE public.inventory_lots ADD COLUMN IF NOT EXISTS entity_code text REFERENCES public.business_entities(code);

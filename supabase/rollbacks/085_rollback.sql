@@ -59,7 +59,8 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', r.policyname, r.schemaname, r.tablename);
   END LOOP;
 END $$;
-DROP VIEW IF EXISTS public.v_procurement_unclassified_tables;
+DROP VIEW IF EXISTS public.v_procurement_unclassified_tables, public.v_procurement_unclassified_routines, public.v_procurement_unclassified_views;
+DROP TABLE IF EXISTS public.procurement_exposure_allow;
 DROP FUNCTION IF EXISTS public.procurement_default_deny_sweep();
 DROP TABLE IF EXISTS public.procurement_table_allow;
 DROP FUNCTION IF EXISTS public._po_procurement_workflow();
