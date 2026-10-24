@@ -306,6 +306,16 @@ WHERE public.is_po_operator();
 REVOKE ALL ON public.v_raw_material_catalog FROM PUBLIC, anon;
 GRANT SELECT ON public.v_raw_material_catalog TO authenticated;
 
+-- Entities the caller may post against. Procurement cannot read business_entities (staff-only policy), yet the PO
+-- and bill forms need the entity picker, so this owner-rights view returns only the caller's own tags
+-- (all entities for admin / active staff). No other columns than the picker needs.
+CREATE OR REPLACE VIEW public.v_my_entities AS
+SELECT be.code, be.name, be.procurement_tag
+FROM public.business_entities be
+WHERE public.is_authenticated_active_staff() OR public.procurement_has_tag(be.procurement_tag);
+REVOKE ALL ON public.v_my_entities FROM PUBLIC, anon;
+GRANT SELECT ON public.v_my_entities TO authenticated;
+
 -- ---------------------------------------------------------------- leak fixes found by the 085 audit
 -- Owner-rights views bypass RLS (incl. the procurement deny-list). Make them run with the caller's rights.
 DO $$ BEGIN

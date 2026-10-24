@@ -18,6 +18,7 @@ DROP FUNCTION IF EXISTS public._supplier_payments_guard();
 DROP TABLE IF EXISTS public.supplier_bills;
 DROP VIEW IF EXISTS public.v_raw_material_catalog;
 DROP TABLE IF EXISTS public.po_receipt_records;
+DROP VIEW IF EXISTS public.v_my_entities;
 DROP TRIGGER IF EXISTS po_procurement_workflow ON public.purchase_orders;
 DROP TRIGGER IF EXISTS po_item_procurement_guard ON public.purchase_order_items;
 DO $$

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, EmptyState, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
+import { defaultEntityCode, type MyEntity } from '../utils/procurementPayloads';
 
 interface BillRow {
   id: string;
@@ -21,7 +22,7 @@ export function Bills() {
   const { isAdmin } = useAuth();
   const [rows, setRows] = useState<BillRow[]>([]);
   const [suppliers, setSuppliers] = useState<Array<{ id: string; name: string }>>([]);
-  const [entities, setEntities] = useState<Array<{ code: string }>>([]);
+  const [entities, setEntities] = useState<MyEntity[]>([]);
   const [form, setForm] = useState({ supplier_id: '', entity_code: '', bill_number: '', bill_date: '', due_date: '', amount_rm: '' });
   const [msg, setMsg] = useState<string | null>(null);
   const emptyPay = { bill_id: '', amount_rm: '', paid_on: '', method: 'bank_transfer', reference: '', document_path: '', notes: '' };
@@ -30,13 +31,17 @@ export function Bills() {
   const load = useCallback(async () => {
     const [b, s, e] = await Promise.all([
       supabase.from('v_supplier_bill_status').select('*').order('bill_date', { ascending: false }),
-      supabase.from('suppliers').select('id, name').order('name'),
-      supabase.from('business_entities').select('code').order('code'),
+      // only approved suppliers can be billed (085 _supplier_is_active)
+      supabase.from('suppliers').select('id, name').eq('status', 'active').order('name'),
+      // procurement cannot read business_entities; this view returns only the caller's own entities
+      supabase.from('v_my_entities').select('code, name, procurement_tag').order('code'),
     ]);
     if (b.error) setMsg(b.error.message);
     setRows((b.data ?? []) as BillRow[]);
     setSuppliers((s.data ?? []) as Array<{ id: string; name: string }>);
-    setEntities((e.data ?? []) as Array<{ code: string }>);
+    const ents = (e.data ?? []) as MyEntity[];
+    setEntities(ents);
+    setForm((f) => ({ ...f, entity_code: defaultEntityCode(ents, f.entity_code) }));
   }, []);
 
   useEffect(() => {
@@ -57,7 +62,7 @@ export function Bills() {
       return;
     }
     setMsg('Bill recorded.');
-    setForm({ supplier_id: '', entity_code: '', bill_number: '', bill_date: '', due_date: '', amount_rm: '' });
+    setForm({ supplier_id: '', entity_code: defaultEntityCode(entities), bill_number: '', bill_date: '', due_date: '', amount_rm: '' });
     void load();
   }
 
@@ -94,7 +99,7 @@ export function Bills() {
         </select>
         <select aria-label="Entity" className="rounded border px-2 py-1" value={form.entity_code} onChange={(e) => setForm({ ...form, entity_code: e.target.value })}>
           <option value="">Entity…</option>
-          {entities.map((x) => <option key={x.code} value={x.code}>{x.code}</option>)}
+          {entities.map((x) => <option key={x.code} value={x.code}>{x.name}</option>)}
         </select>
         <input aria-label="Bill number" className="rounded border px-2 py-1" placeholder="Bill number" value={form.bill_number} onChange={(e) => setForm({ ...form, bill_number: e.target.value })} />
         <input aria-label="Bill date" type="date" className="rounded border px-2 py-1" value={form.bill_date} onChange={(e) => setForm({ ...form, bill_date: e.target.value })} />

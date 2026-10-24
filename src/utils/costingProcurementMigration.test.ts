@@ -611,6 +611,37 @@ describe('PR #92 review fixes: B2 received quantity is cumulative and can never 
   });
 });
 
+describe('PR #92 review fixes: S1 UI-facing DB surface', () => {
+  it('v_my_entities: procurement sees only its own entities (cannot read business_entities); staff and admin see all', async () => {
+    const pg = await db();
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from business_entities'))).toBe(0);
+    expect(await as(pg, BUYER_QT, () => rows(pg, 'select code, name, procurement_tag from v_my_entities order by 1')))
+      .toEqual([{ code: 'QT', name: 'Quackteow', procurement_tag: 'quackteow' }]);
+    expect(await as(pg, BUYER_MH, () => rows(pg, 'select code from v_my_entities'))).toEqual([{ code: 'MH' }]);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from v_my_entities'))).toBe(2);
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from v_my_entities'))).toBe(2);
+    await pg.exec(`DELETE FROM user_entities WHERE user_id='${BUYER_QT}'`);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from v_my_entities'))).toBe(0);
+  });
+
+  it('the exact payloads the screens now send work for procurement: pending supplier, entity-tagged draft PO, uom-carrying receipt', async () => {
+    const pg = await db();
+    // supplier insert as the UI builds it (status pending, created_by from the column default)
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO suppliers (name, payment_terms, status) VALUES ('UI Co','30d','pending')`)))).toBeNull();
+    // old UI payload (no status) is refused
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO suppliers (name, payment_terms) VALUES ('Old UI Co','30d')`)))).toMatch(/row-level security/);
+    // PO insert as the UI builds it (entity_code from v_my_entities, status draft)
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO purchase_orders (order_number, supplier_id, order_date, total_amount, entity_code, status) VALUES ('PO-UI','${SUP}',CURRENT_DATE,3,'QT','draft')`)))).toBeNull();
+    // old UI payload (no entity_code) is refused
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO purchase_orders (order_number, supplier_id, order_date, total_amount, status) VALUES ('PO-OLDUI','${SUP}',CURRENT_DATE,3,'draft')`)))).toMatch(/row-level security/);
+    // receipt carries the line's unit
+    const r = await as(pg, BUYER_QT, () =>
+      rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":2,"expected_previous_received":0,"quantity_uom":"kg"}]'::jsonb, 'DO-UI') r`));
+    expect(r[0].r).toMatchObject({ success: true });
+    expect((await rows(pg, 'select quantity_uom from po_receipt_records'))[0].quantity_uom).toBe('kg');
+  });
+});
+
 describe('084 costing rules', () => {
   it('price_history is append-only, even for admin and the owner', async () => {
     const pg = await db();

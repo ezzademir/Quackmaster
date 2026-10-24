@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, EmptyState, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { buildDeliveryLines, receivingErrorMessage } from '../utils/receiving';
+import { normalizeUom } from '../utils/procurementPayloads';
 
 interface PoItem {
   id: string;
   quantity_ordered: number;
   quantity_received: number | null;
   unit_price: number | null;
+  purchase_uom: string | null;
   raw_material_id: string;
 }
 interface Po {
@@ -33,7 +35,7 @@ export function Receiving() {
   const load = useCallback(async () => {
     const { data, error } = await supabase
       .from('purchase_orders')
-      .select('id, order_number, status, entity_code, suppliers(name), purchase_order_items(id, quantity_ordered, quantity_received, unit_price, raw_material_id)')
+      .select('id, order_number, status, entity_code, suppliers(name), purchase_order_items(id, quantity_ordered, quantity_received, unit_price, purchase_uom, raw_material_id)')
       .in('status', ['ordered', 'partial'])
       .order('created_at', { ascending: false });
     if (error) setMsg(error.message);
@@ -49,7 +51,15 @@ export function Receiving() {
 
   async function submit(po: Po) {
     // the screen asks for what arrived in THIS delivery; the server wants the new cumulative total per line
-    const p_lines = buildDeliveryLines(po.purchase_order_items, lines);
+    const p_lines = buildDeliveryLines(
+      po.purchase_order_items.map((i) => ({
+        id: i.id,
+        quantity_received: i.quantity_received,
+        // unit recorded with the receipt: the PO line's own unit, else the catalogue unit, else 'unit'
+        uom: normalizeUom(i.purchase_uom, catalog[i.raw_material_id]?.unit_of_measure),
+      })),
+      lines,
+    );
     if (p_lines.length === 0) {
       setMsg('Enter the quantity that arrived on at least one line.');
       return;

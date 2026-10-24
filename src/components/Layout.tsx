@@ -29,6 +29,8 @@ const mainNav = [{ path: '/', label: 'Dashboard', icon: LayoutDashboard, exact: 
 
 const hubNav = [
   { path: '/procurement', label: 'Procurement', icon: ShoppingCart, exact: false },
+  { path: '/receiving', label: 'Receiving', icon: PackageCheck, exact: true },
+  { path: '/bills', label: 'Bills', icon: Receipt, exact: true },
   { path: '/production', label: 'Production', icon: FlaskConical, exact: false },
   { path: '/inventory', label: 'Inventory', icon: Boxes, exact: false },
   { path: '/distribution', label: 'Distribution', icon: Truck, exact: false },

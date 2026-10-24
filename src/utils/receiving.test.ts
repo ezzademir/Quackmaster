@@ -11,7 +11,7 @@ describe('receiving cumulative totals', () => {
 
   it('builds record_po_delivery lines with cumulative totals, the stale-guard value and optional price', () => {
     const items = [
-      { id: 'a', quantity_received: 5 },
+      { id: 'a', quantity_received: 5, uom: 'kg' },
       { id: 'b', quantity_received: null },
       { id: 'c', quantity_received: 2 },
       { id: 'd', quantity_received: 1 },
@@ -23,7 +23,7 @@ describe('receiving cumulative totals', () => {
       d: { qty: 'abc', price: '1' },
     });
     expect(lines).toEqual([
-      { purchase_order_item_id: 'a', quantity_received: 9, expected_previous_received: 5, invoice_unit_price: 10.5 },
+      { purchase_order_item_id: 'a', quantity_received: 9, expected_previous_received: 5, quantity_uom: 'kg', invoice_unit_price: 10.5 },
       { purchase_order_item_id: 'b', quantity_received: 3, expected_previous_received: 0 },
     ]);
   });

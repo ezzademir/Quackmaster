@@ -15,6 +15,7 @@ import {
   cancelPurchaseOrderErrorMessage,
   extractAtomicRpcErrorCode,
 } from '../utils/atomicRpcErrors';
+import { defaultEntityCode, poSelectableSuppliers, purchaseOrderInsertPayload, supplierInsertPayload, type MyEntity } from '../utils/procurementPayloads';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
 type Tab = 'orders' | 'suppliers' | 'materials';
@@ -31,6 +32,7 @@ interface SupplierScoreRow {
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     draft: 'bg-stone-100 text-stone-700',
+    pending_approval: 'bg-violet-100 text-violet-700',
     ordered: 'bg-blue-100 text-blue-700',
     partial: 'bg-amber-100 text-amber-700',
     received: 'bg-emerald-100 text-emerald-700',
@@ -38,7 +40,7 @@ function StatusBadge({ status }: { status: string }) {
   };
   return (
     <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${map[status] ?? 'bg-stone-100 text-stone-700'}`}>
-      {status === 'closed_short' ? 'closed short' : status}
+      {status === 'closed_short' ? 'closed short' : status === 'pending_approval' ? 'pending approval' : status}
     </span>
   );
 }
@@ -60,11 +62,14 @@ function SupplierModal({
   supplier,
   allMaterials,
   initialLinkedMaterialIds,
+  isProcurement = false,
   onClose,
   onSave,
   onDelete,
 }: {
   supplier: Supplier | null;
+  /** procurement users create suppliers as 'pending' (085 RLS); an admin approves */
+  isProcurement?: boolean;
   allMaterials: RawMaterial[];
   /** Raw material IDs this supplier already supplies — must stay in sync when parent loads links. */
   initialLinkedMaterialIds: string[];
@@ -127,7 +132,7 @@ function SupplierModal({
         err = error;
       } else {
         const { data, error } = await retryWithBackoff(async () => await
-          supabase.from('suppliers').insert(payload).select('id').single()
+          supabase.from('suppliers').insert(supplierInsertPayload(payload, isProcurement)).select('id').single()
         );
         err = error;
         createdSupplierId = data?.id ?? '';
@@ -451,6 +456,7 @@ function purchaseOrderCanRemove(po: POWithDetails): boolean {
 
 function NewPOModal({
   suppliers,
+  entities,
   materials,
   materialsForSupplier,
   existingNumbers,
@@ -459,6 +465,8 @@ function NewPOModal({
   onSave,
 }: {
   suppliers: Supplier[];
+  /** entities the user may post to (v_my_entities); a PO must carry one */
+  entities: MyEntity[];
   materials: RawMaterial[];
   materialsForSupplier: (supplierId: string) => RawMaterial[];
   existingNumbers: string[];
@@ -478,6 +486,10 @@ function NewPOModal({
     : [{ raw_material_id: '', quantity_ordered: '', unit_price: '' }];
 
   const [supplier_id, setSupplierId] = useState(existingOrder?.supplier_id ?? '');
+  const [entity_code, setEntityCode] = useState(() => defaultEntityCode(entities, existingOrder?.entity_code));
+  useEffect(() => {
+    setEntityCode((cur) => defaultEntityCode(entities, cur));
+  }, [entities]);
   const [order_date, setOrderDate] = useState(
     editing && existingOrder ? dateInputFromIso(existingOrder.order_date) : new Date().toISOString().split('T')[0]
   );
@@ -517,6 +529,11 @@ function NewPOModal({
 
     if (!headerValidation.isValid) {
       setError(formatValidationErrors(headerValidation.errors));
+      return;
+    }
+
+    if (!entity_code) {
+      setError('Choose the entity (Quackteow / Merdeka House) this order is for.');
       return;
     }
 
@@ -583,6 +600,7 @@ function NewPOModal({
             .from('purchase_orders')
             .update({
               supplier_id,
+              entity_code,
               order_date,
               expected_delivery_date: expected_delivery_date || null,
               notes: notes || null,
@@ -639,15 +657,14 @@ function NewPOModal({
       const { data: po, error: poErr } = await retryWithBackoff(async () => await
         supabase
           .from('purchase_orders')
-          .insert({
+          .insert(purchaseOrderInsertPayload({
             order_number,
             supplier_id,
             order_date,
             expected_delivery_date: expected_delivery_date || null,
             notes: notes || null,
-            status: 'draft',
             total_amount: total,
-          })
+          }, entity_code))
           .select()
           .single()
       );
@@ -723,7 +740,7 @@ function NewPOModal({
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             >
               <option value="">Select supplier…</option>
-              {suppliers.map((s) => (
+              {poSelectableSuppliers(suppliers, existingOrder?.supplier_id).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
@@ -740,6 +757,20 @@ function NewPOModal({
                 </p>
               )
             ) : null}
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Entity *</label>
+            <select
+              aria-label="Entity"
+              value={entity_code}
+              onChange={(e) => setEntityCode(e.target.value)}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
+            >
+              <option value="">Select entity…</option>
+              {entities.map((x) => (
+                <option key={x.code} value={x.code}>{x.name}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-stone-700">Order Date</label>
@@ -850,9 +881,11 @@ function PODetailModal({
   onEdit,
   onDelete,
   isAdmin = false,
+  isProcurement = false,
 }: {
   po: POWithDetails;
   isAdmin?: boolean;
+  isProcurement?: boolean;
   onClose: () => void;
   onStatusChange: () => void;
   onEdit?: () => void;
@@ -976,9 +1009,15 @@ function PODetailModal({
   async function changeStatus(status: string) {
     setSaving(true);
     try {
-      await retryWithBackoff(async () => await
+      const { error: upErr } = await retryWithBackoff(async () => await
         supabase.from('purchase_orders').update({ status }).eq('id', po.id)
       );
+      if (upErr) {
+        // DB rules surface here: supplier_not_approved, po_cannot_approve_own, po_approval_admin_only, ...
+        setError(upErr.message);
+        setSaving(false);
+        return;
+      }
 
       await writeLedgerEntry({
         action: 'updated',
@@ -1105,13 +1144,31 @@ function PODetailModal({
 
       <div className="mt-6 flex flex-wrap justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {po.status === 'draft' && (
+          {po.status === 'draft' && isProcurement && (
+            <button type="button" onClick={() => changeStatus('pending_approval')} disabled={saving}
+              className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-60">
+              Submit for approval
+            </button>
+          )}
+          {po.status === 'pending_approval' && isAdmin && (
+            <button type="button" onClick={() => changeStatus('ordered')} disabled={saving}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60">
+              Approve &amp; mark ordered
+            </button>
+          )}
+          {po.status === 'pending_approval' && !isAdmin && (
+            <span className="self-center text-sm text-stone-500">Waiting for admin approval.</span>
+          )}
+          {(po.status === 'ordered' || po.status === 'partial') && isProcurement && (
+            <span className="self-center text-sm text-stone-500">Record deliveries on the Receiving page.</span>
+          )}
+          {po.status === 'draft' && !isProcurement && (
             <button type="button" onClick={() => changeStatus('ordered')} disabled={saving}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60">
               Mark as Ordered
             </button>
           )}
-          {(po.status === 'ordered' || po.status === 'partial') && (
+          {(po.status === 'ordered' || po.status === 'partial') && !isProcurement && (
             <button type="button" onClick={handleMarkReceived} disabled={saving}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-60">
               {saving ? 'Processing…' : 'Mark Received & Update Stock'}
@@ -1149,6 +1206,7 @@ export function Procurement() {
     []
   );
   const [orders, setOrders] = useState<POWithDetails[]>([]);
+  const [entities, setEntities] = useState<MyEntity[]>([]);
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1196,7 +1254,7 @@ export function Procurement() {
 
   async function loadAll() {
     setLoading(true);
-    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }, { data: scores }] = await Promise.all([
+    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }, { data: scores }, { data: ents }] = await Promise.all([
       supabase.from('suppliers').select('*').order('name'),
       // procurement cannot read raw_materials (cost columns); it gets the cost-free catalogue view
       isProcurement
@@ -1208,7 +1266,10 @@ export function Procurement() {
         .order('created_at', { ascending: false }),
       supabase.from('supplier_raw_materials').select('supplier_id, raw_material_id'),
       supabase.from('supplier_scorecard_metrics').select('*').order('supplier_name'),
+      // procurement cannot read business_entities; this view returns only the caller's own entities
+      supabase.from('v_my_entities').select('code, name, procurement_tag').order('code'),
     ]);
+    setEntities((ents ?? []) as MyEntity[]);
     setSuppliers(sups ?? []);
     setSupplierScores((scores ?? []) as SupplierScoreRow[]);
     setMaterials((mats ?? []) as typeof materials);
@@ -1677,6 +1738,7 @@ export function Procurement() {
         <NewPOModal
           key="new-po"
           suppliers={suppliers}
+          entities={entities}
           materials={materials}
           materialsForSupplier={materialsForSupplierCatalog}
           existingNumbers={orders.map((o) => o.order_number)}
@@ -1688,6 +1750,7 @@ export function Procurement() {
         <NewPOModal
           key={editPO.id}
           suppliers={suppliers}
+          entities={entities}
           materials={materials}
           materialsForSupplier={materialsForSupplierCatalog}
           existingNumbers={orders.map((o) => o.order_number)}
@@ -1699,6 +1762,7 @@ export function Procurement() {
       {viewPO && (
         <PODetailModal
           isAdmin={isAdmin}
+          isProcurement={isProcurement}
           po={viewPO}
           onClose={() => setViewPO(null)}
           onStatusChange={() => {
@@ -1717,6 +1781,7 @@ export function Procurement() {
         <SupplierModal
           supplier={editSupplier && typeof editSupplier === 'object' ? editSupplier : null}
           allMaterials={materials}
+          isProcurement={isProcurement}
           initialLinkedMaterialIds={supplierModalInitialLinkedMaterialIds}
           onClose={() => setShowSupplierModal(false)}
           onSave={() => { setShowSupplierModal(false); loadAll(); }}

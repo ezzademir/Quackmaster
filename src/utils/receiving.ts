@@ -7,6 +7,8 @@
 export interface ReceivingLineInput {
   id: string;
   quantity_received: number | null;
+  /** unit of measure of the line (already normalised to the receipt CHECK list, see normalizeUom) */
+  uom?: string;
 }
 
 export interface ReceivingDraft {
@@ -24,6 +26,7 @@ export interface DeliveryLine {
   purchase_order_item_id: string;
   quantity_received: number;
   expected_previous_received: number;
+  quantity_uom?: string;
   invoice_unit_price?: number;
 }
 
@@ -39,6 +42,7 @@ export function buildDeliveryLines(items: ReceivingLineInput[], drafts: Record<s
       purchase_order_item_id: item.id,
       quantity_received: cumulativeReceived(existing, delivered),
       expected_previous_received: existing,
+      ...(item.uom ? { quantity_uom: item.uom } : {}),
     };
     const price = d?.price;
     if (price !== undefined && price.trim() !== '' && Number.isFinite(Number(price)) && Number(price) >= 0) {
