@@ -10,6 +10,9 @@
 -- What this removes: trg_profiles_role_guard / trg_profiles_role_audit (profiles), trg_user_entities_guard / _audit, their four
 -- functions, admin_set_procurement_tags and its allow-list row. What it restores: authenticated INSERT/UPDATE/DELETE on user_entities (085's own explicit grant set, with SELECT). It deliberately does NOT
 -- hand back TRUNCATE/REFERENCES/TRIGGER, which only Supabase default privileges ever gave (090 revoked them) and which 085 never granted.
+-- OVERWRITES get_users_management_data() WHOLE with the captured live text (it does not reverse the 090 patch). If a later migration has changed that
+-- function since 090, roll that migration back (or re-base this file's copy) first, or its change is erased here. 090 did not change
+-- profiles_enforce_privileged_columns, so re-creating it is a no-op today.
 -- Tags cleared by 090 when a user left procurement, and the ledger rows 090 wrote, are NOT restored/deleted (the ledger is append-only).
 
 DROP TRIGGER IF EXISTS trg_profiles_role_audit ON public.profiles;

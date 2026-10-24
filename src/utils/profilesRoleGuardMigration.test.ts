@@ -8,6 +8,7 @@ import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.
 import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
 import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
+import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB090 from '../../supabase/rollbacks/090_rollback.sql?raw';
 import LIVE from './__fixtures__/live_profiles_guard_20261024.sql?raw';
 
@@ -555,6 +556,41 @@ describe('090 H2: a failed ledger insert rolls the change back (fail closed); th
     expect(MIG090).not.toMatch(/PERFORM public\._append_data_ledger/);
     expect(MIG090.match(/INSERT INTO public\.data_ledger/g)?.length).toBe(2);
     expect(MIG090).toMatch(/Ledger \(fail closed\)/);
+  });
+});
+
+describe('090 hardening: pg_temp last, 087 pre-check, whole-function overwrite documented', () => {
+  it('every new SECURITY DEFINER function pins search_path = public, pg_temp (pg_temp last)', async () => {
+    const pg = await db();
+    const fns = ['profiles_guard_role_change', 'profiles_audit_role_change', 'user_entities_guard_write', 'user_entities_audit_write', 'admin_set_procurement_tags'];
+    const got = await rows(pg, `select proname, prosecdef, proconfig from pg_proc where pronamespace='public'::regnamespace and proname = any(array[${fns.map((f) => `'${f}'`).join(',')}]) order by 1`);
+    expect(got.map((g) => g.proname)).toEqual([...fns].sort());
+    for (const g of got) {
+      expect(g.prosecdef, String(g.proname)).toBe(true);
+      expect(g.proconfig, String(g.proname)).toEqual(['search_path=public, pg_temp']);
+    }
+    expect(MIG090.match(/SET search_path = public AS/g)).toBeNull();
+  });
+  it('090 refuses to apply when 087 is not applied (is_profiles_admin without SET row_security = off), and applies once 087 is back', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    await pg.exec(RB087);                       // the live (pre-087) is_profiles_admin
+    expect(await err(pg.exec(MIG090))).toMatch(/090 depends on 087/);
+    await pg.exec(MIG087);
+    expect(await err(pg.exec(MIG090))).toBeNull();
+  });
+  it('the 087 check is the first thing after the 085 check: nothing was created by the refused run', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    await pg.exec(RB087);
+    await err(pg.exec(MIG090));
+    expect((await rows(pg, `select proname from pg_proc where proname in ('profiles_guard_role_change','admin_set_procurement_tags')`)).length).toBe(0);
+  });
+  it('the headers say 090_rollback overwrites get_users_management_data whole, and that 090 needs 087', () => {
+    expect(RB090).toMatch(/OVERWRITES get_users_management_data\(\) WHOLE/);
+    expect(RB090).toMatch(/does not reverse the 090 patch/);
+    expect(MIG090.slice(0, MIG090.indexOf('*/'))).toMatch(/OVERWRITING THE WHOLE FUNCTION/);
+    expect(MIG090.slice(0, MIG090.indexOf('*/'))).toMatch(/087 \(is_profiles_admin\)/);
   });
 });
 

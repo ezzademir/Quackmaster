@@ -3,7 +3,8 @@
   Own change set: NOT in the 089 cancel-request work. The bill void/reverse route is a separate PR (not here, not in 089).
 
   APPLY ORDER: 084, 085, 087, 088, 090, then 089 (089 must be stamped after this file).
-  Depends on 085 (user_entities, 'procurement' role, procurement_exposure_allow) and 087 (is_profiles_admin). Independent of 084/088 data.
+  Depends on 085 (user_entities, 'procurement' role, procurement_exposure_allow) and 087 (is_profiles_admin); the pre-check below refuses to run
+  without either one. Independent of 084/088 data.
   ROLLBACK ORDER (newest first): 089 -> 090 -> 088 -> 087 -> 085 -> 084. supabase/rollbacks/090_rollback.sql is independent of
   084/085/087/088: it restores the live definitions verbatim, and it tolerates user_entities already being gone.
   Keep the order anyway: 090's get_users_management_data reads user_entities, so 085 must not be rolled back while 090 is live.
@@ -41,6 +42,9 @@
     4. admin_set_procurement_tags(user, tags[]): admin only, not self, target must be a procurement user, at least one tag,
        every tag must exist in procurement_tags; replaces the set.
     5. get_users_management_data(): each approved user also carries entity_tags (patched in place, nothing else changes).
+       NOTE: 090_rollback.sql puts the live get_users_management_data back by OVERWRITING THE WHOLE FUNCTION with the captured live text; it does
+       not reverse the patch. Any later migration that changes that function must be rolled back (or re-based) before 090 is rolled back.
+    All new SECURITY DEFINER functions pin search_path = public, pg_temp (pg_temp last).
   Ledger (fail closed): only the allowed operations (insert/update/delete/event) are used, and the two audit triggers INSERT INTO
   data_ledger DIRECTLY (not through _append_data_ledger, which swallows a failed insert into a WARNING and is left untouched). If the
   ledger insert fails, the role / outlet / tag change is rolled back with it, on every path (role RPC, direct update, admin_set_procurement_tags,
@@ -51,6 +55,13 @@ DO $$ BEGIN
   IF to_regclass('public.user_entities') IS NULL THEN
     RAISE EXCEPTION '090 depends on 085 (public.user_entities is missing)';
   END IF;
+  -- 087: is_profiles_admin() must carry its function-level SET row_security = off. Without it the live body (SET LOCAL row_security = off)
+  -- leaks into the rest of the transaction, and the 090 triggers call is_profiles_admin() inside every role/tag write.
+  IF to_regprocedure('public.is_profiles_admin()') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.is_profiles_admin()'::regprocedure
+                    AND EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) c WHERE c = 'row_security=off')) THEN
+    RAISE EXCEPTION '090 depends on 087 (public.is_profiles_admin() must be the 087 version with SET row_security = off)';
+  END IF;
 END $$;
 
 -- ---------------------------------------------------------------- shared caller classification
@@ -59,7 +70,7 @@ END $$;
 
 -- ---------------------------------------------------------------- profiles: role / outlet guard + last-admin guard
 CREATE OR REPLACE FUNCTION public.profiles_guard_role_change()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_uid uuid := auth.uid();
   v_jwt_role text := coalesce(auth.jwt() ->> 'role', current_setting('request.jwt.claim.role', true), '');
@@ -97,7 +108,7 @@ CREATE TRIGGER trg_profiles_role_guard BEFORE UPDATE OR DELETE ON public.profile
 
 -- ---------------------------------------------------------------- profiles: audit + clear tags when leaving procurement
 CREATE OR REPLACE FUNCTION public.profiles_audit_role_change()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_old_tags text[] := ARRAY[]::text[];
   v_cleared text[] := ARRAY[]::text[];
@@ -142,7 +153,7 @@ CREATE TRIGGER trg_profiles_role_audit AFTER UPDATE ON public.profiles
 
 -- ---------------------------------------------------------------- user_entities: guard + audit
 CREATE OR REPLACE FUNCTION public.user_entities_guard_write()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_uid uuid := auth.uid();
   v_jwt_role text := coalesce(auth.jwt() ->> 'role', current_setting('request.jwt.claim.role', true), '');
@@ -168,7 +179,7 @@ END $$;
 REVOKE ALL ON FUNCTION public.user_entities_guard_write() FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.user_entities_audit_write()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   r record;
   v_rows jsonb;
@@ -251,7 +262,7 @@ GRANT SELECT ON public.user_entities TO authenticated;
 
 -- ---------------------------------------------------------------- admin RPC: replace a procurement user's tags
 CREATE OR REPLACE FUNCTION public.admin_set_procurement_tags(p_target_user_id uuid, p_tags text[])
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   v_new text[];
   v_old text[];
