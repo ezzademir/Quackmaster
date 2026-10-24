@@ -8,6 +8,7 @@ import MIG087 from '../../supabase/migrations/20261024110000_087_is_profiles_adm
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
 import { receivingUom } from './procurementPayloads';
+import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
 import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
@@ -95,7 +96,7 @@ CREATE TABLE raw_materials (id uuid primary key, name text, unit_of_measure text
 CREATE TABLE purchase_orders (id uuid primary key default gen_random_uuid(), order_number text, supplier_id uuid REFERENCES suppliers(id),
   status text NOT NULL DEFAULT 'draft', order_date date DEFAULT CURRENT_DATE, expected_delivery_date date,
   actual_delivery_date date, total_amount numeric, notes text, updated_at timestamptz);
-CREATE TABLE purchase_order_items (id uuid primary key default gen_random_uuid(), purchase_order_id uuid REFERENCES purchase_orders(id),
+CREATE TABLE purchase_order_items (id uuid primary key default gen_random_uuid(), purchase_order_id uuid REFERENCES purchase_orders(id) ON DELETE CASCADE,   -- live: ON DELETE CASCADE
   raw_material_id uuid, quantity_ordered numeric(10,2), quantity_received numeric(10,2) DEFAULT 0, unit_price numeric(12,2),
   line_total numeric(15,2), purchase_uom text);
 CREATE TABLE hub_inventory (id uuid primary key default gen_random_uuid(), raw_material_id uuid, quantity_on_hand numeric,
@@ -181,7 +182,7 @@ INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference) V
 `;
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['084', MIG084], ['085', MIG085], ['088', MIG088], ['POS', POS]]) {
+  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['LIVE_CANCEL', LIVE_CANCEL], ['084', MIG084], ['085', MIG085], ['088', MIG088], ['POS', POS]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -1280,3 +1281,134 @@ describe('084 costing rules', () => {
 async function c0(pg: PGlite, sql: string) {
   return Number((await rows(pg, sql))[0].n);
 }
+
+describe('F3 (088): cancelling a received PO reverses its receipts with the receipt tag, never partly, never negative', () => {
+  const CANCEL = (po: string) => `select cancel_purchase_order('${po}') r`;
+  const deliver = (pg: PGlite, total: number, po = PO_QT, line = L_QT, prev = 0) =>
+    rows(pg, `select record_po_delivery('${po}', '[{"purchase_order_item_id":"${line}","quantity_received":${total},"expected_previous_received":${prev},"invoice_unit_price":3}]'::jsonb, 'DO-F3') r`);
+  const adminReceive = (pg: PGlite, total: number) =>
+    rows(pg, `select receive_po_shipment('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":${total}}]'::jsonb) r`);
+  const mov = (pg: PGlite) => rows(pg, `select entity_code, quantity::float q, source_po_item_id s from hub_stock_movements where raw_material_id='${RM}' order by id`);
+  const split = (pg: PGlite) => rows(pg, `select entity_code, quantity_on_hand::float q from v_hub_stock_by_entity where raw_material_id='${RM}' order by entity_code nulls last`);
+  const qoh = async (pg: PGlite) => Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${RM}'`))[0].q);
+  const poState = (pg: PGlite) => rows(pg, `select status, (select quantity_received::float from purchase_order_items where id='${L_QT}') rcv from purchase_orders where id='${PO_QT}'`);
+
+  it('fully received PO (with receipt records): cancel succeeds, the reversal is QT like the receipt (QT +10 / QT -10, no UNTAGGED), PO kept as cancelled', async () => {
+    const pg = await db();
+    expect((await as(pg, BUYER_QT, () => deliver(pg, 10)))[0].r).toMatchObject({ success: true });
+    expect(await split(pg)).toEqual([{ entity_code: 'QT', q: 10 }]);
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    expect(r).toMatchObject({ success: true, po_kept_as_cancelled: true });
+    expect(r.reversal_lines).toEqual([expect.objectContaining({ quantity_reversed: 10, entity_code: 'QT' })]);
+    expect(await mov(pg)).toEqual([{ entity_code: 'QT', q: 10, s: L_QT }, { entity_code: 'QT', q: -10, s: L_QT }]);
+    expect(await split(pg)).toEqual([]);                                       // nothing left in QT, nothing UNTAGGED
+    expect(await qoh(pg)).toBe(0);
+    expect(await poState(pg)).toEqual([{ status: 'cancelled', rcv: 0 }]);
+    // receipt records are kept (RESTRICT FK untouched) and closed with a cumulative-0 row
+    expect(await rows(pg, `select quantity_received::float q, do_number from po_receipt_records where purchase_order_id='${PO_QT}' order by id`))
+      .toEqual([{ q: 10, do_number: 'DO-F3' }, { q: 0, do_number: 'PO CANCELLED' }]);
+    expect(await c0(pg, `select count(*) n from data_ledger where entity_type='purchase_order' and action='cancelled' and entity_id='${PO_QT}'`)).toBe(1);
+    // a second cancel does nothing
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: false, error: 'already_cancelled' });
+    expect(await mov(pg)).toHaveLength(2);
+  });
+
+  it('part-received PO (two deliveries): both are reversed QT; the other entity\'s stock in the shared hub row is untouched', async () => {
+    const pg = await db();
+    const L_MH2 = '00000000-0000-0000-0000-00000000e0f2';
+    await pg.exec(`INSERT INTO purchase_order_items (id, purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price, line_total, purchase_uom)
+                   VALUES ('${L_MH2}','${PO_MH}','${RM}',10,0,3,30,'kg')`);
+    await as(pg, BUYER_MH, () => deliver(pg, 5, PO_MH, L_MH2));
+    await as(pg, BUYER_QT, () => deliver(pg, 4));
+    await as(pg, BUYER_QT, () => deliver(pg, 6, PO_QT, L_QT, 4));
+    expect(await split(pg)).toEqual([{ entity_code: 'MH', q: 5 }, { entity_code: 'QT', q: 6 }]);
+    expect(await poState(pg)).toEqual([{ status: 'partial', rcv: 6 }]);
+    expect((await as(pg, STAFF, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true, po_kept_as_cancelled: true });
+    expect(await split(pg)).toEqual([{ entity_code: 'MH', q: 5 }]);             // MH untouched, QT back to 0, no UNTAGGED
+    expect(await qoh(pg)).toBe(5);
+    expect(await poState(pg)).toEqual([{ status: 'cancelled', rcv: 0 }]);
+    expect(await count(pg, `select * from hub_stock_movements where entity_code is null`)).toBe(0);
+    expect(await rows(pg, `select status from purchase_orders where id='${PO_MH}'`)).toEqual([{ status: expect.not.stringMatching(/cancelled/) }]);
+  });
+
+  it('a PO with no receipt records / bills is deleted as before, and the reversal is still QT (QT +4 / QT -4, not UNTAGGED -4)', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => adminReceive(pg, 4));                            // receive_po_shipment writes no receipt record
+    expect(await split(pg)).toEqual([{ entity_code: 'QT', q: 4 }]);
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true, po_kept_as_cancelled: false });
+    expect(await count(pg, `select * from purchase_orders where id='${PO_QT}'`)).toBe(0);
+    expect(await mov(pg)).toEqual([{ entity_code: 'QT', q: 4, s: L_QT }, { entity_code: 'QT', q: -4, s: L_QT }]);
+    expect(await split(pg)).toEqual([]);
+  });
+
+  it('the live (pre-088) cancel would have posted the reversal untagged: QT +4 and UNTAGGED -4 (what this fixes)', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => adminReceive(pg, 4));
+    await pg.exec(`SELECT public.set_stock_entity('QT'); UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand - 4 WHERE raw_material_id='${RM}'`);   // the tagged reversal 088 now posts
+    expect(await split(pg)).toEqual([]);
+    const pg2 = await db();
+    await as(pg2, ADMIN, () => adminReceive(pg2, 4));
+    await pg2.exec(`UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand - 4 WHERE raw_material_id='${RM}'`);     // an untagged reversal
+    expect(await split(pg2)).toEqual([{ entity_code: 'QT', q: 4 }, { entity_code: null, q: -4 }]);
+  });
+
+  it('quantity received before tags existed is reversed untagged (never guessed), tagged quantity is reversed QT', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 4));
+    await pg.exec(`DELETE FROM hub_stock_movements`);                          // as if that first receipt predates 088
+    await as(pg, BUYER_QT, () => deliver(pg, 6, PO_QT, L_QT, 4));
+    expect(await split(pg)).toEqual([{ entity_code: 'QT', q: 2 }, { entity_code: null, q: 4 }]);
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true });
+    expect(await mov(pg)).toEqual([{ entity_code: 'QT', q: 2, s: L_QT }, { entity_code: 'QT', q: -2, s: L_QT }, { entity_code: null, q: -4, s: L_QT }]);
+    expect(await split(pg)).toEqual([]);
+    expect(await qoh(pg)).toBe(0);
+  });
+
+  it('REFUSES when the received stock was partly used: clear error, nothing reversed, PO unchanged, no negative balance', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 10));
+    await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand - 7 WHERE raw_material_id='${RM}'`);   // 7 kg used in production
+    const before = { mov: await mov(pg), rec: await count(pg, 'select * from po_receipt_records'), qoh: await qoh(pg), po: await poState(pg) };
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    expect(r).toMatchObject({ success: false, error: 'insufficient_hub_quantity', on_hand: 3, required_return: 10 });
+    expect(r.message).toMatch(/partly used/);
+    expect({ mov: await mov(pg), rec: await count(pg, 'select * from po_receipt_records'), qoh: await qoh(pg), po: await poState(pg) }).toEqual(before);
+    expect(before.po[0].rcv).toBe(10);
+    expect(await c0(pg, `select count(*) n from data_ledger where action='cancelled'`)).toBe(0);
+    expect(await count(pg, `select * from hub_inventory where quantity_on_hand < 0`)).toBe(0);
+  });
+
+  it('REFUSES when other untagged stock hides the shortfall but the QT balance would go negative', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 10));
+    await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand + 20 WHERE raw_material_id='${RM}';
+                   SELECT public.set_stock_entity('QT');
+                   UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand - 27 WHERE raw_material_id='${RM}'`);   // 27 used, QT-tagged
+    expect(await qoh(pg)).toBe(3);
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    expect(r).toMatchObject({ success: false, error: 'insufficient_hub_quantity' });
+    // with enough total stock the tagged guard is the one that refuses
+    await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand + 30 WHERE raw_material_id='${RM}'`);
+    const r2 = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    expect(r2).toMatchObject({ success: false, error: 'insufficient_tagged_stock', entity_code: 'QT', on_hand: -17, required_return: 10 });
+    expect(await poState(pg)).toEqual([{ status: expect.not.stringMatching(/cancelled/), rcv: 10 }]);
+  });
+
+  it('the RESTRICT foreign keys are unchanged: a direct DELETE of a PO that has receipt records still fails', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 4));
+    expect(await err(pg.exec(`DELETE FROM purchase_orders WHERE id='${PO_QT}'`))).toMatch(/po_receipt_records|foreign key/i);
+    expect(await rows(pg, `select conname, confdeltype from pg_constraint where conrelid='po_receipt_records'::regclass and contype='f' order by conname`))
+      .toEqual([{ conname: 'po_receipt_records_purchase_order_id_fkey', confdeltype: 'r' }, { conname: 'po_receipt_records_purchase_order_item_id_fkey', confdeltype: 'r' }]);
+  });
+
+  it('088 rollback restores the live cancel_purchase_order (untagged, always deletes)', async () => {
+    const pg = await db();
+    await pg.exec(RB088);
+    const def = String((await rows(pg, `select pg_get_functiondef('public.cancel_purchase_order(uuid)'::regprocedure) d`))[0].d);
+    expect(def).not.toMatch(/_po_cancel_plan|po_kept_as_cancelled|stock_po_item/);
+    expect(def).toMatch(/DELETE FROM public\.purchase_orders/);
+    expect(await err(pg.exec(`SELECT 1 FROM pg_proc WHERE proname='_po_cancel_plan'`))).toBeNull();
+    expect(await count(pg, `select * from pg_proc where proname='_po_cancel_plan'`)).toBe(0);
+  });
+});
