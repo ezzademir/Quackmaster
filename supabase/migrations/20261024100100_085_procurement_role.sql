@@ -668,3 +668,42 @@ GRANT SELECT ON public.v_supplier_bill_status TO authenticated;
 
 REVOKE ALL ON FUNCTION public._po_procurement_workflow(), public._po_item_procurement_guard(),
   public._supplier_bills_guard(), public._supplier_payments_guard(), public._supplier_payments_audit() FROM PUBLIC, anon, authenticated;
+
+-- ---------------------------------------------------------------- S7: server-side audit trail for procurement actions
+-- data_ledger is closed to procurement (deny-list) and _append_data_ledger is not client-callable, so the trail is
+-- written here, by SECURITY DEFINER triggers calling _append_data_ledger, never by the client. Logged: every write a
+-- procurement user makes to POs, PO lines, suppliers, supplier items and bills, plus (for any actor) inserts, deletes
+-- and status changes on those tables. Receipt-only line updates (quantity_received) are skipped: receive_po_shipment /
+-- close_po_short / adjust_po_receipt already ledger those. Payments are audited by _supplier_payments_audit above.
+CREATE OR REPLACE FUNCTION public._procurement_audit()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_proc boolean := public.is_procurement_user();
+  v_noise text[] := ARRAY['updated_at', 'updated_by', 'last_edited_by', 'quantity_received', 'line_total'];
+  v_old jsonb; v_new jsonb; v_id text; v_ref text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN v_old := to_jsonb(OLD); v_new := NULL; v_id := OLD.id::text;
+  ELSIF TG_OP = 'INSERT' THEN v_old := NULL; v_new := to_jsonb(NEW); v_id := NEW.id::text;
+  ELSE
+    v_old := to_jsonb(OLD); v_new := to_jsonb(NEW); v_id := NEW.id::text;
+    IF (v_old - v_noise) = (v_new - v_noise) THEN RETURN NULL; END IF;     -- timestamp / receipt-only churn (receipts recompute line_total)
+    IF NOT v_proc AND (v_new ->> 'status') IS NOT DISTINCT FROM (v_old ->> 'status') THEN RETURN NULL; END IF;
+  END IF;
+  v_ref := COALESCE(v_new ->> 'purchase_order_id', v_old ->> 'purchase_order_id', v_new ->> 'supplier_id', v_old ->> 'supplier_id');
+  PERFORM public._append_data_ledger(
+    CASE TG_OP WHEN 'INSERT' THEN 'created' WHEN 'UPDATE' THEN 'updated' ELSE 'deleted' END,
+    TG_TABLE_NAME, v_id, 'procurement', lower(TG_OP), v_ref, v_old, v_new, NULL,
+    jsonb_build_object('actor_role', CASE WHEN v_proc THEN 'procurement' ELSE 'other' END,
+                       'status_from', v_old ->> 'status', 'status_to', v_new ->> 'status'));
+  RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION public._procurement_audit() FROM PUBLIC, anon, authenticated;
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['purchase_orders', 'purchase_order_items', 'suppliers', 'supplier_items', 'supplier_bills'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS procurement_audit ON public.%I', t);
+    EXECUTE format('CREATE TRIGGER procurement_audit AFTER INSERT OR UPDATE OR DELETE ON public.%I '
+                   'FOR EACH ROW EXECUTE FUNCTION public._procurement_audit()', t);
+  END LOOP;
+END $$;

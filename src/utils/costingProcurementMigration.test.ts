@@ -912,6 +912,50 @@ describe('S6: bills view / bill amount / payment deletes', () => {
   });
 });
 
+describe('S7: procurement actions are ledgered server-side (data_ledger is closed to procurement)', () => {
+  const led = (pg: PGlite, where: string) =>
+    rows(pg, `select action, entity_type, user_id, metadata->>'actor_role' role, metadata->>'status_from' sf, metadata->>'status_to' st from data_ledger where ${where} order by id`);
+  it('PO create -> submit -> admin approve, supplier proposal, line edit and bill all leave ledger rows with the real actor', async () => {
+    const pg = await db();
+    const PO = '00000000-0000-0000-0000-00000000f0a7';
+    await pg.exec(`DELETE FROM data_ledger`);
+    // the client can neither read the ledger nor call the writer
+    expect(await as(pg, BUYER_QT, () => err(pg.exec('select * from data_ledger')))).toMatch(/permission denied|row-level security/);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`SELECT public._append_data_ledger('x','y','z','m','o',null,null,null,null,null)`)))).toMatch(/permission denied/);
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_orders (id, order_number, supplier_id, entity_code) VALUES ('${PO}','S7','${SUP}','QT')`));
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_order_items (purchase_order_id, raw_material_id, quantity_ordered, unit_price, line_total, purchase_uom) VALUES ('${PO}','${RM}',3,2,6,'kg')`));
+    await as(pg, BUYER_QT, () => pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE id='${PO}'`));
+    await as(pg, ADMIN, () => pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE id='${PO}'`));
+    expect(await led(pg, `entity_type='purchase_orders'`)).toEqual([
+      { action: 'created', entity_type: 'purchase_orders', user_id: BUYER_QT, role: 'procurement', sf: null, st: 'draft' },
+      { action: 'updated', entity_type: 'purchase_orders', user_id: BUYER_QT, role: 'procurement', sf: 'draft', st: 'pending_approval' },
+      { action: 'updated', entity_type: 'purchase_orders', user_id: ADMIN, role: 'other', sf: 'pending_approval', st: 'ordered' },
+    ]);
+    expect(await led(pg, `entity_type='purchase_order_items'`)).toEqual([
+      { action: 'created', entity_type: 'purchase_order_items', user_id: BUYER_QT, role: 'procurement', sf: null, st: null }]);
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO suppliers (name, status) VALUES ('Ledger Co','pending')`));
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('QT','${SUP}','L-1','2026-10-20',9)`));
+    expect(await led(pg, `entity_type in ('suppliers','supplier_bills')`)).toEqual([
+      { action: 'created', entity_type: 'suppliers', user_id: BUYER_QT, role: 'procurement', sf: null, st: 'pending' },
+      { action: 'created', entity_type: 'supplier_bills', user_id: BUYER_QT, role: 'procurement', sf: null, st: null }]);
+    // before/after payload is the whole row
+    expect((await rows(pg, `select after_data->>'order_number' n from data_ledger where entity_type='purchase_orders' and action='created'`))[0].n).toBe('S7');
+  });
+  it('a rejected write leaves no ledger row; admin edits without status change are not noise; receipts are not double-logged', async () => {
+    const pg = await db();
+    await pg.exec(`DELETE FROM data_ledger`);
+    await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE id='${PO_QT}'`)));       // refused
+    await as(pg, ADMIN, () => pg.exec(`UPDATE purchase_orders SET notes='tidy' WHERE id='${PO_QT}'`));                    // admin, no status change
+    expect(await c0(pg, `select count(*) n from data_ledger where entity_type='purchase_orders'`)).toBe(0);
+    await as(pg, ADMIN, () => pg.exec(`UPDATE supplier_items SET status='inactive' WHERE id='00000000-0000-0000-0000-00000000b0b1'`));
+    expect(await c0(pg, `select count(*) n from data_ledger where entity_type='supplier_items'`)).toBe(1);
+    await pg.exec(`DELETE FROM data_ledger`);
+    await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":2,"expected_previous_received":0,"quantity_uom":"kg"}]'::jsonb, 'DO-1') r`));
+    expect(await c0(pg, `select count(*) n from data_ledger where entity_type='purchase_order_items'`)).toBe(0);          // line qty_received churn skipped
+    expect(await c0(pg, `select count(*) n from data_ledger where entity_type='purchase_order' and action='received' and user_id='${BUYER_QT}'`)).toBe(1);   // the receipt itself is ledgered by 081
+  });
+});
+
 describe('S4 (own change set 087): is_profiles_admin() row_security leak', () => {
   const BATCH = `BEGIN; SELECT public.is_profiles_admin() a; SELECT current_setting('row_security') rs; SELECT count(*) FROM suppliers; COMMIT;`;
   const runBatch = (pg: PGlite, uid: string) => as(pg, uid, async () => {

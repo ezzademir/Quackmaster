@@ -11,6 +11,12 @@ BEGIN
 END $$;
 DROP FUNCTION IF EXISTS public._consume_po_receipt_ticket(uuid);
 DROP TABLE IF EXISTS public.po_receipt_tickets;
+DROP TRIGGER IF EXISTS procurement_audit ON public.purchase_orders;
+DROP TRIGGER IF EXISTS procurement_audit ON public.purchase_order_items;
+DROP TRIGGER IF EXISTS procurement_audit ON public.suppliers;
+DROP TRIGGER IF EXISTS procurement_audit ON public.supplier_items;
+DROP TRIGGER IF EXISTS procurement_audit ON public.supplier_bills;
+DROP FUNCTION IF EXISTS public._procurement_audit();
 DROP VIEW IF EXISTS public.v_supplier_bill_status;
 DROP FUNCTION IF EXISTS public.supplier_bill_paid_rm(uuid);
 DROP FUNCTION IF EXISTS public._supplier_display_name(uuid);
