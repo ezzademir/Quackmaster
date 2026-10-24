@@ -515,9 +515,8 @@ CREATE TABLE IF NOT EXISTS public.supplier_bills (
   UNIQUE (supplier_id, bill_number)
 );
 ALTER TABLE public.supplier_bills ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS supplier_bills_staff_select ON public.supplier_bills;
-CREATE POLICY supplier_bills_staff_select ON public.supplier_bills FOR SELECT TO authenticated
-  USING (public.is_authenticated_active_staff());
+-- S12: bills are readable only by admin and by procurement users within their assigned business tags.
+-- Plain active staff (hub/outlet) read nothing: there is deliberately NO staff select policy.
 DROP POLICY IF EXISTS supplier_bills_admin ON public.supplier_bills;
 CREATE POLICY supplier_bills_admin ON public.supplier_bills FOR ALL TO authenticated
   USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
@@ -551,8 +550,8 @@ CREATE TRIGGER supplier_bills_guard BEFORE INSERT OR UPDATE ON public.supplier_b
 REVOKE ALL ON public.supplier_bills FROM PUBLIC, anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.supplier_bills TO authenticated;
 
--- Payments: part payments allowed; recording is admin-only (RLS). Procurement never reads this table,
--- it sees only the derived status in v_supplier_bill_status.
+-- Payments: part payments allowed; recording is admin-only (RLS). S12: read is admin + procurement within the
+-- tags of the payment's bill (via the bill, so a user who cannot see a bill cannot see its payments); plain staff nothing.
 CREATE TABLE IF NOT EXISTS public.supplier_payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   bill_id uuid NOT NULL REFERENCES public.supplier_bills(id) ON DELETE RESTRICT,
@@ -570,9 +569,10 @@ ALTER TABLE public.supplier_payments ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS supplier_payments_admin ON public.supplier_payments;
 CREATE POLICY supplier_payments_admin ON public.supplier_payments FOR ALL TO authenticated
   USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
-DROP POLICY IF EXISTS supplier_payments_staff_select ON public.supplier_payments;
-CREATE POLICY supplier_payments_staff_select ON public.supplier_payments FOR SELECT TO authenticated
-  USING (public.is_authenticated_active_staff());
+DROP POLICY IF EXISTS supplier_payments_procurement_select ON public.supplier_payments;
+CREATE POLICY supplier_payments_procurement_select ON public.supplier_payments FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.supplier_bills b WHERE b.id = supplier_payments.bill_id
+                 AND public.procurement_has_entity(b.entity_code)));
 REVOKE ALL ON public.supplier_payments FROM PUBLIC, anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.supplier_payments TO authenticated;
 
@@ -607,7 +607,7 @@ RETURNS numeric LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
   SELECT COALESCE((SELECT sum(sp.amount_rm) FROM public.supplier_payments sp WHERE sp.bill_id = b.id), 0)
   FROM public.supplier_bills b
   WHERE b.id = p_bill_id
-    AND (public.is_authenticated_active_staff() OR public.procurement_has_entity(b.entity_code));
+    AND (public.is_profiles_admin() OR public.procurement_has_entity(b.entity_code));
 $$;
 REVOKE ALL ON FUNCTION public.supplier_bill_paid_rm(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.supplier_bill_paid_rm(uuid) TO authenticated;

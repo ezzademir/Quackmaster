@@ -437,11 +437,11 @@ describe('084/085 procurement role RLS', () => {
     const pg = await db();
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('00000000-0000-0000-0000-0000000b1190','QT','${SUP}','B9','2026-10-20',10)`)))).toBeNull();
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('MH','${SUP}','B8','2026-10-20',10)`)))).toMatch(/row-level security/);
-    // payments: procurement can neither read nor write them; staff can read; admin writes
-    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from supplier_payments'))).toBe(0);
+    // payments: procurement reads only its own tag's payments and cannot write; plain staff reads nothing; admin writes
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from supplier_payments'))).toBe(1);
     expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b1190',10,'2026-10-21','cash')`)))).toMatch(/row-level security/);
     expect(await as(pg, STAFF, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b1190',10,'2026-10-21','cash')`)))).toMatch(/row-level security/);
-    expect(await as(pg, STAFF, () => count(pg, 'select * from supplier_payments'))).toBe(3);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from supplier_payments'))).toBe(0);
     expect(await as(pg, BUYER_QT, () => rows(pg, `select payment_status from v_supplier_bill_status where bill_number='B9'`))).toEqual([{ payment_status: 'unpaid' }]);
     expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference, document_path) VALUES ('00000000-0000-0000-0000-0000000b1190',4,'2026-10-21','duitnow','REF1','bills/b9.pdf')`)))).toBeNull();
     expect(await as(pg, BUYER_QT, () => rows(pg, `select payment_status, balance_rm::float b from v_supplier_bill_status where bill_number='B9'`))).toEqual([{ payment_status: 'part_paid', b: 6 }]);
@@ -812,6 +812,39 @@ describe('S10 (088): mandatory QT / MH tag on NEW stock postings; old rows untou
     expect(await c0(pg, `select count(*) n from inventory_lots`)).toBe(1);
     await as(pg, ADMIN, () => receive(pg, PO_QT, L_QT, 2));
     expect(await hubQty(pg, RM)).toBe(2);
+  });
+});
+
+describe('S12: supplier bills / payments / status readable by admin + procurement within own tags only', () => {
+  const B_QT = '00000000-0000-0000-0000-0000000b1110';
+  const B_MH = '00000000-0000-0000-0000-0000000b1120';
+  it('plain active staff gets zero rows from the tables, the view and the paid-total function', async () => {
+    const pg = await db();
+    expect(await as(pg, STAFF, () => count(pg, 'select * from supplier_bills'))).toBe(0);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from supplier_payments'))).toBe(0);
+    expect(await as(pg, STAFF, () => count(pg, 'select * from v_supplier_bill_status'))).toBe(0);
+    expect((await as(pg, STAFF, () => rows(pg, `select supplier_bill_paid_rm('${B_QT}') v`)))[0].v).toBeNull();
+    // and cannot write them either
+    expect(await as(pg, STAFF, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('QT','${SUP}','S-1','2026-10-20',1)`)))).toMatch(/row-level security/);
+  });
+  it('procurement reads only bills, payments and status of its own business tags', async () => {
+    const pg = await db();
+    expect(await as(pg, BUYER_QT, () => rows(pg, 'select entity_code from supplier_bills'))).toEqual([{ entity_code: 'QT' }]);
+    expect(await as(pg, BUYER_MH, () => rows(pg, 'select entity_code from supplier_bills'))).toEqual([{ entity_code: 'MH' }]);
+    expect(await as(pg, BUYER_QT, () => rows(pg, 'select bill_id, amount_rm::float a from supplier_payments'))).toEqual([{ bill_id: B_QT, a: 40 }]);
+    expect(await as(pg, BUYER_MH, () => rows(pg, 'select amount_rm::float a from supplier_payments order by 1'))).toEqual([{ a: 20 }, { a: 30 }]);
+    expect(await as(pg, BUYER_QT, () => rows(pg, 'select entity_code, paid_rm::float p from v_supplier_bill_status'))).toEqual([{ entity_code: 'QT', p: 40 }]);
+    expect(await as(pg, BUYER_MH, () => rows(pg, 'select entity_code, payment_status from v_supplier_bill_status'))).toEqual([{ entity_code: 'MH', payment_status: 'paid' }]);
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select supplier_bill_paid_rm('${B_MH}') v`)))[0].v).toBeNull();
+    // a user with both tags sees both
+    await pg.exec(`INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${BUYER_QT}', 'merdeka_house')`);
+    expect(await as(pg, BUYER_QT, () => count(pg, 'select * from supplier_bills'))).toBe(2);
+  });
+  it('admin reads everything', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from supplier_bills'))).toBe(2);
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from supplier_payments'))).toBe(3);
+    expect(await as(pg, ADMIN, () => count(pg, 'select * from v_supplier_bill_status'))).toBe(2);
   });
 });
 

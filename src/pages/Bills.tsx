@@ -19,7 +19,7 @@ interface BillRow {
 
 /** Supplier bills. Procurement records bills and sees payment status read-only; only admins record (part) payments into supplier_payments (DB-enforced). */
 export function Bills() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isProcurement } = useAuth();
   const [rows, setRows] = useState<BillRow[]>([]);
   const [suppliers, setSuppliers] = useState<Array<{ id: string; name: string }>>([]);
   const [entities, setEntities] = useState<MyEntity[]>([]);
@@ -87,6 +87,10 @@ export function Bills() {
 
   const payValid = pay.bill_id && Number(pay.amount_rm) > 0 && pay.paid_on;
   const valid = form.supplier_id && form.entity_code && form.bill_number.trim() && form.bill_date && Number(form.amount_rm) >= 0 && form.amount_rm !== '';
+
+  if (!isAdmin && !isProcurement) {
+    return <EmptyState title="No access" description="Supplier bills are visible to admins and procurement only." />;
+  }
 
   return (
     <div className="space-y-4">
