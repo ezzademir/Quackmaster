@@ -22,7 +22,18 @@ import { parseApproveResult } from '../utils/approveResult';
 import { countDeactivated, filterByActive, isUserActive } from '../utils/userActive';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
-import { ASSIGNABLE_ROLES, isAssignableRole, roleDraftFromRole, roleRpcArgs } from '../utils/userRoleDraft';
+import {
+  ASSIGNABLE_ROLES,
+  PROCUREMENT_TAG_OPTIONS,
+  isAssignableRole,
+  normaliseTags,
+  planRoleSave,
+  roleDraftFromRole,
+  roleRpcArgs,
+  saveErrorText,
+  tagsDraftFromUser,
+  tagsLabel,
+} from '../utils/userRoleDraft';
 
 interface UserRecord {
   id: string;
@@ -35,6 +46,8 @@ interface UserRecord {
   created_at: string;
   is_active?: boolean | null;
   deactivated_at?: string | null;
+  /** business tags (procurement users only), from get_users_management_data */
+  entity_tags?: string[];
 }
 
 interface PendingUser extends UserRecord {
@@ -90,6 +103,7 @@ export function Users() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [roleDraft, setRoleDraft] = useState<string>('staff');
   const [outletDraft, setOutletDraft] = useState('');
+  const [tagsDraft, setTagsDraft] = useState<string[]>([]);
 
   const q = searchQuery.trim().toLowerCase();
   const filteredUsers = useMemo(
@@ -165,6 +179,7 @@ export function Users() {
           email: string;
           is_active?: boolean | null;
           deactivated_at?: string | null;
+          entity_tags?: string[] | null;
         }>;
         pending?: Array<{
           id: string;
@@ -227,6 +242,7 @@ export function Users() {
         created_at: p.created_at,
         is_active: p.is_active !== false,
         deactivated_at: p.deactivated_at ?? null,
+        entity_tags: normaliseTags(p.entity_tags),
         email: (p.email && p.email.trim() !== '' ? p.email : null) || 'Unknown',
       })) as UserRecord[];
 
@@ -386,53 +402,54 @@ export function Users() {
   async function handleSaveRoleAndOutlet(target: UserRecord) {
     if (!authUser?.id || target.id === authUser.id) return;
 
-    const r = roleDraft;
-    if (r === 'supervisor' && !outletDraft.trim()) {
-      setRoleNotice({ tone: 'err', text: 'Supervisors need an assigned outlet.' });
+    const plan = planRoleSave(
+      { role: target.role, assignedOutletId: target.assigned_outlet_id, tags: target.entity_tags },
+      { role: roleDraft, outletId: outletDraft, tags: tagsDraft }
+    );
+    if (plan.error) {
+      setRoleNotice({ tone: plan.error === 'Nothing to change.' ? 'ok' : 'err', text: plan.error });
       return;
     }
 
     setBusyRoleUserId(target.id);
     setRoleNotice(null);
 
+    // The database writes the audit (ledger) entries for role and tag changes, with old and new values, so
+    // the screen no longer writes one of its own.
+    let roleSaved = false;
     try {
-      const { data, error } = await supabase.rpc(
-        'admin_set_profile_role_and_outlet',
-        roleRpcArgs(target.id, r, outletDraft)
-      );
-
-      if (error) throw error;
-
-      const payload = data as {
-        success?: boolean;
-        error?: string;
-        message?: string;
-        role?: string;
-        assigned_outlet_id?: string | null;
-      };
-
-      if (!payload?.success) {
-        setRoleNotice({
-          tone: 'err',
-          text: payload?.message ?? payload?.error ?? 'Could not update role',
-        });
-        return;
+      if (plan.callRole) {
+        const { data, error } = await supabase.rpc(
+          'admin_set_profile_role_and_outlet',
+          roleRpcArgs(target.id, roleDraft, outletDraft)
+        );
+        if (error) throw error;
+        const payload = data as { success?: boolean; error?: string; message?: string } | null;
+        if (!payload?.success) {
+          setRoleNotice({ tone: 'err', text: saveErrorText(payload?.error, payload?.message ?? 'Could not update role') });
+          return;
+        }
+        roleSaved = true;
       }
 
-      await writeLedgerEntry({
-        action: 'updated',
-        entityType: 'profile',
-        entityId: target.id,
-        module: 'users',
-        operation: 'event',
-        metadata: {
-          role_change: true,
-          new_role: payload.role,
-          assigned_outlet_id: payload.assigned_outlet_id,
-        },
-      });
+      if (plan.callTags) {
+        const { data, error } = await supabase.rpc('admin_set_procurement_tags', {
+          p_target_user_id: target.id,
+          p_tags: plan.tags,
+        });
+        if (error) throw error;
+        const payload = data as { success?: boolean; error?: string; message?: string } | null;
+        if (!payload?.success) {
+          if (roleSaved) await loadUsers();
+          setRoleNotice({
+            tone: 'err',
+            text: `${roleSaved ? 'The role was saved, but the business tags were not: ' : ''}${saveErrorText(payload?.error, payload?.message)}`,
+          });
+          return;
+        }
+      }
 
-      setRoleNotice({ tone: 'ok', text: 'Role and outlet saved.' });
+      setRoleNotice({ tone: 'ok', text: 'Role, outlet and business tags saved.' });
       await loadUsers();
       if (drawer.open && drawer.tab === 'approved' && drawer.user.id === target.id) {
         setDrawer({
@@ -440,19 +457,22 @@ export function Users() {
           tab: 'approved',
           user: {
             ...drawer.user,
-            role: payload.role ?? r,
-            assigned_outlet_id: payload.assigned_outlet_id ?? (r === 'supervisor' ? outletDraft : null),
+            role: roleDraft,
+            assigned_outlet_id: roleDraft === 'supervisor' ? outletDraft : null,
+            entity_tags: plan.tags,
           },
         });
-        setOutletDraft(payload.assigned_outlet_id ?? (r === 'supervisor' ? outletDraft : ''));
+        setOutletDraft(roleDraft === 'supervisor' ? outletDraft : '');
+        setTagsDraft(plan.tags);
       }
     } catch (error: unknown) {
       console.error('Error updating role:', error);
-      const msg =
+      const raw =
         error && typeof error === 'object' && 'message' in error
           ? String((error as { message: string }).message)
           : 'Failed to update role';
-      setRoleNotice({ tone: 'err', text: msg });
+      if (roleSaved) await loadUsers();
+      setRoleNotice({ tone: 'err', text: `${roleSaved ? 'The role was saved, but the business tags were not: ' : ''}${saveErrorText(raw)}` });
     } finally {
       setBusyRoleUserId(null);
     }
@@ -769,13 +789,14 @@ export function Users() {
                     <ListRow
                       key={user.id}
                       title={user.email}
-                      meta={`${user.full_name || 'N/A'} · ${user.role} · ${outletLabel}${isUserActive(user) ? '' : ' · Deactivated'}`}
+                      meta={`${user.full_name || 'N/A'} · ${user.role}${String(user.role).toLowerCase().trim() === 'procurement' ? ` (${tagsLabel(user.entity_tags)})` : ''} · ${outletLabel}${isUserActive(user) ? '' : ' · Deactivated'}`}
                       aside={
                         <button
                           type="button"
                           onClick={() => {
                             setNameDraft(user.full_name ?? '');
                             setRoleDraft(roleDraftFromRole(user.role));
+                            setTagsDraft(tagsDraftFromUser(user.role, user.entity_tags));
                             setOutletDraft(user.assigned_outlet_id ?? '');
                             setDrawer({ open: true, tab: 'approved', user });
                           }}
@@ -819,6 +840,7 @@ export function Users() {
                             }`}
                           >
                             {user.role}
+                            {String(user.role).toLowerCase().trim() === 'procurement' && ` · ${tagsLabel(user.entity_tags)}`}
                           </span>
                           {!isUserActive(user) && (
                             <span className="ml-1 rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
@@ -841,6 +863,7 @@ export function Users() {
                             onClick={() => {
                               setNameDraft(user.full_name ?? '');
                               setRoleDraft(roleDraftFromRole(user.role));
+                            setTagsDraft(tagsDraftFromUser(user.role, user.entity_tags));
                               setOutletDraft(user.assigned_outlet_id ?? '');
                               setDrawer({ open: true, tab: 'approved', user });
                             }}
@@ -1131,6 +1154,11 @@ export function Users() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
                       Role &amp; outlet
                     </p>
+                    {String(drawerApproved.role).toLowerCase().trim() === 'procurement' && (
+                      <p className="text-xs text-stone-600">
+                        Current business tags: <span className="font-medium">{tagsLabel(drawerApproved.entity_tags)}</span>
+                      </p>
+                    )}
                     {authUser?.id !== drawerApproved.id ? (
                       <>
                         <select
@@ -1160,6 +1188,35 @@ export function Users() {
                               </option>
                             ))}
                           </select>
+                        )}
+                        {roleDraft === 'procurement' && (
+                          <fieldset className="space-y-1.5 rounded-lg border border-stone-200 p-3">
+                            <legend className="px-1 text-xs font-medium text-stone-600">
+                              Business tags (pick one or more)
+                            </legend>
+                            {PROCUREMENT_TAG_OPTIONS.map((o) => (
+                              <label key={o.value} className="flex items-center gap-2 text-sm text-stone-800">
+                                <input
+                                  type="checkbox"
+                                  checked={tagsDraft.includes(o.value)}
+                                  onChange={(e) =>
+                                    setTagsDraft((cur) =>
+                                      e.target.checked ? normaliseTags([...cur, o.value]) : cur.filter((t) => t !== o.value)
+                                    )
+                                  }
+                                />
+                                {o.short} · {o.label}
+                              </label>
+                            ))}
+                            {tagsDraft.length === 0 && (
+                              <p className="text-xs text-amber-700">At least one tag is required to save.</p>
+                            )}
+                          </fieldset>
+                        )}
+                        {drawerApproved.role !== roleDraft && drawerApproved.role === 'procurement' && (
+                          <p className="text-xs text-stone-500">
+                            Moving this user away from Procurement clears their business tags (recorded in the audit log).
+                          </p>
                         )}
                         <button
                           type="button"

@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import USERS_TSX from '../pages/Users.tsx?raw';
-import { ASSIGNABLE_ROLES, isAssignableRole, roleDraftFromRole, roleRpcArgs } from './userRoleDraft';
+import {
+  ASSIGNABLE_ROLES,
+  PROCUREMENT_TAG_OPTIONS,
+  isAssignableRole,
+  normaliseTags,
+  planRoleSave,
+  roleDraftFromRole,
+  roleRpcArgs,
+  saveErrorText,
+  tagsDraftFromUser,
+  tagsLabel,
+} from './userRoleDraft';
 
 const TARGET = '00000000-0000-0000-0000-0000000000a4';
 
@@ -49,6 +60,74 @@ describe('Users screen role draft', () => {
     expect(USERS_TSX).not.toMatch(/rl === 'admin' \? 'admin'/);
     expect(USERS_TSX).not.toMatch(/as 'admin' \| 'staff' \| 'supervisor'/);
     expect(USERS_TSX).toMatch(/ASSIGNABLE_ROLES\.map/);
-    expect(USERS_TSX).toMatch(/roleRpcArgs\(target\.id, r, outletDraft\)/);
+    expect(USERS_TSX).toMatch(/roleRpcArgs\(target\.id, roleDraft, outletDraft\)/);
+  });
+});
+
+describe('Users screen business tags (procurement users)', () => {
+  const proc = { role: 'procurement', assignedOutletId: null, tags: ['merdeka_house'] };
+
+  it('offers MH and QT, the two tags the database knows', () => {
+    expect(PROCUREMENT_TAG_OPTIONS.map((o) => [o.short, o.value])).toEqual([['MH', 'merdeka_house'], ['QT', 'quackteow']]);
+  });
+
+  it('opening a procurement user shows their tags; any other role opens with none', () => {
+    expect(tagsDraftFromUser('procurement', ['quackteow', 'merdeka_house', 'quackteow'])).toEqual(['merdeka_house', 'quackteow']);
+    expect(tagsDraftFromUser('staff', ['quackteow'])).toEqual([]);
+    expect(tagsLabel(['quackteow', 'merdeka_house'])).toBe('MH, QT');
+    expect(tagsLabel([])).toBe('—');
+    expect(normaliseTags(null)).toEqual([]);
+  });
+
+  it('procurement needs one or more tags before Save sends anything', () => {
+    for (const cur of [{ role: 'staff' }, proc]) {
+      const plan = planRoleSave(cur, { role: 'procurement', outletId: '', tags: [] });
+      expect(plan).toMatchObject({ callRole: false, callTags: false });
+      expect(plan.error).toMatch(/at least one business tag/i);
+    }
+  });
+
+  it('staff -> procurement sends the role first, then the tags', () => {
+    expect(planRoleSave({ role: 'staff' }, { role: 'procurement', outletId: '', tags: ['quackteow', 'merdeka_house'] }))
+      .toEqual({ error: null, callRole: true, callTags: true, tags: ['merdeka_house', 'quackteow'] });
+  });
+
+  it('opened and saved with no change sends nothing (the role is never re-written or demoted)', () => {
+    expect(planRoleSave(proc, { role: roleDraftFromRole('procurement'), outletId: '', tags: ['merdeka_house'] }))
+      .toMatchObject({ error: 'Nothing to change.', callRole: false, callTags: false });
+  });
+
+  it('a procurement user whose tags change keeps the role and only sends the tags', () => {
+    expect(planRoleSave(proc, { role: 'procurement', outletId: '', tags: ['merdeka_house', 'quackteow'] }))
+      .toEqual({ error: null, callRole: false, callTags: true, tags: ['merdeka_house', 'quackteow'] });
+  });
+
+  it('leaving procurement sends the role and NO tags (the database clears them and ledgers old and new)', () => {
+    for (const to of ['staff', 'admin']) {
+      expect(planRoleSave(proc, { role: to, outletId: '', tags: ['merdeka_house'] }))
+        .toEqual({ error: null, callRole: true, callTags: false, tags: [] });
+    }
+    expect(planRoleSave(proc, { role: 'supervisor', outletId: 'o1', tags: ['merdeka_house'] }))
+      .toEqual({ error: null, callRole: true, callTags: false, tags: [] });
+    expect(planRoleSave(proc, { role: 'supervisor', outletId: '', tags: [] }).error).toMatch(/outlet/i);
+  });
+
+  it('database refusals are shown in plain words', () => {
+    expect(saveErrorText('last_active_admin')).toMatch(/last active admin/i);
+    expect(saveErrorText('profiles: last_active_admin: cannot demote')).toMatch(/last active admin/i);
+    expect(saveErrorText('invalid_target')).toMatch(/your own/i);
+    expect(saveErrorText('something else', 'Server said no')).toBe('Server said no');
+  });
+
+  it('Users.tsx: tag checkboxes for procurement, tags in list and drawer, tags RPC after the role RPC, no client-side role ledger write', () => {
+    expect(USERS_TSX).toMatch(/PROCUREMENT_TAG_OPTIONS\.map/);
+    expect(USERS_TSX).toMatch(/roleDraft === 'procurement' &&/);
+    expect(USERS_TSX).toMatch(/tagsLabel\(user\.entity_tags\)/);
+    expect(USERS_TSX).toMatch(/tagsLabel\(drawerApproved\.entity_tags\)/);
+    expect(USERS_TSX).toMatch(/entity_tags: normaliseTags\(p\.entity_tags\)/);
+    expect(USERS_TSX.indexOf("'admin_set_profile_role_and_outlet'")).toBeGreaterThan(-1);
+    expect(USERS_TSX.indexOf("'admin_set_profile_role_and_outlet'")).toBeLessThan(USERS_TSX.indexOf("'admin_set_procurement_tags'"));
+    expect(USERS_TSX).not.toMatch(/role_change:\s*true/);                 // the database audits role changes now
+    expect(USERS_TSX.match(/setTagsDraft\(tagsDraftFromUser\(user\.role, user\.entity_tags\)\)/g)?.length).toBe(2);
   });
 });
