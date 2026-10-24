@@ -500,6 +500,64 @@ describe('090 H1: user_entities grants (REVOKE ALL, then SELECT only)', () => {
   });
 });
 
+describe('090 H2: a failed ledger insert rolls the change back (fail closed); the shared helper is untouched', () => {
+  const BREAK = `ALTER TABLE data_ledger ADD CONSTRAINT zz_ledger_down CHECK (action NOT IN ('role_changed','tags_changed')) NOT VALID`;
+  const snapshot = async (pg: PGlite) => ({
+    roles: await rows(pg, `select id, role, assigned_outlet_id from profiles order by id`),
+    tags: await rows(pg, `select user_id, procurement_tag from user_entities order by 1, 2`),
+    ledger: await count2(pg),
+  });
+  const count2 = async (pg: PGlite) => (await one(pg, `select count(*)::int n from data_ledger`)).n as number;
+
+  it('the role RPC, a direct admin update and a service-role update all fail and change nothing when the ledger insert fails', async () => {
+    const pg = await db();
+    await pg.exec(BREAK);
+    const before = await snapshot(pg);
+    expect(await as(pg, ADMIN, () => err(setRole(pg, STAFF, 'admin')))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET role='supervisor', assigned_outlet_id='${OUTLET}' WHERE id='${STAFF}'`)))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='admin' WHERE id='${STAFF}'`)))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await snapshot(pg)).toEqual(before);
+  });
+  it('admin_set_procurement_tags (add, replace, shrink) fails and changes nothing when the ledger insert fails', async () => {
+    const pg = await db();
+    await pg.exec(BREAK);
+    const before = await snapshot(pg);
+    for (const tags of [['quackteow', 'merdeka_house'], ['merdeka_house']]) {   // add one / replace (an unchanged set writes nothing)
+      expect(await as(pg, ADMIN, () => err(setTags(pg, BUYER_QT, tags))), tags.join()).toMatch(/zz_ledger_down|data_ledger/);
+    }
+    expect(await snapshot(pg)).toEqual(before);
+    expect(await tagsOf(pg, BUYER_QT)).toEqual(['quackteow']);
+  });
+  it('direct admin writes to user_entities, and clearing tags by moving a user away from procurement, roll back too', async () => {
+    const pg = await db();
+    await pg.exec(BREAK);
+    const before = await snapshot(pg);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`DELETE FROM user_entities WHERE user_id='${BUYER_QT}'`)))).toMatch(/permission denied/);   // no client write grant (H1); the next lines re-add it to reach the trigger
+    await pg.exec(GRANT_WRITES);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`DELETE FROM user_entities WHERE user_id='${BUYER_QT}'`)))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${BUYER_QT}','merdeka_house')`)))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await as(pg, ADMIN, () => err(setRole(pg, BUYER_QT, 'staff')))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${BUYER_MH}'`)))).toMatch(/zz_ledger_down|data_ledger/);
+    expect(await snapshot(pg)).toEqual(before);
+    expect(await roleOf(pg, BUYER_QT)).toBe('procurement');
+    expect(await tagsOf(pg, BUYER_MH)).toEqual(['merdeka_house']);
+  });
+  it('with the ledger healthy the same calls succeed (the breakage above is what stops them)', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => setTags(pg, BUYER_QT, ['quackteow', 'merdeka_house']))).toMatchObject({ success: true });
+    expect(await as(pg, ADMIN, () => setRole(pg, STAFF, 'admin'))).toMatchObject({ success: true });
+    expect((await ledger(pg)).map((x) => x.entity_id).sort()).toEqual([BUYER_QT, STAFF].sort());
+  });
+  it('the shared _append_data_ledger is untouched (still the verbatim live definition that swallows a failure) and 090 audit paths do not call it', async () => {
+    const pg = await db();
+    const d = String((await one(pg, `select pg_get_functiondef('public._append_data_ledger(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb)'::regprocedure) d`)).d);
+    expect(defOf(d)).toBe(defOf(LIVE_LEDGER));
+    expect(MIG090).not.toMatch(/PERFORM public\._append_data_ledger/);
+    expect(MIG090.match(/INSERT INTO public\.data_ledger/g)?.length).toBe(2);
+    expect(MIG090).toMatch(/Ledger \(fail closed\)/);
+  });
+});
+
 describe('090 rollback (exact restore) and order independence', () => {
   const triggers = async (pg: PGlite, t: string) => (await rows(pg, `select tgname from pg_trigger where tgrelid='public.${t}'::regclass and not tgisinternal order by 1`)).map((r) => r.tgname);
   const defs = async (pg: PGlite) => Object.fromEntries((await rows(pg, `select proname, pg_get_functiondef(oid) def from pg_proc where pronamespace='public'::regnamespace`)).map((r) => [r.proname as string, String(r.def)]));

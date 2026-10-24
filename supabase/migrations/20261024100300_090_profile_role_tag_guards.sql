@@ -41,8 +41,10 @@
     4. admin_set_procurement_tags(user, tags[]): admin only, not self, target must be a procurement user, at least one tag,
        every tag must exist in procurement_tags; replaces the set.
     5. get_users_management_data(): each approved user also carries entity_tags (patched in place, nothing else changes).
-  Ledger: only the allowed operations (insert/update/delete/event) are used. _append_data_ledger swallows a failed insert into a
-  WARNING (086 behaviour), so a ledger failure does not block the change; the tests assert the rows exist.
+  Ledger (fail closed): only the allowed operations (insert/update/delete/event) are used, and the two audit triggers INSERT INTO
+  data_ledger DIRECTLY (not through _append_data_ledger, which swallows a failed insert into a WARNING and is left untouched). If the
+  ledger insert fails, the role / outlet / tag change is rolled back with it, on every path (role RPC, direct update, admin_set_procurement_tags,
+  clearing tags on leaving procurement, service_role). Consequence to know: if data_ledger is broken, role and tag changes stop until it is fixed.
 */
 
 DO $$ BEGIN
@@ -99,6 +101,9 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   v_old_tags text[] := ARRAY[]::text[];
   v_cleared text[] := ARRAY[]::text[];
+  v_uid uuid := auth.uid();
+  v_email text := '';
+  v_meta jsonb := jsonb_build_object('source', 'profiles_trigger');
 BEGIN
   IF to_regclass('public.user_entities') IS NOT NULL THEN
     EXECUTE 'SELECT COALESCE(array_agg(procurement_tag ORDER BY procurement_tag), ARRAY[]::text[]) FROM public.user_entities WHERE user_id = $1'
@@ -110,13 +115,22 @@ BEGIN
     END IF;
   END IF;
 
-  PERFORM public._append_data_ledger(
-    'role_changed', 'profile', OLD.id::text, 'users', 'update', NULL,
+  v_meta := v_meta || jsonb_build_object('tags_cleared', to_jsonb(v_cleared));
+  IF v_uid IS NULL THEN
+    v_meta := v_meta || jsonb_build_object('actor', 'system');
+  ELSE
+    BEGIN   -- only the e-mail lookup is best-effort; the ledger insert below is not
+      SELECT COALESCE(u.email::text, '') INTO v_email FROM auth.users u WHERE u.id = v_uid;
+    EXCEPTION WHEN OTHERS THEN v_email := '';
+    END;
+  END IF;
+  -- direct insert: a failure aborts the role change (fail closed)
+  INSERT INTO public.data_ledger (user_id, user_email, action, entity_type, entity_id, module, operation, before_data, after_data, metadata)
+  VALUES (v_uid, COALESCE(v_email, ''), 'role_changed', 'profile', OLD.id::text, 'users', 'update',
     jsonb_build_object('role', OLD.role, 'assigned_outlet_id', OLD.assigned_outlet_id, 'tags', to_jsonb(v_old_tags)),
     jsonb_build_object('role', NEW.role, 'assigned_outlet_id', NEW.assigned_outlet_id,
                        'tags', CASE WHEN cardinality(v_cleared) > 0 THEN '[]'::jsonb ELSE to_jsonb(v_old_tags) END),
-    NULL,
-    jsonb_build_object('source', 'profiles_trigger', 'tags_cleared', to_jsonb(v_cleared)));
+    v_meta);
   RETURN NEW;
 END $$;
 REVOKE ALL ON FUNCTION public.profiles_audit_role_change() FROM PUBLIC, anon, authenticated;
@@ -162,6 +176,9 @@ DECLARE
   v_removed text[];
   v_new text[];
   v_old text[];
+  v_uid uuid := auth.uid();
+  v_email text := '';
+  v_sys boolean := auth.uid() IS NULL;
 BEGIN
   -- STATEMENT-level AFTER trigger with transition tables: a statement that touches several tag rows of one user
   -- (clearing a two-tag set, or the RPC's replace) is audited once per user with the exact list before and after.
@@ -192,13 +209,21 @@ BEGIN
     FROM (SELECT x AS t FROM unnest(v_new) x WHERE NOT (x = ANY (v_added))
           UNION SELECT x FROM unnest(v_removed) x) z;
     CONTINUE WHEN v_old = v_new;
-    PERFORM public._append_data_ledger(
-      'tags_changed', 'profile', r.user_id::text, 'users', 'update', NULL,
-      jsonb_build_object('tags', to_jsonb(v_old)), jsonb_build_object('tags', to_jsonb(v_new)), NULL,
+    IF NOT v_sys AND v_email = '' THEN
+      BEGIN   -- only the e-mail lookup is best-effort; the ledger insert below is not
+        SELECT COALESCE(u.email::text, '') INTO v_email FROM auth.users u WHERE u.id = v_uid;
+      EXCEPTION WHEN OTHERS THEN v_email := '';
+      END;
+    END IF;
+    -- direct insert: a failure aborts the tag change (fail closed)
+    INSERT INTO public.data_ledger (user_id, user_email, action, entity_type, entity_id, module, operation, before_data, after_data, metadata)
+    VALUES (v_uid, COALESCE(v_email, ''), 'tags_changed', 'profile', r.user_id::text, 'users', 'update',
+      jsonb_build_object('tags', to_jsonb(v_old)), jsonb_build_object('tags', to_jsonb(v_new)),
       jsonb_build_object('source', 'user_entities_trigger',
                          'change', CASE TG_OP WHEN 'INSERT' THEN 'added' WHEN 'DELETE' THEN 'removed' ELSE 'changed' END,
                          'tags_added', to_jsonb(ARRAY(SELECT x FROM unnest(v_new) x WHERE NOT (x = ANY (v_old)))),
-                         'tags_removed', to_jsonb(ARRAY(SELECT x FROM unnest(v_old) x WHERE NOT (x = ANY (v_new))))));
+                         'tags_removed', to_jsonb(ARRAY(SELECT x FROM unnest(v_old) x WHERE NOT (x = ANY (v_new)))))
+        || CASE WHEN v_sys THEN jsonb_build_object('actor', 'system') ELSE '{}'::jsonb END);
   END LOOP;
   RETURN NULL;
 END $$;
