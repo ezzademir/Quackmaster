@@ -273,7 +273,7 @@ function RecipeModal({
                       </select>
                     </td>
                     <td className="px-3 py-2">
-                      <input type="number" min="0" step="0.001" value={line.quantity_required} onChange={(e) => updateLine(i, 'quantity_required', e.target.value)}
+                      <input type="number" min="0" step="0.0001" value={line.quantity_required} onChange={(e) => updateLine(i, 'quantity_required', e.target.value)}
                         className="w-24 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
                     <td className="px-2 py-2">
@@ -336,7 +336,7 @@ function NewRunModal({
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
-  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
+  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' | 'procurement' } | null;
   initialRecipeId?: string;
   initialPlannedOutput?: number;
   plannedBatchId?: string | null;
@@ -741,7 +741,7 @@ function NewRunModal({
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <input type="number" min="0" step="0.001" value={m.quantity_consumed}
+                        <input type="number" min="0" step="0.0001" value={m.quantity_consumed}
                           onChange={(e) => {
                             const next = [...runMaterials]; next[i] = { ...next[i], quantity_consumed: e.target.value }; setRunMaterials(next);
                           }}
