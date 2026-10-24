@@ -22,6 +22,7 @@ import { parseApproveResult } from '../utils/approveResult';
 import { countDeactivated, filterByActive, isUserActive } from '../utils/userActive';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
+import { ASSIGNABLE_ROLES, isAssignableRole, roleDraftFromRole, roleRpcArgs } from '../utils/userRoleDraft';
 
 interface UserRecord {
   id: string;
@@ -87,7 +88,7 @@ export function Users() {
   const [tempPassMessage, setTempPassMessage] = useState('');
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
-  const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor'>('staff');
+  const [roleDraft, setRoleDraft] = useState<string>('staff');
   const [outletDraft, setOutletDraft] = useState('');
 
   const q = searchQuery.trim().toLowerCase();
@@ -395,11 +396,10 @@ export function Users() {
     setRoleNotice(null);
 
     try {
-      const { data, error } = await supabase.rpc('admin_set_profile_role_and_outlet', {
-        p_target_user_id: target.id,
-        p_role: r,
-        p_assigned_outlet_id: r === 'supervisor' ? outletDraft.trim() : null,
-      });
+      const { data, error } = await supabase.rpc(
+        'admin_set_profile_role_and_outlet',
+        roleRpcArgs(target.id, r, outletDraft)
+      );
 
       if (error) throw error;
 
@@ -775,10 +775,7 @@ export function Users() {
                           type="button"
                           onClick={() => {
                             setNameDraft(user.full_name ?? '');
-                            const rl = String(user.role).toLowerCase().trim();
-                            setRoleDraft(
-                              rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
-                            );
+                            setRoleDraft(roleDraftFromRole(user.role));
                             setOutletDraft(user.assigned_outlet_id ?? '');
                             setDrawer({ open: true, tab: 'approved', user });
                           }}
@@ -843,10 +840,7 @@ export function Users() {
                             type="button"
                             onClick={() => {
                               setNameDraft(user.full_name ?? '');
-                              const rl = String(user.role).toLowerCase().trim();
-                              setRoleDraft(
-                                rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
-                              );
+                              setRoleDraft(roleDraftFromRole(user.role));
                               setOutletDraft(user.assigned_outlet_id ?? '');
                               setDrawer({ open: true, tab: 'approved', user });
                             }}
@@ -1141,14 +1135,17 @@ export function Users() {
                       <>
                         <select
                           value={roleDraft}
-                          onChange={(e) =>
-                            setRoleDraft(e.target.value as 'admin' | 'staff' | 'supervisor')
-                          }
+                          onChange={(e) => setRoleDraft(e.target.value)}
                           className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900"
                         >
-                          <option value="staff">Staff</option>
-                          <option value="admin">Admin</option>
-                          <option value="supervisor">Outlet supervisor</option>
+                          {ASSIGNABLE_ROLES.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                          {!isAssignableRole(roleDraft) && (
+                            <option value={roleDraft}>{roleDraft} (current)</option>
+                          )}
                         </select>
                         {roleDraft === 'supervisor' && (
                           <select
