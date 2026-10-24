@@ -1526,6 +1526,13 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
       expect(sql).toMatch(/Rollback order: 090 -> 088 -> 087 -> 085 -> 084/);
     }
   });
+  it('J4: every PR-92 rollback header says to run it as ONE batch (psql -1 -v ON_ERROR_STOP=1), never plain psql -f', () => {
+    for (const [n, sql] of [['084', RB084], ['085', RB085], ['087', RB087], ['088', RB088], ['090', RB090]] as const) {
+      const head = sql.split('\n').slice(0, 3).join('\n');
+      expect(head, n).toMatch(/RUN AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f <this file>/);
+      expect(head, n).toMatch(/NEVER plain `psql -f`/);
+    }
+  });
   it('G5: all five rollback headers (084, 085, 087, 088, 090) state the same order, first line of the file for 084/085/087/088', () => {
     for (const [n, sql] of [['084', RB084], ['085', RB085], ['087', RB087], ['088', RB088]] as const) {
       expect(sql.split('\n')[0], n).toMatch(/^-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084/);

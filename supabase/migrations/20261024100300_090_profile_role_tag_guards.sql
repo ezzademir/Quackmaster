@@ -5,6 +5,8 @@
   APPLY ORDER: 084, 085, 087, 088, 090, then 089 (089 must be stamped after this file).
   Depends on 085 (user_entities, 'procurement' role, procurement_exposure_allow) and 087 (is_profiles_admin); the pre-check below refuses to run
   without either one. Independent of 084/088 data.
+  RUN EVERY ROLLBACK (and this file) AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f <file>, or one Supabase SQL editor / execute_sql call; never plain
+  `psql -f` (it keeps going after an error, e.g. past the 085_rollback guard's raise, and leaves a half-done rollback).
   ROLLBACK ORDER (newest first): 089 -> 090 -> 088 -> 087 -> 085 -> 084. supabase/rollbacks/090_rollback.sql is independent of
   084/085/087/088: it restores the live definitions verbatim, and it tolerates user_entities already being gone.
   Keep the order anyway: 090's get_users_management_data reads user_entities, so 085 must not be rolled back while 090 is live.

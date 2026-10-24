@@ -1,4 +1,5 @@
 -- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090); 088's rollback also tolerates running after this one.
+-- RUN AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f <this file> (or one Supabase SQL editor / execute_sql call). NEVER plain `psql -f`: it keeps going after an error (e.g. past a raised guard) and leaves a half-done rollback.
 -- GUARD: refuses to run while 090 is live. 090's triggers/RPC live on public.user_entities and the 'procurement' role that this file removes; dropping
 -- 085 under them strands the profiles guard. Run 090_rollback.sql first (and 089's, if applied), then this file. Raises before touching anything.
 DO $$ BEGIN

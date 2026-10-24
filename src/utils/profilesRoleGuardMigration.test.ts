@@ -920,6 +920,12 @@ describe('090 files: documented order, snapshot, pre-apply requirement, version 
     expect(head).toMatch(/REVERSE-ORDER|reverse-order ROLLBACK REHEARSAL/i);
     expect(head).toMatch(/exactly 32 untagged purchase orders/);
   });
+  it('the 090 header says every rollback runs as ONE batch, never plain psql -f', () => {
+    const head = MIG090.slice(0, MIG090.indexOf('*/'));
+    expect(head).toMatch(/RUN EVERY ROLLBACK \(and this file\) AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f/);
+    expect(head).toMatch(/never plain\s+`psql -f`/);
+    expect(RB090.split('\n').slice(0, 2).join('\n')).toMatch(/RUN AS ONE BATCH/);
+  });
   it('the migration header documents apply order, rollback order, the live snapshot, the seeded-copy JWT run and the scope', () => {
     const head = MIG090.slice(0, MIG090.indexOf('*/'));
     expect(head).toMatch(/APPLY ORDER: 084, 085, 087, 088, 090, then 089/);

@@ -1,4 +1,5 @@
 -- Rollback 090 (profile role / tag guards). ROLLBACK ORDER (newest first): 089 -> 090 -> 088 -> 087 -> 085 -> 084.
+-- RUN AS ONE BATCH: psql -1 -v ON_ERROR_STOP=1 -f <this file> (or one Supabase SQL editor / execute_sql call). NEVER plain `psql -f`: it keeps going after an error and leaves a half-done rollback.
 -- Independent of 084/085/087/088: nothing here depends on their rollbacks having run or not. If 085 was rolled back first,
 -- user_entities is already gone and its triggers went with it (the DO block below tolerates that). Still run 090 BEFORE 085: while 090's
 -- get_users_management_data (it reads user_entities) is live, rolling 085 back first leaves the Users screen without its data until this runs.
@@ -21,7 +22,6 @@
 --   INSERT INTO public.data_ledger (user_id, user_email, action, entity_type, entity_id, module, operation, before_data, after_data, metadata)
 --   VALUES (NULL, '', 'role_changed', 'profile', '<profile id>', 'users', 'update', jsonb_build_object('role', '<old>'), jsonb_build_object('role', '<new>'),
 --           jsonb_build_object('source', 'break_glass_manual', 'actor', 'system', 'reason', '<who / why>'));   -- same again for each demotion (action 'deactivated')
--- RUN AS ONE BATCH: psql -1 or -v ON_ERROR_STOP=1; never plain psql -f.
 -- Tags cleared by 090 when a user left procurement, and the ledger rows 090 wrote, are NOT restored/deleted (the ledger is append-only).
 
 DROP TRIGGER IF EXISTS trg_profiles_role_audit ON public.profiles;
