@@ -4,7 +4,7 @@ import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
 import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.sql?raw';
 import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
-import MIG087 from '../../supabase/migrations/20261024110000_087_is_profiles_admin_scope_row_security.sql?raw';
+import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
 import { receivingUom } from './procurementPayloads';
@@ -1424,5 +1424,22 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     expect(def).toMatch(/DELETE FROM public\.purchase_orders/);
     expect(await err(pg.exec(`SELECT 1 FROM pg_proc WHERE proname='_po_cancel_plan'`))).toBeNull();
     expect(await count(pg, `select * from pg_proc where proname='_po_cancel_plan'`)).toBe(0);
+  });
+});
+
+describe('F6: migration versions follow the migration numbers (084 < 085 < 087 < 088); live-applied 081-083 / 086 keep their live versions', () => {
+  const files = Object.keys(import.meta.glob('../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true }))
+    .map((f) => /\/(\d{14})_(\d{3})_/.exec(f)).filter((m): m is RegExpExecArray => !!m);
+  const ver = (n: string) => files.find((m) => m[2] === n)![1];
+  it('the PR-92 migrations apply in number order', () => {
+    expect([ver('084'), ver('085'), ver('087'), ver('088')]).toEqual([...[ver('084'), ver('085'), ver('087'), ver('088')]].sort());
+    expect(new Set(files.map((m) => m[1])).size).toBe(files.length);          // no duplicate versions
+  });
+  it('081, 082, 083, 086 keep the versions they were applied with on live', () => {
+    expect(['081', '082', '083', '086'].map(ver)).toEqual(['20261023130000', '20261023181403', '20261024020000', '20261023183956']);
+  });
+  it('every migration that has a rollback file is paired (084, 085, 087, 088)', () => {
+    const rb = Object.keys(import.meta.glob('../../supabase/rollbacks/*.sql', { query: '?raw', import: 'default', eager: true }));
+    for (const n of ['084', '085', '087', '088']) expect(rb.some((f) => f.endsWith(`/${n}_rollback.sql`))).toBe(true);
   });
 });
