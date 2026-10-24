@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS public.po_receipt_records (
   purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id) ON DELETE RESTRICT,
   purchase_order_item_id uuid NOT NULL REFERENCES public.purchase_order_items(id) ON DELETE RESTRICT,
   quantity_received numeric(14,4) NOT NULL,
-  quantity_uom text NOT NULL CHECK (quantity_uom IN ('kg', 'g', 'unit', 'pc', 'pack', 'l', 'ml')),
+  quantity_uom text NOT NULL CHECK (btrim(quantity_uom) <> ''),   -- S8: validated against the PO line's own unit in record_po_delivery, not a fixed list (live PO lines carry free-text units)
   invoice_unit_price_rm numeric(12,4) CHECK (invoice_unit_price_rm IS NULL OR invoice_unit_price_rm >= 0),
   do_number text,
   invoice_number text,
@@ -420,6 +420,9 @@ DECLARE
   v_line jsonb;
   v_item record;
   v_cur numeric;
+  v_uom text;
+  v_price_txt text;
+  v_price numeric;
 BEGIN
   IF NOT (public.is_authenticated_active_staff() OR public.procurement_has_po(p_po_id)) THEN
     RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
@@ -453,8 +456,31 @@ BEGIN
       RETURN jsonb_build_object('success', false, 'error', 'invalid_quantity_received',
         'purchase_order_item_id', v_line->>'purchase_order_item_id');
     END IF;
-    SELECT COALESCE(poi.quantity_received, 0) INTO v_cur FROM public.purchase_order_items poi
+    SELECT COALESCE(poi.quantity_received, 0), poi.purchase_uom INTO v_cur, v_uom FROM public.purchase_order_items poi
       WHERE poi.id = (v_line->>'purchase_order_item_id')::uuid;
+    -- S8: unit of measure. If the screen sends one it must be the PO line's own unit (a "5 kg" typed against a "g" line
+    -- would post 1000x the stock). Checked here, before anything is posted.
+    IF NULLIF(trim(v_line->>'quantity_uom'), '') IS NOT NULL THEN
+      IF NULLIF(trim(v_uom), '') IS NOT NULL THEN
+        IF lower(trim(v_line->>'quantity_uom')) <> lower(trim(v_uom)) THEN
+          RETURN jsonb_build_object('success', false, 'error', 'uom_mismatch',
+            'purchase_order_item_id', v_line->>'purchase_order_item_id', 'line_uom', trim(v_uom), 'entered_uom', v_line->>'quantity_uom',
+            'message', 'Unit of measure does not match the PO line. Enter the quantity in ' || trim(v_uom) || '.');
+        END IF;
+      ELSIF lower(trim(v_line->>'quantity_uom')) NOT IN ('kg', 'g', 'unit', 'pc', 'pack', 'l', 'ml') THEN
+        -- the PO line carries no unit, so the entered one must be a known unit
+        RETURN jsonb_build_object('success', false, 'error', 'invalid_uom',
+          'purchase_order_item_id', v_line->>'purchase_order_item_id', 'entered_uom', v_line->>'quantity_uom');
+      END IF;
+    END IF;
+    -- S8: the invoice price is optional. Absent / null / blank is fine (receipt recorded without a price, no price-history
+    -- row); a value that is not a non-negative number is refused up front instead of aborting the receipt mid-way.
+    v_price_txt := NULLIF(trim(v_line->>'invoice_unit_price'), '');
+    IF v_price_txt IS NOT NULL AND v_price_txt !~ '^[0-9]+(\.[0-9]+)?$' THEN
+      RETURN jsonb_build_object('success', false, 'error', 'invalid_invoice_price',
+        'purchase_order_item_id', v_line->>'purchase_order_item_id',
+        'message', 'Invoice unit price must be a number (0 or more), or left blank.');
+    END IF;
     -- optional optimistic check: the screen sends the total it showed; if someone else received since, refuse
     -- instead of silently overwriting (e.g. +4 typed on a stale 5 would otherwise land on 9 when it is now 9)
     IF NULLIF(v_line->>'expected_previous_received', '') IS NOT NULL
@@ -480,17 +506,18 @@ BEGIN
     RETURN v_res;
   END IF;
   FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines) LOOP
-    SELECT poi.id, poi.supplier_item_id, si.pack_qty_base INTO v_item
+    SELECT poi.id, poi.supplier_item_id, poi.purchase_uom, si.pack_qty_base INTO v_item
     FROM public.purchase_order_items poi LEFT JOIN public.supplier_items si ON si.id = poi.supplier_item_id
     WHERE poi.id = (v_line->>'purchase_order_item_id')::uuid AND poi.purchase_order_id = p_po_id;
+    v_price := NULLIF(trim(v_line->>'invoice_unit_price'), '')::numeric;       -- NULL when absent / null / blank (validated above)
     INSERT INTO public.po_receipt_records (purchase_order_id, purchase_order_item_id, quantity_received, quantity_uom,
       invoice_unit_price_rm, do_number, invoice_number, document_path, entered_by)
-    VALUES (p_po_id, v_item.id, (v_line->>'quantity_received')::numeric, COALESCE(v_line->>'quantity_uom', 'unit'),
-      (v_line->>'invoice_unit_price')::numeric, p_do_number, p_invoice_number, p_document_path, auth.uid());
-    IF v_item.supplier_item_id IS NOT NULL AND v_line ? 'invoice_unit_price' THEN
+    VALUES (p_po_id, v_item.id, (v_line->>'quantity_received')::numeric,
+      lower(COALESCE(NULLIF(trim(v_line->>'quantity_uom'), ''), NULLIF(trim(v_item.purchase_uom), ''), 'unit')),
+      v_price, p_do_number, p_invoice_number, p_document_path, auth.uid());
+    IF v_item.supplier_item_id IS NOT NULL AND v_price IS NOT NULL THEN
       INSERT INTO public.price_history (supplier_item_id, price_rm, pack_qty_base, source, purchase_order_item_id, note)
-      VALUES (v_item.supplier_item_id, (v_line->>'invoice_unit_price')::numeric, v_item.pack_qty_base, 'receipt', v_item.id,
-              'PO receipt');
+      VALUES (v_item.supplier_item_id, v_price, v_item.pack_qty_base, 'receipt', v_item.id, 'PO receipt');
     END IF;
   END LOOP;
   RETURN v_res || jsonb_build_object('recorded_lines', jsonb_array_length(p_lines));

@@ -414,8 +414,9 @@ describe('084/085 procurement role RLS', () => {
       ['negative qty (after ticket)', BUYER_QT, call(PO_QT, line('-1')), (o) => expect(o.r ?? o.error).toBeTruthy()],
       // RAISE before the ticket (bad uuid cast in the line check)
       ['RAISE: invalid line id', BUYER_QT, call(PO_QT, `[{"purchase_order_item_id":"nope","quantity_received":1}]`), (o) => expect(o.error).toMatch(/uuid/)],
-      // RAISE after ticket + shipment (bad price cast in the receipt insert)
-      ['RAISE: invalid invoice price', BUYER_QT, call(PO_QT, line('1', ',"invoice_unit_price":"abc"')), (o) => expect(o.error).toMatch(/numeric/)],
+      // S8: a bad price used to RAISE after the ticket + shipment; it is now refused up front, before anything is posted
+      ['invalid invoice price (refused before ticket)', BUYER_QT, call(PO_QT, line('1', ',"invoice_unit_price":"abc"')), (o) => expect(o.r).toMatchObject({ error: 'invalid_invoice_price' })],
+      ['uom mismatch (refused before ticket)', BUYER_QT, call(PO_QT, line('1', ',"quantity_uom":"g"')), (o) => expect(o.r).toMatchObject({ error: 'uom_mismatch' })],
       ['RAISE: invalid quantity', BUYER_QT, call(PO_QT, line('"abc"')), (o) => expect(o.error).toBeTruthy()],
       // success paths: procurement (ticket issued + consumed) and staff (no ticket)
       ['success (procurement)', BUYER_QT, call(PO_QT, line('1')), (o) => expect(o.r).toMatchObject({ success: true })],
@@ -953,6 +954,49 @@ describe('S7: procurement actions are ledgered server-side (data_ledger is close
     await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":2,"expected_previous_received":0,"quantity_uom":"kg"}]'::jsonb, 'DO-1') r`));
     expect(await c0(pg, `select count(*) n from data_ledger where entity_type='purchase_order_items'`)).toBe(0);          // line qty_received churn skipped
     expect(await c0(pg, `select count(*) n from data_ledger where entity_type='purchase_order' and action='received' and user_id='${BUYER_QT}'`)).toBe(1);   // the receipt itself is ledgered by 081
+  });
+});
+
+describe('S8: record_po_delivery validates unit of measure and survives a null invoice price', () => {
+  const recv = (pg: PGlite, extra: string, qty = 2) =>
+    rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":${qty}${extra}}]'::jsonb, 'DO-S8') r`);
+  const hub = async (pg: PGlite) => Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${RM}'`))[0].q);
+  it('a unit that is not the PO line unit is refused and nothing is posted; matching (any case) or omitted unit works and defaults to the line unit', async () => {
+    const pg = await db();                                     // line L_QT is purchased in kg
+    const bad = (await as(pg, BUYER_QT, () => recv(pg, ',"quantity_uom":"g"')))[0].r;
+    expect(bad).toMatchObject({ success: false, error: 'uom_mismatch', line_uom: 'kg', entered_uom: 'g' });
+    expect(await hub(pg)).toBe(0);
+    expect(await c0(pg, `select count(*) n from po_receipt_records`)).toBe(0);
+    expect((await as(pg, BUYER_QT, () => recv(pg, ',"quantity_uom":" KG "')))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, BUYER_QT, () => recv(pg, '', 3)))[0].r).toMatchObject({ success: true });
+    expect(await rows(pg, `select quantity_uom from po_receipt_records order by quantity_received`)).toEqual([{ quantity_uom: 'kg' }, { quantity_uom: 'kg' }]);
+    // a free-text legacy line unit works when it is entered verbatim; an unknown unit on a unit-less line is refused
+    await pg.exec(`UPDATE purchase_order_items SET purchase_uom='box' WHERE id='${L_QT}'`);
+    expect((await as(pg, BUYER_QT, () => recv(pg, ',"quantity_uom":"box"', 4)))[0].r).toMatchObject({ success: true });
+    await pg.exec(`UPDATE purchase_order_items SET purchase_uom=NULL WHERE id='${L_QT}'`);
+    expect((await as(pg, BUYER_QT, () => recv(pg, ',"quantity_uom":"bag"', 5)))[0].r).toMatchObject({ success: false, error: 'invalid_uom' });
+    expect(await hub(pg)).toBe(4);
+  });
+  it('null / blank / missing invoice price: receipt goes through, receipt record has NULL price, no price_history row', async () => {
+    const pg = await db();
+    const ph = () => c0(pg, `select count(*) n from price_history where source='receipt'`);
+    expect((await as(pg, BUYER_QT, () => recv(pg, ',"invoice_unit_price":null', 1)))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, BUYER_QT, () => recv(pg, ',"invoice_unit_price":""', 2)))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, BUYER_QT, () => recv(pg, '', 3)))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(3);
+    expect(await rows(pg, `select invoice_unit_price_rm from po_receipt_records`)).toEqual([{ invoice_unit_price_rm: null }, { invoice_unit_price_rm: null }, { invoice_unit_price_rm: null }]);
+    expect(await ph()).toBe(0);
+    expect((await as(pg, BUYER_QT, () => recv(pg, ',"invoice_unit_price":10.5', 4)))[0].r).toMatchObject({ success: true });
+    expect(await ph()).toBe(1);
+  });
+  it('a non-numeric or negative invoice price is refused up front (soft error, nothing posted, no leftover ticket)', async () => {
+    const pg = await db();
+    for (const bad of ['"abc"', '-3', '"1e3"']) {
+      const r = (await as(pg, BUYER_QT, () => recv(pg, `,"invoice_unit_price":${bad}`)))[0].r;
+      expect(r, bad).toMatchObject({ success: false, error: 'invalid_invoice_price' });
+    }
+    expect(await hub(pg)).toBe(0);
+    expect(await c0(pg, `select count(*) n from po_receipt_tickets`)).toBe(0);
   });
 });
 
