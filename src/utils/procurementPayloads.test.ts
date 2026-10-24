@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultEntityCode, normalizeUom, poSelectableSuppliers, purchaseOrderInsertPayload, supplierInsertPayload } from './procurementPayloads';
+import { defaultEntityCode, normalizeUom, receivingUom, poSelectableSuppliers, purchaseOrderInsertPayload, supplierInsertPayload } from './procurementPayloads';
 
 describe('procurement UI payloads match the 085 rules', () => {
   it('suppliers created by procurement are pending; admin creates are left to the DB default (active)', () => {
@@ -27,6 +27,14 @@ describe('procurement UI payloads match the 085 rules', () => {
     expect(defaultEntityCode(one, 'MH')).toBe('QT');
   });
 
+  it('receivingUom sends the PO line unit as-is (pcs, bag, Carton), catalogue unit normalised only when the line has none', () => {
+    expect(receivingUom('pcs', 'kg')).toBe('pcs');
+    expect(receivingUom(' bag ', 'kg')).toBe('bag');
+    expect(receivingUom('Carton')).toBe('Carton');
+    expect(receivingUom(null, 'Litres')).toBe('l');
+    expect(receivingUom('', 'crate')).toBe('unit');
+    expect(receivingUom(undefined, undefined)).toBe('unit');
+  });
   it('normalizeUom maps to the receipt CHECK list, first usable candidate wins, else unit', () => {
     expect(normalizeUom('KG')).toBe('kg');
     expect(normalizeUom(null, ' Litres ')).toBe('l');

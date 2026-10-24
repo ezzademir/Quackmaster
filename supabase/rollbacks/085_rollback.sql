@@ -1,5 +1,6 @@
 -- Rollback 085 (procurement role). Procurement profiles are set back to 'pending' (locked out), not deleted.
 DROP FUNCTION IF EXISTS public.record_po_delivery(uuid, jsonb, text, text, text);
+DROP FUNCTION IF EXISTS public._canon_uom(text);
 DO $$
 DECLARE
   v_def text := pg_get_functiondef('public.receive_po_shipment(uuid, jsonb)'::regprocedure);

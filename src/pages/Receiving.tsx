@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, EmptyState, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { buildDeliveryLines, receivingErrorMessage } from '../utils/receiving';
-import { normalizeUom } from '../utils/procurementPayloads';
+import { receivingUom } from '../utils/procurementPayloads';
 
 interface PoItem {
   id: string;
@@ -55,8 +55,8 @@ export function Receiving() {
       po.purchase_order_items.map((i) => ({
         id: i.id,
         quantity_received: i.quantity_received,
-        // unit recorded with the receipt: the PO line's own unit, else the catalogue unit, else 'unit'
-        uom: normalizeUom(i.purchase_uom, catalog[i.raw_material_id]?.unit_of_measure),
+        // unit recorded with the receipt: the PO line's own unit as-is (server compares it with the line), else the normalised catalogue unit
+        uom: receivingUom(i.purchase_uom, catalog[i.raw_material_id]?.unit_of_measure),
       })),
       lines,
     );

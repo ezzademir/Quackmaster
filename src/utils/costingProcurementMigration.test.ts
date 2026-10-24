@@ -7,6 +7,7 @@ import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_rol
 import MIG087 from '../../supabase/migrations/20261024110000_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
+import { receivingUom } from './procurementPayloads';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
 import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
@@ -977,6 +978,24 @@ describe('S8: record_po_delivery validates unit of measure and survives a null i
     await pg.exec(`UPDATE purchase_order_items SET purchase_uom=NULL WHERE id='${L_QT}'`);
     expect((await as(pg, BUYER_QT, () => recv(pg, ',"quantity_uom":"bag"', 5)))[0].r).toMatchObject({ success: false, error: 'invalid_uom' });
     expect(await hub(pg)).toBe(4);
+  });
+  it('F1: non-kg line units the screen can send (pcs, bag, Carton) are accepted; real mismatches still refused', async () => {
+    const pg = await db();
+    const setUom = (u: string) => pg.exec(`UPDATE purchase_order_items SET purchase_uom='${u}' WHERE id='${L_QT}'`);
+    const send = async (u: string, qty: number) => (await as(pg, BUYER_QT, () => recv(pg, `,"quantity_uom":"${u}"`, qty)))[0].r;
+    await setUom('pcs');
+    // what Receiving.tsx now sends for that line, and the normalised form older code sent: both match the same line
+    expect(await send(receivingUom('pcs', 'kg'), 1)).toMatchObject({ success: true });
+    expect(await send('pc', 2)).toMatchObject({ success: true });
+    expect(await send('PCS', 3)).toMatchObject({ success: true });
+    expect(await send('kg', 4)).toMatchObject({ success: false, error: 'uom_mismatch', line_uom: 'pcs' });
+    await setUom('bag');
+    expect(await send(receivingUom('bag', 'kg'), 4)).toMatchObject({ success: true });
+    expect(await send('unit', 5)).toMatchObject({ success: false, error: 'uom_mismatch' });
+    await setUom('Carton');
+    expect(await send(receivingUom('Carton'), 5)).toMatchObject({ success: true });
+    expect(await rows(pg, `select distinct quantity_uom from po_receipt_records order by 1`)).toEqual([{ quantity_uom: 'bag' }, { quantity_uom: 'carton' }, { quantity_uom: 'pc' }, { quantity_uom: 'pcs' }]);
+    expect(await hub(pg)).toBe(5);
   });
   it('null / blank / missing invoice price: receipt goes through, receipt record has NULL price, no price_history row', async () => {
     const pg = await db();

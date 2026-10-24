@@ -461,6 +461,23 @@ BEGIN
   EXECUTE replace(v_def, v_old, v_new);
 END $$;
 
+-- Unit canonicaliser, the SAME alias map as src/utils/procurementPayloads.ts normalizeUom: 'pcs' = 'pc', 'litre' = 'l', ...
+-- A unit that is not in the map (free text such as 'bag', 'carton') is compared as lower(trim(x)) verbatim. Used on BOTH
+-- sides of the record_po_delivery unit check so a screen that normalises and a line that does not still agree (round 2, F1).
+CREATE OR REPLACE FUNCTION public._canon_uom(p_uom text)
+RETURNS text LANGUAGE sql IMMUTABLE SET search_path = public AS $$
+  SELECT CASE lower(btrim(COALESCE(p_uom, '')))
+    WHEN '' THEN NULL
+    WHEN 'kg' THEN 'kg' WHEN 'kgs' THEN 'kg' WHEN 'kilo' THEN 'kg' WHEN 'kilos' THEN 'kg' WHEN 'kilogram' THEN 'kg' WHEN 'kilograms' THEN 'kg'
+    WHEN 'g' THEN 'g' WHEN 'gm' THEN 'g' WHEN 'gram' THEN 'g' WHEN 'grams' THEN 'g'
+    WHEN 'l' THEN 'l' WHEN 'lt' THEN 'l' WHEN 'ltr' THEN 'l' WHEN 'litre' THEN 'l' WHEN 'litres' THEN 'l' WHEN 'liter' THEN 'l' WHEN 'liters' THEN 'l'
+    WHEN 'ml' THEN 'ml' WHEN 'millilitre' THEN 'ml' WHEN 'millilitres' THEN 'ml' WHEN 'milliliter' THEN 'ml' WHEN 'milliliters' THEN 'ml'
+    WHEN 'pc' THEN 'pc' WHEN 'pcs' THEN 'pc' WHEN 'piece' THEN 'pc' WHEN 'pieces' THEN 'pc'
+    WHEN 'pack' THEN 'pack' WHEN 'packs' THEN 'pack' WHEN 'pkt' THEN 'pack' WHEN 'packet' THEN 'pack' WHEN 'packets' THEN 'pack'
+    WHEN 'unit' THEN 'unit' WHEN 'units' THEN 'unit'
+    ELSE lower(btrim(p_uom)) END;
+$$;
+
 -- Receive a delivery: posts quantities through receive_po_shipment (tolerance rules unchanged: over-tolerance
 -- needs admin + reason, so procurement cannot exceed it), then records unit, invoice price, DO / invoice
 -- and attachment per line, and logs receipt prices to price_history (> 5% flagged).
@@ -515,12 +532,12 @@ BEGIN
     -- would post 1000x the stock). Checked here, before anything is posted.
     IF NULLIF(trim(v_line->>'quantity_uom'), '') IS NOT NULL THEN
       IF NULLIF(trim(v_uom), '') IS NOT NULL THEN
-        IF lower(trim(v_line->>'quantity_uom')) <> lower(trim(v_uom)) THEN
+        IF public._canon_uom(v_line->>'quantity_uom') IS DISTINCT FROM public._canon_uom(v_uom) THEN
           RETURN jsonb_build_object('success', false, 'error', 'uom_mismatch',
             'purchase_order_item_id', v_line->>'purchase_order_item_id', 'line_uom', trim(v_uom), 'entered_uom', v_line->>'quantity_uom',
             'message', 'Unit of measure does not match the PO line. Enter the quantity in ' || trim(v_uom) || '.');
         END IF;
-      ELSIF lower(trim(v_line->>'quantity_uom')) NOT IN ('kg', 'g', 'unit', 'pc', 'pack', 'l', 'ml') THEN
+      ELSIF public._canon_uom(v_line->>'quantity_uom') NOT IN ('kg', 'g', 'unit', 'pc', 'pack', 'l', 'ml') THEN
         -- the PO line carries no unit, so the entered one must be a known unit
         RETURN jsonb_build_object('success', false, 'error', 'invalid_uom',
           'purchase_order_item_id', v_line->>'purchase_order_item_id', 'entered_uom', v_line->>'quantity_uom');

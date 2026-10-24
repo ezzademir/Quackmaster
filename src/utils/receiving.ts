@@ -7,7 +7,7 @@
 export interface ReceivingLineInput {
   id: string;
   quantity_received: number | null;
-  /** unit of measure of the line (already normalised to the receipt CHECK list, see normalizeUom) */
+  /** unit of measure sent with the receipt: the PO line's own unit as-is, else the normalised catalogue unit (see receivingUom) */
   uom?: string;
 }
 

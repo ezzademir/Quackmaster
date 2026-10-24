@@ -45,3 +45,12 @@ export function normalizeUom(...candidates: Array<string | null | undefined>): s
   }
   return 'unit';
 }
+
+/**
+ * Unit sent with a receipt line. The server compares it with the PO line's own (free-text) unit, so send the line's unit
+ * as-is (trimmed) whenever the line has one; only when it has none fall back to the normalised catalogue unit.
+ */
+export function receivingUom(lineUom: string | null | undefined, catalogUom?: string | null): string {
+  const own = String(lineUom ?? '').trim();
+  return own || normalizeUom(catalogUom);
+}
