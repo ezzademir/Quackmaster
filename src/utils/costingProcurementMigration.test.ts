@@ -5,6 +5,8 @@ import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_vari
 import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.sql?raw';
 import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
 import MIG087 from '../../supabase/migrations/20261024110000_087_is_profiles_admin_scope_row_security.sql?raw';
+import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
+import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
 import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
@@ -21,6 +23,10 @@ const PO_QT = '00000000-0000-0000-0000-00000000f001';
 const PO_MH = '00000000-0000-0000-0000-00000000f002';
 const PO_NONE = '00000000-0000-0000-0000-00000000f003';
 const L_QT = '00000000-0000-0000-0000-00000000e001';
+const RM2 = '00000000-0000-0000-0000-0000000000c2';
+const OLD_LOT = '00000000-0000-0000-0000-00000000a0e1';
+const OLD_HUB_FG = '00000000-0000-0000-0000-00000000a0e2';
+const OLD_HUB_RM = '00000000-0000-0000-0000-00000000a0e3';
 
 /** Verbatim pg_get_functiondef output of public.is_profiles_admin() on live (Quackmaster fknrfntqycfrkaihwngg, 2026-10-24, read-only). */
 const LIVE_IS_PROFILES_ADMIN_DEF = `CREATE OR REPLACE FUNCTION public.is_profiles_admin()
@@ -84,7 +90,12 @@ CREATE TABLE purchase_order_items (id uuid primary key default gen_random_uuid()
   line_total numeric(15,2), purchase_uom text);
 CREATE TABLE hub_inventory (id uuid primary key default gen_random_uuid(), raw_material_id uuid, quantity_on_hand numeric,
   reserved_quantity numeric default 0, available_quantity numeric, last_updated timestamptz, updated_at timestamptz,
-  created_at timestamptz default now());
+  created_at timestamptz default now(), product_batch text, lot_id uuid);
+CREATE TABLE inventory_lots (id uuid primary key default gen_random_uuid(), product_batch_label text UNIQUE, production_run_id uuid,
+  purchase_order_item_id uuid, expiry_date date, created_at timestamptz default now());
+CREATE TABLE outlet_stock_movements (id uuid primary key default gen_random_uuid(), outlet_id uuid, outlet_inventory_id uuid,
+  movement_type text, signed_qty numeric, business_date date, reference_type text, reference_id uuid, qoh_after numeric,
+  metadata jsonb, created_at timestamptz default now());
 CREATE VIEW supplier_scorecard_metrics AS SELECT po.supplier_id, count(po.id) n FROM purchase_orders po GROUP BY 1;
 CREATE TABLE outlets (id uuid primary key default gen_random_uuid(), name text);
 CREATE TABLE production_runs (id uuid primary key default gen_random_uuid(), run_number text);
@@ -103,11 +114,11 @@ BEGIN
 END $$;
 CREATE TABLE recipes (id uuid primary key default gen_random_uuid(), name text);
 CREATE TABLE sales_journals (id uuid primary key default gen_random_uuid(), outlet_id uuid);
-CREATE TABLE outlet_inventory (id uuid primary key default gen_random_uuid(), outlet_id uuid, qty numeric);
+CREATE TABLE outlet_inventory (id uuid primary key default gen_random_uuid(), outlet_id uuid, qty numeric, lot_id uuid);
 CREATE TABLE document_links (id uuid primary key default gen_random_uuid(), uploaded_by uuid, storage_path text);
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['suppliers','raw_materials','purchase_orders','purchase_order_items','hub_inventory',
-    'recipes','sales_journals','outlet_inventory','document_links','outlets','production_runs'] LOOP
+    'recipes','sales_journals','outlet_inventory','document_links','outlets','production_runs','inventory_lots','outlet_stock_movements'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     -- live today: "authenticated USING (true)" or "role <> pending" read policies
     EXECUTE format('CREATE POLICY %I ON %I FOR SELECT TO authenticated USING (true)', t || '_read', t);
@@ -128,6 +139,12 @@ INSERT INTO recipes (name) VALUES ('Secret sauce');
 INSERT INTO sales_journals (outlet_id) VALUES (gen_random_uuid());
 INSERT INTO outlet_inventory (outlet_id, qty) VALUES ('00000000-0000-0000-0000-00000000c0c0', 5);
 INSERT INTO production_runs (run_number) VALUES ('RUN-1');
+-- pre-088 stock rows (live today: no tag column anywhere): an old FG lot + its hub row, an old RM hub balance, old outlet movements
+INSERT INTO inventory_lots (id, product_batch_label, production_run_id) VALUES ('${OLD_LOT}', 'OLD-BATCH-1', (SELECT id FROM production_runs LIMIT 1));
+INSERT INTO hub_inventory (id, product_batch, lot_id, quantity_on_hand, available_quantity) VALUES ('${OLD_HUB_FG}', 'OLD-BATCH-1', '${OLD_LOT}', 7, 7);
+INSERT INTO hub_inventory (id, raw_material_id, quantity_on_hand, available_quantity) VALUES ('${OLD_HUB_RM}', '${RM2}', 100, 100);
+INSERT INTO outlet_stock_movements (outlet_id, outlet_inventory_id, movement_type, signed_qty, business_date, qoh_after)
+  VALUES ('00000000-0000-0000-0000-00000000c0c0', (SELECT id FROM outlet_inventory LIMIT 1), 'sale', -1, CURRENT_DATE, 4);
 -- pre-existing (live-style) POs: no entity column yet; 084 backfills them from the hub
 INSERT INTO purchase_orders (order_number, supplier_id, status) VALUES ('PO-LIVE-1','${SUP}','received'), ('PO-LIVE-2','${SUP}','partial');
 `;
@@ -154,7 +171,7 @@ INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference) V
 `;
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['084', MIG084], ['085', MIG085], ['POS', POS]]) {
+  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['084', MIG084], ['085', MIG085], ['088', MIG088], ['POS', POS]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -675,6 +692,129 @@ describe('PR #92 review fixes: S2 / S3 PO line guard', () => {
   });
 });
 
+describe('S10 (088): mandatory QT / MH tag on NEW stock postings; old rows untouched', () => {
+  const hubQty = async (pg: PGlite, rm: string) =>
+    Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${rm}'`))[0].q);
+  const receive = (pg: PGlite, po: string, line: string, qty: number) =>
+    rows(pg, `select receive_po_shipment('${po}', '[{"purchase_order_item_id":"${line}","quantity_received":${qty}}]'::jsonb) r`);
+  const L_MH = '00000000-0000-0000-0000-00000000e002';
+  const mhLine = async (pg: PGlite) =>
+    pg.exec(`INSERT INTO purchase_order_items (id, purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price, line_total, purchase_uom)
+             VALUES ('${L_MH}','${PO_MH}','${RM}',10,0,3,30,'kg')`);
+
+  it('old rows stay valid and readable: no tag, no backfill, still updatable; hub shows them as the UNTAGGED bucket', async () => {
+    const pg = await db();
+    expect(await count(pg, `select * from inventory_lots where entity_code is null`)).toBe(1);
+    expect(await count(pg, `select * from outlet_stock_movements where entity_code is null`)).toBe(1);
+    expect(await count(pg, `select * from hub_stock_movements`)).toBe(0);            // nothing backfilled
+    expect(await as(pg, STAFF, () => count(pg, `select * from inventory_lots`))).toBe(1);
+    // ordinary updates of old rows are not blocked by the new triggers
+    await pg.exec(`UPDATE inventory_lots SET expiry_date = CURRENT_DATE WHERE id='${OLD_LOT}'`);
+    await pg.exec(`UPDATE outlet_stock_movements SET qoh_after = 4`);
+    expect(await rows(pg, `select entity_code, quantity_on_hand::float q from v_hub_stock_by_entity where hub_inventory_id in ('${OLD_HUB_FG}','${OLD_HUB_RM}') order by q`))
+      .toEqual([{ entity_code: null, q: 7 }, { entity_code: null, q: 100 }]);
+  });
+
+  it('PO receipts are tagged from the PO entity: QT and MH both work and land in the shared hub row, split by tag in the report', async () => {
+    const pg = await db();
+    await mhLine(pg);
+    // the shared hub: both entities receive the same raw material into ONE running balance
+    await as(pg, ADMIN, () => receive(pg, PO_QT, L_QT, 4));
+    await as(pg, ADMIN, () => receive(pg, PO_MH, L_MH, 6));
+    expect(await hubQty(pg, RM)).toBe(10);
+    expect(await count(pg, `select * from hub_inventory where raw_material_id='${RM}'`)).toBe(1);
+    expect(await rows(pg, `select entity_code, sum(quantity)::float q from hub_stock_movements where raw_material_id='${RM}' group by 1 order by 1`))
+      .toEqual([{ entity_code: 'MH', q: 6 }, { entity_code: 'QT', q: 4 }]);
+    expect(await rows(pg, `select entity_code, quantity_on_hand::float q from v_hub_stock_by_entity where raw_material_id='${RM}' order by 1`))
+      .toEqual([{ entity_code: 'MH', q: 6 }, { entity_code: 'QT', q: 4 }]);
+    // reports filter by tag
+    expect(await as(pg, STAFF, () => rows(pg, `select quantity_on_hand::float q from v_hub_stock_by_entity where raw_material_id='${RM}' and entity_code='MH'`))).toEqual([{ q: 6 }]);
+    expect(await as(pg, STAFF, () => rows(pg, `select scope, entity_code, signed_qty::float q from v_stock_movements where entity_code='QT' and scope='hub'`))).toEqual([{ scope: 'hub', entity_code: 'QT', q: 4 }]);
+    // the same posting through the procurement role (record_po_delivery) is tagged too
+    const r = await as(pg, BUYER_MH, () => rows(pg, `select record_po_delivery('${PO_MH}', '[{"purchase_order_item_id":"${L_MH}","quantity_received":8,"expected_previous_received":6,"quantity_uom":"kg"}]'::jsonb, 'DO-MH') r`));
+    expect(r[0].r).toMatchObject({ success: true });
+    expect(await rows(pg, `select entity_code, sum(quantity)::float q from hub_stock_movements where raw_material_id='${RM}' group by 1 order by 1`))
+      .toEqual([{ entity_code: 'MH', q: 8 }, { entity_code: 'QT', q: 4 }]);
+  });
+
+  it('a receipt on a PO with no entity is refused (no untagged hub posting from the PO path), nothing is posted', async () => {
+    const pg = await db();
+    await pg.exec(`INSERT INTO purchase_order_items (id, purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price, line_total, purchase_uom)
+      VALUES ('00000000-0000-0000-0000-00000000e003','${PO_NONE}','${RM}',5,0,3,15,'kg')`);
+    const e = await err(as(pg, ADMIN, () => receive(pg, PO_NONE, '00000000-0000-0000-0000-00000000e003', 2)));
+    expect(e).toMatch(/po_entity_required_for_receipt/);
+    expect(await hubQty(pg, RM)).toBe(0);
+    expect(await count(pg, `select * from hub_stock_movements`)).toBe(0);
+  });
+
+  it('untagged new posting is refused when the scope is enforced, and allowed (recorded untagged) when it is not', async () => {
+    const pg = await db();
+    // not enforced (shipped default): a direct hub posting without a tag is recorded with entity NULL
+    await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = 101 WHERE id='${OLD_HUB_RM}'`);
+    expect(await rows(pg, `select entity_code, quantity::float q from hub_stock_movements`)).toEqual([{ entity_code: null, q: 1 }]);
+    // admin switches the scope on (audited), non-admins cannot
+    expect(await as(pg, STAFF, () => rows(pg, `select set_stock_tag_enforcement('hub_rm', true) r`))).toEqual([{ r: { success: false, error: 'forbidden' } }]);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE stock_tag_enforcement SET enforced=false`)))).toMatch(/permission denied|row-level security/);
+    expect((await as(pg, ADMIN, () => rows(pg, `select set_stock_tag_enforcement('hub_rm', true) r`)))[0].r).toMatchObject({ success: true });
+    expect(await count(pg, `select * from data_ledger where entity_type='stock_tag_enforcement'`)).toBe(1);
+    // enforced: untagged RM posting refused and rolled back; old balance unchanged
+    expect(await err(pg.exec(`UPDATE hub_inventory SET quantity_on_hand = 150 WHERE id='${OLD_HUB_RM}'`))).toMatch(/stock_entity_tag_required/);
+    expect(await hubQty(pg, RM2)).toBe(101);
+    // a tagged posting (QT, then MH) goes through: tag supplied in the same transaction
+    await pg.exec(`BEGIN; SELECT public.set_stock_entity('QT'); UPDATE hub_inventory SET quantity_on_hand = 111 WHERE id='${OLD_HUB_RM}'; COMMIT;`);
+    await pg.exec(`BEGIN; SELECT public.set_stock_entity('MH'); UPDATE hub_inventory SET quantity_on_hand = 116 WHERE id='${OLD_HUB_RM}'; COMMIT;`);
+    expect(await rows(pg, `select entity_code, quantity_on_hand::float q from v_hub_stock_by_entity where hub_inventory_id='${OLD_HUB_RM}' order by entity_code nulls last`))
+      .toEqual([{ entity_code: 'MH', q: 5 }, { entity_code: 'QT', q: 10 }, { entity_code: null, q: 101 }]);
+    expect(await err(pg.exec(`SELECT public.set_stock_entity('XX')`))).toMatch(/unknown_stock_entity/);
+  });
+
+  it('new lots and outlet movements: refused untagged when enforced; QT / MH both work; lot tag flows to its movements; tags are immutable', async () => {
+    const pg = await db();
+    await pg.exec(`UPDATE stock_tag_enforcement SET enforced = true WHERE scope IN ('lots','outlet_movements','hub_fg')`);
+    expect(await err(pg.exec(`INSERT INTO inventory_lots (product_batch_label) VALUES ('NEW-UNTAGGED')`))).toMatch(/stock_entity_tag_required/);
+    await pg.exec(`INSERT INTO inventory_lots (id, product_batch_label, entity_code) VALUES ('00000000-0000-0000-0000-00000000a0f1','NEW-QT','QT')`);
+    await pg.exec(`INSERT INTO inventory_lots (id, product_batch_label, entity_code) VALUES ('00000000-0000-0000-0000-00000000a0f2','NEW-MH','MH')`);
+    await pg.exec(`BEGIN; SELECT public.set_stock_entity('MH'); INSERT INTO inventory_lots (product_batch_label) VALUES ('NEW-VIA-GUC'); COMMIT;`);
+    expect(await rows(pg, `select entity_code from inventory_lots where product_batch_label='NEW-VIA-GUC'`)).toEqual([{ entity_code: 'MH' }]);
+    expect(await err(pg.exec(`UPDATE inventory_lots SET entity_code='MH' WHERE product_batch_label='NEW-QT'`))).toMatch(/stock_entity_tag_immutable/);
+    // hub FG posting resolves its tag from the lot
+    await pg.exec(`INSERT INTO hub_inventory (id, product_batch, lot_id, quantity_on_hand) VALUES ('00000000-0000-0000-0000-00000000a0f3','NEW-MH','00000000-0000-0000-0000-00000000a0f2', 12)`);
+    expect(await rows(pg, `select entity_code, kind, quantity::float q from hub_stock_movements`)).toEqual([{ entity_code: 'MH', kind: 'fg', q: 12 }]);
+    // an FG posting against an OLD (untagged) lot is refused once hub_fg is enforced
+    expect(await err(pg.exec(`UPDATE hub_inventory SET quantity_on_hand = 6 WHERE id='${OLD_HUB_FG}'`))).toMatch(/stock_entity_tag_required/);
+    // outlet movements: untagged refused, outlet mapping (admin data) resolves the tag, explicit tag works
+    const OUT = '00000000-0000-0000-0000-00000000c0c0';
+    expect(await err(pg.exec(`INSERT INTO outlet_stock_movements (outlet_id, movement_type, signed_qty) VALUES ('${OUT}','sale',-1)`))).toMatch(/stock_entity_tag_required/);
+    await pg.exec(`INSERT INTO outlets (id, name) VALUES ('${OUT}','MH outlet')`);
+    await pg.exec(`INSERT INTO delivery_location_entities (location_kind, outlet_id, entity_code) VALUES ('outlet','${OUT}','MH')`);
+    await pg.exec(`INSERT INTO outlet_stock_movements (outlet_id, movement_type, signed_qty) VALUES ('${OUT}','sale',-1)`);
+    await pg.exec(`INSERT INTO outlet_stock_movements (outlet_id, movement_type, signed_qty, entity_code) VALUES (gen_random_uuid(),'sale',-2,'QT')`);
+    expect(await rows(pg, `select entity_code, count(*)::int n from outlet_stock_movements group by 1 order by 1 nulls last`))
+      .toEqual([{ entity_code: 'MH', n: 1 }, { entity_code: 'QT', n: 1 }, { entity_code: null, n: 1 }]);
+    expect(await rows(pg, `select count(*)::int n from v_stock_movements where scope='outlet' and entity_code='MH'`)).toEqual([{ n: 1 }]);
+  });
+
+  it('procurement cannot read hub movements, the enforcement switch or the stock reports', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => receive(pg, PO_QT, L_QT, 2));
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from hub_stock_movements`))).toBe(0);
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from stock_tag_enforcement`))).toBe(0);
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from v_hub_stock_by_entity`))).toBe(0);
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from v_stock_movements`))).toBe(0);
+    expect(await as(pg, STAFF, () => count(pg, `select * from hub_stock_movements`))).toBe(1);
+  });
+
+  it('088 rollback removes the tag columns and ledger, leaves old rows and the receipt path intact', async () => {
+    const pg = await db();
+    await pg.exec(RB088);
+    expect(await c0(pg, `select count(*) n from information_schema.columns where column_name='entity_code' and table_name in ('inventory_lots','outlet_stock_movements')`)).toBe(0);
+    expect(await c0(pg, `select count(*) n from pg_tables where tablename in ('hub_stock_movements','stock_tag_enforcement')`)).toBe(0);
+    expect(await c0(pg, `select count(*) n from inventory_lots`)).toBe(1);
+    await as(pg, ADMIN, () => receive(pg, PO_QT, L_QT, 2));
+    expect(await hubQty(pg, RM)).toBe(2);
+  });
+});
+
 describe('S4 (own change set 087): is_profiles_admin() row_security leak', () => {
   const BATCH = `BEGIN; SELECT public.is_profiles_admin() a; SELECT current_setting('row_security') rs; SELECT count(*) FROM suppliers; COMMIT;`;
   const runBatch = (pg: PGlite, uid: string) => as(pg, uid, async () => {
@@ -812,6 +952,7 @@ describe('084 costing rules', () => {
 
   it('rollbacks drop 085 then 084 cleanly', async () => {
     const pg = await db();
+    await pg.exec(RB088);
     await pg.exec(RB085);
     await pg.exec(RB084);
     expect(await c0(pg, `select count(*) n from pg_tables where tablename in ('supplier_items','price_history','menu_items','supplier_bills','supplier_payments','user_entities','business_entities','procurement_tags','delivery_location_entities')`)).toBe(0);
