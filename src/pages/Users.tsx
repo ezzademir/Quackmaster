@@ -33,6 +33,7 @@ import {
   saveErrorText,
   tagsDraftFromUser,
   tagsLabel,
+  userAfterSave,
 } from '../utils/userRoleDraft';
 
 interface UserRecord {
@@ -417,6 +418,19 @@ export function Users() {
     // The database writes the audit (ledger) entries for role and tag changes, with old and new values, so
     // the screen no longer writes one of its own.
     let roleSaved = false;
+    // Role saved but tags not: the drawer must show the role the database now holds (procurement, no tags yet), keep the
+    // tags the admin ticked so Save retries only the tags, and say so plainly. Never leave the old role on screen.
+    const showPartialSave = async (reason: string) => {
+      await loadUsers();
+      if (drawer.open && drawer.tab === 'approved' && drawer.user.id === target.id) {
+        setDrawer({
+          open: true,
+          tab: 'approved',
+          user: userAfterSave(drawer.user, { role: roleDraft, outletId: outletDraft, tags: [] }),
+        });
+      }
+      setRoleNotice({ tone: 'err', text: `The role was saved, but the business tags were not: ${reason} Press Save again to retry the tags.` });
+    };
     try {
       if (plan.callRole) {
         const { data, error } = await supabase.rpc(
@@ -440,11 +454,9 @@ export function Users() {
         if (error) throw error;
         const payload = data as { success?: boolean; error?: string; message?: string } | null;
         if (!payload?.success) {
-          if (roleSaved) await loadUsers();
-          setRoleNotice({
-            tone: 'err',
-            text: `${roleSaved ? 'The role was saved, but the business tags were not: ' : ''}${saveErrorText(payload?.error, payload?.message)}`,
-          });
+          const reason = saveErrorText(payload?.error, payload?.message);
+          if (roleSaved) await showPartialSave(reason);
+          else setRoleNotice({ tone: 'err', text: reason });
           return;
         }
       }
@@ -455,12 +467,7 @@ export function Users() {
         setDrawer({
           open: true,
           tab: 'approved',
-          user: {
-            ...drawer.user,
-            role: roleDraft,
-            assigned_outlet_id: roleDraft === 'supervisor' ? outletDraft : null,
-            entity_tags: plan.tags,
-          },
+          user: userAfterSave(drawer.user, { role: roleDraft, outletId: outletDraft, tags: plan.tags }),
         });
         setOutletDraft(roleDraft === 'supervisor' ? outletDraft : '');
         setTagsDraft(plan.tags);
@@ -469,10 +476,10 @@ export function Users() {
       console.error('Error updating role:', error);
       const raw =
         error && typeof error === 'object' && 'message' in error
-          ? String((error as { message: string }).message)
+          ? `${'code' in error ? String((error as { code?: string }).code ?? '') : ''} ${String((error as { message: string }).message)}`.trim()
           : 'Failed to update role';
-      if (roleSaved) await loadUsers();
-      setRoleNotice({ tone: 'err', text: `${roleSaved ? 'The role was saved, but the business tags were not: ' : ''}${saveErrorText(raw)}` });
+      if (roleSaved) await showPartialSave(saveErrorText(raw));
+      else setRoleNotice({ tone: 'err', text: saveErrorText(raw) });
     } finally {
       setBusyRoleUserId(null);
     }

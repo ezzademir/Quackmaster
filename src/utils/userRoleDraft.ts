@@ -100,7 +100,26 @@ export function planRoleSave(
   return { error: null, callRole, callTags, tags: draft.role === 'procurement' ? tags : [] };
 }
 
+/**
+ * The user as the drawer must show them after a save: the role (and outlet, and tags) the database now holds.
+ * After a PARTIAL save (role saved, tags not) the tags are what the database holds: none, because a user who just became
+ * procurement starts with no tags and a failed tags call changed nothing.
+ */
+export function userAfterSave<T extends { role: string; assigned_outlet_id?: string | null; entity_tags?: string[] }>(
+  user: T,
+  saved: { role: string; outletId: string; tags: string[] }
+): T {
+  return {
+    ...user,
+    role: saved.role,
+    assigned_outlet_id: saved.role === 'supervisor' ? saved.outletId : null,
+    entity_tags: saved.role === 'procurement' ? normaliseTags(saved.tags) : [],
+  };
+}
+
 const SAVE_ERRORS: Record<string, string> = {
+  '40P01': 'Another change was in progress at the same moment. Nothing was lost: please try again.',
+  deadlock: 'Another change was in progress at the same moment. Nothing was lost: please try again.',
   last_active_admin: 'This is the last active admin. Make another admin first.',
   forbidden: 'Only an admin can change roles and business tags.',
   invalid_target: 'You cannot change your own role or business tags.',

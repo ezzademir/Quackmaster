@@ -11,6 +11,7 @@ import {
   saveErrorText,
   tagsDraftFromUser,
   tagsLabel,
+  userAfterSave,
 } from './userRoleDraft';
 
 const TARGET = '00000000-0000-0000-0000-0000000000a4';
@@ -129,5 +130,40 @@ describe('Users screen business tags (procurement users)', () => {
     expect(USERS_TSX.indexOf("'admin_set_profile_role_and_outlet'")).toBeLessThan(USERS_TSX.indexOf("'admin_set_procurement_tags'"));
     expect(USERS_TSX).not.toMatch(/role_change:\s*true/);                 // the database audits role changes now
     expect(USERS_TSX.match(/setTagsDraft\(tagsDraftFromUser\(user\.role, user\.entity_tags\)\)/g)?.length).toBe(2);
+  });
+});
+
+describe('Users screen partial save (role saved, tags failed) and deadlock message', () => {
+  const opened = { id: 'u1', role: 'staff', assigned_outlet_id: null, entity_tags: [] as string[] };
+
+  it('after a partial save the drawer user shows the role the database holds (procurement, no tags yet), never the old role', () => {
+    const shown = userAfterSave(opened, { role: 'procurement', outletId: '', tags: [] });
+    expect(shown).toMatchObject({ id: 'u1', role: 'procurement', assigned_outlet_id: null, entity_tags: [] });
+    expect(opened.role).toBe('staff');                                  // input not mutated
+  });
+  it('after a full save the drawer shows role, outlet and tags; other roles carry no tags and only supervisors an outlet', () => {
+    expect(userAfterSave(opened, { role: 'procurement', outletId: 'o1', tags: ['quackteow', 'merdeka_house'] }))
+      .toMatchObject({ role: 'procurement', assigned_outlet_id: null, entity_tags: ['merdeka_house', 'quackteow'] });
+    expect(userAfterSave(opened, { role: 'supervisor', outletId: 'o1', tags: ['quackteow'] }))
+      .toMatchObject({ role: 'supervisor', assigned_outlet_id: 'o1', entity_tags: [] });
+  });
+  it('a retry after a partial save sends only the tags (the role is already procurement)', () => {
+    const afterPartial = userAfterSave(opened, { role: 'procurement', outletId: '', tags: [] });
+    expect(planRoleSave({ role: afterPartial.role, assignedOutletId: afterPartial.assigned_outlet_id, tags: afterPartial.entity_tags },
+      { role: 'procurement', outletId: '', tags: ['merdeka_house'] })).toEqual({ error: null, callRole: false, callTags: true, tags: ['merdeka_house'] });
+  });
+  it('a deadlock (code or text) becomes a plain retry message, not "deadlock detected"', () => {
+    for (const raw of ['40P01 deadlock detected', 'deadlock detected', '40P01']) {
+      expect(saveErrorText(raw)).toMatch(/try again/i);
+      expect(saveErrorText(raw)).not.toMatch(/deadlock detected/i);
+    }
+  });
+  it('Users.tsx: a partial save refreshes the drawer, says so plainly, keeps the ticked tags, and passes the error code on', () => {
+    expect(USERS_TSX).toMatch(/const showPartialSave = async \(reason: string\)/);
+    expect(USERS_TSX).toMatch(/userAfterSave\(drawer\.user, \{ role: roleDraft, outletId: outletDraft, tags: \[\] \}\)/);
+    expect(USERS_TSX).toMatch(/The role was saved, but the business tags were not: \$\{reason\} Press Save again to retry the tags\./);
+    expect(USERS_TSX.match(/await showPartialSave\(/g)?.length).toBe(2);      // RPC "success: false" and a thrown error
+    expect(USERS_TSX).toMatch(/'code' in error/);
+    expect(USERS_TSX).not.toMatch(/if \(roleSaved\) await loadUsers\(\);/);   // the old half-refresh is gone
   });
 });
