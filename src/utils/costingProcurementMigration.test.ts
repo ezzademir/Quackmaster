@@ -1522,25 +1522,25 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     expect(await count(reverse, `select * from pg_proc where proname in ('_po_cancel_plan','_hub_inventory_movement')`)).toBe(0);
     for (const f of ['085_rollback', '088_rollback']) {
       const sql = f === '085_rollback' ? RB085 : RB088;
-      expect(sql).toMatch(/Rollback order: 088 -> 087 -> 085 -> 084/);
+      expect(sql).toMatch(/Rollback order: 090 -> 088 -> 087 -> 085 -> 084/);
     }
   });
 });
 
-describe('F6: migration versions follow the migration numbers (084 < 085 < 087 < 088); live-applied 081-083 / 086 keep their live versions', () => {
+describe('F6: migration versions follow the migration numbers (084 < 085 < 087 < 088 < 090); live-applied 081-083 / 086 keep their live versions', () => {
   const files = Object.keys(import.meta.glob('../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true }))
     .map((f) => /\/(\d{14})_(\d{3})_/.exec(f)).filter((m): m is RegExpExecArray => !!m);
   const ver = (n: string) => files.find((m) => m[2] === n)![1];
   it('the PR-92 migrations apply in number order', () => {
-    expect([ver('084'), ver('085'), ver('087'), ver('088')]).toEqual([...[ver('084'), ver('085'), ver('087'), ver('088')]].sort());
+    expect([ver('084'), ver('085'), ver('087'), ver('088'), ver('090')]).toEqual([...[ver('084'), ver('085'), ver('087'), ver('088'), ver('090')]].sort());   // apply order: 084, 085, 087, 088, 090, then 089
     expect(new Set(files.map((m) => m[1])).size).toBe(files.length);          // no duplicate versions
   });
   it('081, 082, 083, 086 keep the versions they were applied with on live', () => {
     expect(['081', '082', '083', '086'].map(ver)).toEqual(['20261023130000', '20261023181403', '20261024020000', '20261023183956']);
   });
-  it('every migration that has a rollback file is paired (084, 085, 087, 088)', () => {
+  it('every migration that has a rollback file is paired (084, 085, 087, 088, 090)', () => {
     const rb = Object.keys(import.meta.glob('../../supabase/rollbacks/*.sql', { query: '?raw', import: 'default', eager: true }));
-    for (const n of ['084', '085', '087', '088']) expect(rb.some((f) => f.endsWith(`/${n}_rollback.sql`))).toBe(true);
+    for (const n of ['084', '085', '087', '088', '090']) expect(rb.some((f) => f.endsWith(`/${n}_rollback.sql`))).toBe(true);
   });
 });
 

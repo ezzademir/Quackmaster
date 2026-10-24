@@ -1,4 +1,4 @@
--- Rollback order: 088 -> 087 -> 085 -> 084 (newest first); 088's rollback also tolerates running after this one.
+-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090); 088's rollback also tolerates running after this one.
 -- Rollback 085 (procurement role). Procurement profiles are set back to 'pending' (locked out), not deleted.
 DROP FUNCTION IF EXISTS public.record_po_delivery(uuid, jsonb, text, text, text);
 DROP FUNCTION IF EXISTS public._canon_uom(text);

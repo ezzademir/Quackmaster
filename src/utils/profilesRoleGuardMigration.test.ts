@@ -1,0 +1,543 @@
+import { describe, expect, it } from 'vitest';
+import type { PGlite } from '@electric-sql/pglite';
+import { pgliteTemplate } from '../test/pgliteTemplate';
+import MIG051 from '../../supabase/migrations/20260514140000_051_supervisor_dashboard_recipes.sql?raw';
+import MIG062 from '../../supabase/migrations/20260909150000_062_pack1_auth_lockdown.sql?raw';
+import MIG071 from '../../supabase/migrations/20261007140000_071_profiles_deactivate.sql?raw';
+import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.sql?raw';
+import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
+import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
+import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
+import RB090 from '../../supabase/rollbacks/090_rollback.sql?raw';
+import LIVE from './__fixtures__/live_profiles_guard_20261024.sql?raw';
+
+const ADMIN = '00000000-0000-0000-0000-0000000000a1';
+const ADMIN2 = '00000000-0000-0000-0000-0000000000a2';
+const STAFF = '00000000-0000-0000-0000-0000000000a3';
+const BUYER_QT = '00000000-0000-0000-0000-0000000000a4';
+const BUYER_MH = '00000000-0000-0000-0000-0000000000a5';
+const OUTLET = '00000000-0000-0000-0000-0000000000e1';
+const NOBODY = '00000000-0000-0000-0000-0000000000ff';
+
+/* ------------------------------------------------------------------------------------------------------------------
+   Fixture: the REAL repo SQL wherever it can run on its own, the verbatim live definitions captured 24 Oct 2026 for the rest.
+     051  admin_set_profile_role_and_outlet           (extracted from the migration file; asserted equal to the live body)
+     062  trg_profiles_enforce_privileged_columns     (asserted equal to the live trigger)
+     071  whole file: profiles_enforce_privileged_columns (live body), admin_apply_user_active (deactivate path)
+     084  procurement_tags      085  role constraint + role-list patch + user_entities + is_procurement_user + profiles own-only policy
+     087  is_profiles_admin     live fixture: get_users_management_data, _append_data_ledger, profiles policies
+   ------------------------------------------------------------------------------------------------------------------ */
+const between = (src: string, from: string | RegExp, to: string | RegExp, inclusive = true): string => {
+  const a = typeof from === 'string' ? src.indexOf(from) : src.search(from);
+  if (a < 0) throw new Error(`fixture: start not found: ${from}`);
+  const rest = src.slice(a);
+  const m = typeof to === 'string' ? rest.indexOf(to) : rest.search(to);
+  if (m < 0) throw new Error(`fixture: end not found: ${to}`);
+  const endLen = typeof to === 'string' ? to.length : (rest.match(to) as RegExpMatchArray)[0].length;
+  return rest.slice(0, inclusive ? m + endLen : m);
+};
+const liveSection = (name: string): string => between(LIVE, `-- ===== ${name}\n`, /\n\$function\$;\n/).replace(/^-- =====.*\n/, '');
+const LIVE_GUARD = liveSection('profiles_enforce_privileged_columns');
+const LIVE_RPC = liveSection('admin_set_profile_role_and_outlet');
+const LIVE_GUM = liveSection('get_users_management_data');
+const LIVE_LEDGER = liveSection('_append_data_ledger');
+const LIVE_TRIGGER = between(LIVE, 'CREATE TRIGGER trg_profiles_enforce_privileged_columns', ';\n');
+const defOf = (s: string) => s.replace(/;\s*$/, '').trim();
+
+const RPC_051 = between(MIG051, 'CREATE OR REPLACE FUNCTION public.admin_set_profile_role_and_outlet(', '\n$$;');
+const TRIGGER_062 = between(MIG062, 'CREATE TRIGGER trg_profiles_enforce_privileged_columns', ';');
+const SQL_084_TAGS = between(MIG084, 'CREATE TABLE IF NOT EXISTS public.procurement_tags (', 'ON CONFLICT (tag) DO NOTHING;');
+const SQL_085_USER_ENTITIES = between(MIG085, 'ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;', 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.user_entities TO authenticated;');
+const SQL_085_IS_PROC = between(MIG085, 'CREATE OR REPLACE FUNCTION public.is_procurement_user()', '$$;');
+const SQL_085_OWN_ONLY = between(MIG085, 'CREATE POLICY profiles_procurement_own_only ON public.profiles', ';');
+
+const ENV = `
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;
+END $$;
+CREATE SCHEMA auth;
+GRANT USAGE ON SCHEMA auth, public TO authenticated, anon;
+-- session-scoped simulation of the PostgREST claims: test.uid (sub) and test.jwt_role (role claim)
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('test.uid', true), '')::uuid $$;
+CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $$ SELECT jsonb_build_object('role', nullif(current_setting('test.jwt_role', true), '')) $$;
+CREATE TABLE auth.users (id uuid PRIMARY KEY, email text);
+CREATE TABLE auth.sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid);
+CREATE TABLE auth.refresh_tokens (id bigserial PRIMARY KEY, user_id varchar, session_id uuid);
+CREATE TABLE public.profiles (id uuid PRIMARY KEY, full_name text NOT NULL DEFAULT '', role text NOT NULL DEFAULT 'pending',
+  password_reset_required boolean DEFAULT false, assigned_outlet_id uuid, created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(), last_login timestamptz,
+  CONSTRAINT profiles_role_check CHECK (role IN ('admin', 'staff', 'pending', 'supervisor')));
+CREATE TABLE public.pending_registrations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, email text, status text,
+  full_name text, requested_at timestamptz, created_at timestamptz, reviewed_at timestamptz, reviewed_by uuid, rejection_reason text);
+CREATE TABLE public.data_ledger (id bigserial PRIMARY KEY, user_id uuid, user_email text, action text, entity_type text,
+  entity_id text, module text, operation text, reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb,
+  metadata jsonb, created_at timestamptz DEFAULT now(),
+  CONSTRAINT data_ledger_operation_check CHECK (operation = ANY (ARRAY['insert','update','delete','event'])));
+ALTER TABLE public.data_ledger ENABLE ROW LEVEL SECURITY;
+CREATE TABLE public.recipes (id int PRIMARY KEY, name text);
+ALTER TABLE public.recipes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Admins can update recipes" ON public.recipes FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles p WHERE ((p.id = auth.uid()) AND (p.role = 'admin'::text))));
+CREATE POLICY "Admins insert recipes" ON public.recipes FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles p WHERE ((p.id = auth.uid()) AND (p.role = 'admin'::text))));
+CREATE FUNCTION public.is_profiles_admin() RETURNS boolean LANGUAGE sql AS $$ SELECT false $$;
+-- the pre-071 shape 071 patches in place (same stub profilesDeactivateMigration.test.ts uses); replaced by the live body below
+CREATE FUNCTION public.get_users_management_data() RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $f$
+DECLARE is_admin boolean; approved jsonb;
+BEGIN
+  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin') INTO is_admin;
+  IF NOT COALESCE(is_admin, false) THEN RETURN jsonb_build_object('error', 'forbidden'); END IF;
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id', s.id, 'password_reset_required', s.password_reset_required, 'role', s.role) ORDER BY s.id), '[]'::jsonb)
+  INTO approved
+  FROM (SELECT p.id, p.role, p.password_reset_required, p.created_at FROM public.profiles p WHERE p.role <> 'pending') s;
+  RETURN jsonb_build_object('approved', approved);
+END $f$;
+CREATE TABLE public.procurement_exposure_allow (kind text NOT NULL, name text NOT NULL, note text NOT NULL, PRIMARY KEY (kind, name));
+`;
+
+// profiles RLS exactly as live (pg_policies, 24 Oct 2026)
+const PROFILES_POLICIES = `
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Admins can update all profiles" ON public.profiles FOR UPDATE TO authenticated USING (public.is_profiles_admin()) WITH CHECK (public.is_profiles_admin());
+CREATE POLICY "Admins can view all profiles" ON public.profiles FOR SELECT TO authenticated USING (public.is_profiles_admin());
+CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT TO authenticated USING (auth.uid() = id);
+GRANT INSERT, SELECT, UPDATE, DELETE ON public.profiles TO authenticated;
+`;
+
+const SEED = `
+INSERT INTO auth.users VALUES ('${ADMIN}','admin@x'),('${ADMIN2}','admin2@x'),('${STAFF}','staff@x'),('${BUYER_QT}','qt@x'),('${BUYER_MH}','mh@x');
+SET quackmaster.bypass_profile_privilege_guard = 'on';
+INSERT INTO public.profiles (id, full_name, role) VALUES ('${ADMIN}','Admin','admin'),('${ADMIN2}','Admin 2','admin'),
+  ('${STAFF}','Staff','staff'),('${BUYER_QT}','Buyer QT','procurement'),('${BUYER_MH}','Buyer MH','procurement');
+SET quackmaster.bypass_profile_privilege_guard = 'off';
+INSERT INTO public.user_entities (user_id, procurement_tag) VALUES ('${BUYER_QT}','quackteow'), ('${BUYER_MH}','merdeka_house');
+`;
+
+const STEPS: [string, string][] = [
+  ['ENV', ENV],
+  ['071', MIG071],
+  ['051 rpc', RPC_051],
+  ['live fixture', `${LIVE_GUARD};\n${LIVE_GUM};\n${LIVE_LEDGER};\nREVOKE ALL ON FUNCTION public._append_data_ledger(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb) FROM PUBLIC, anon, authenticated;`],
+  ['062 trigger', `DROP TRIGGER IF EXISTS trg_profiles_enforce_privileged_columns ON public.profiles;\n${TRIGGER_062};`],
+  ['084 tags', SQL_084_TAGS],
+  ['087', MIG087],
+  ['085 pieces', `${SQL_085_USER_ENTITIES}\n${SQL_085_IS_PROC}\n${SQL_085_OWN_ONLY};`],
+  ['policies', PROFILES_POLICIES],
+  ['grants', `GRANT SELECT ON public.profiles TO anon; GRANT EXECUTE ON FUNCTION public.admin_set_profile_role_and_outlet(uuid,text,uuid) TO authenticated;
+              GRANT EXECUTE ON FUNCTION public.get_users_management_data() TO authenticated;`],
+  ['seed', SEED],
+  // what the functions looked like BEFORE 090 (compared with the live capture)
+  ['pre-090 defs', `CREATE TABLE zz_pre AS SELECT p.proname, pg_get_functiondef(p.oid) AS def FROM pg_proc p
+                      WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('profiles_enforce_privileged_columns','admin_set_profile_role_and_outlet','get_users_management_data','_append_data_ledger');`],
+  ['090', MIG090],
+];
+
+const db = pgliteTemplate(async (pg) => {
+  for (const [n, sql] of STEPS) {
+    try {
+      await pg.exec(sql);
+    } catch (e) {
+      throw new Error(`${n}: ${(e as Error).message}`);
+    }
+  }
+});
+
+/** Run fn as a signed-in client (auth.uid() = uid, role authenticated). uid '' = no uid. */
+async function as<T>(pg: PGlite, uid: string, fn: () => Promise<T>, role: 'authenticated' | 'anon' = 'authenticated'): Promise<T> {
+  await pg.exec(`SELECT set_config('test.uid', '${uid}', false); SET ROLE ${role};`);
+  try {
+    return await fn();
+  } finally {
+    await pg.exec(`RESET ROLE; SELECT set_config('test.uid', '', false);`);
+  }
+}
+const rows = async (pg: PGlite, sql: string) => (await pg.query<Record<string, unknown>>(sql)).rows;
+const one = async (pg: PGlite, sql: string) => (await rows(pg, sql))[0];
+const err = async (p: Promise<unknown>) => {
+  try {
+    await p;
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+};
+const roleOf = async (pg: PGlite, id: string) => String((await one(pg, `select role from profiles where id='${id}'`)).role);
+const tagsOf = async (pg: PGlite, id: string) => (await rows(pg, `select procurement_tag t from user_entities where user_id='${id}' order by 1`)).map((r) => r.t);
+const ledger = (pg: PGlite, action?: string) =>
+  rows(pg, `select action, entity_type, entity_id, module, operation, before_data b, after_data a, metadata m, user_id from data_ledger ${action ? `where action='${action}'` : ''} order by id`);
+const setRole = (pg: PGlite, target: string, role: string, outlet = 'NULL') =>
+  one(pg, `select admin_set_profile_role_and_outlet('${target}', '${role}', ${outlet}) r`).then((x) => x.r as Record<string, unknown>);
+const setTags = (pg: PGlite, target: string, tags: string[]) =>
+  one(pg, `select admin_set_procurement_tags('${target}', ARRAY[${tags.map((t) => `'${t}'`).join(',')}]::text[]) r`).then((x) => x.r as Record<string, unknown>);
+const asService = async <T>(pg: PGlite, fn: () => Promise<T>) => {
+  await pg.exec(`SELECT set_config('test.jwt_role','service_role',false)`);
+  try { return await fn(); } finally { await pg.exec(`SELECT set_config('test.jwt_role','',false)`); }
+};
+const GRANT_WRITES = `GRANT INSERT, UPDATE, DELETE ON public.user_entities TO authenticated`;
+
+describe('090 fixture is the real thing', () => {
+  it('the 051 RPC, the 062 trigger and the 071 guard equal the live definitions captured read-only on 24 Oct 2026', async () => {
+    const pg = await db();
+    const pre = Object.fromEntries((await rows(pg, 'select proname, def from zz_pre')).map((r) => [r.proname as string, String(r.def)]));
+    expect(defOf(pre.profiles_enforce_privileged_columns)).toBe(defOf(LIVE_GUARD));
+    expect(defOf(pre.get_users_management_data)).toBe(defOf(LIVE_GUM));
+    expect(defOf(pre._append_data_ledger)).toBe(defOf(LIVE_LEDGER));
+    expect(defOf(TRIGGER_062).replace(/\s+/g, ' ')).toBe(defOf(LIVE_TRIGGER).replace(/ ON public\.profiles/, ' ON public.profiles').replace(/\s+/g, ' ').replace('EXECUTE FUNCTION profiles_enforce_privileged_columns()', 'EXECUTE FUNCTION public.profiles_enforce_privileged_columns()'));
+  });
+  it('051 + the 085 role-list patch gives an RPC that differs from live only by the role list', async () => {
+    const pg = await db();
+    const pre = String((await one(pg, `select def from zz_pre where proname='admin_set_profile_role_and_outlet'`)).def);
+    // zz_pre was taken after 085's DO block patched the RPC; undo the patch and the text equals the live capture
+    expect(pre).toContain(`'supervisor', 'procurement'`);
+    expect(defOf(pre.replace(`'supervisor', 'procurement'`, `'supervisor'`))).toBe(defOf(LIVE_RPC).replace(/\s+$/, ''));
+  });
+  it('profiles has exactly the live trigger before 090 and 090 adds its two', async () => {
+    const pg = await db();
+    expect((await rows(pg, `select tgname from pg_trigger where tgrelid='public.profiles'::regclass and not tgisinternal order by 1`)).map((r) => r.tgname))
+      .toEqual(['trg_profiles_enforce_privileged_columns', 'trg_profiles_role_audit', 'trg_profiles_role_guard']);
+    expect((await rows(pg, `select tgname from pg_trigger where tgrelid='public.user_entities'::regclass and not tgisinternal order by 1`)).map((r) => r.tgname))
+      .toEqual(['trg_user_entities_audit_del', 'trg_user_entities_audit_ins', 'trg_user_entities_audit_upd', 'trg_user_entities_guard']);
+  });
+});
+
+describe('090 nobody edits their own role or tags (procurement and plain staff), RPC and direct table update', () => {
+  for (const [label, actor] of [['procurement', BUYER_QT], ['plain staff', STAFF]] as const) {
+    it(`${label}: own role via the RPC is refused`, async () => {
+      const pg = await db();
+      const before = await roleOf(pg, actor);
+      for (const r of ['admin', 'staff', 'procurement', 'supervisor']) {
+        const res = await as(pg, actor, () => setRole(pg, actor, r, r === 'supervisor' ? `'${OUTLET}'` : 'NULL'));
+        expect(res).toMatchObject({ success: false, error: 'forbidden' });
+      }
+      expect(await roleOf(pg, actor)).toBe(before);
+      expect(await ledger(pg, 'role_changed')).toEqual([]);
+    });
+    it(`${label}: own tags via the RPC are refused`, async () => {
+      const pg = await db();
+      const before = await tagsOf(pg, actor);
+      const res = await as(pg, actor, () => setTags(pg, actor, ['quackteow', 'merdeka_house']));
+      expect(res).toMatchObject({ success: false, error: 'forbidden' });
+      expect(await tagsOf(pg, actor)).toEqual(before);
+      expect(await ledger(pg, 'tags_changed')).toEqual([]);
+    });
+    it(`${label}: own role and outlet by direct table update are refused (own-row UPDATE policy exists, the trigger refuses)`, async () => {
+      const pg = await db();
+      const before = await roleOf(pg, actor);
+      for (const set of [`role='admin'`, `role='staff'`, `role='procurement'`, `assigned_outlet_id='${OUTLET}'`, `role='supervisor', assigned_outlet_id='${OUTLET}'`]) {
+        if (set === `role='${before}'`) continue;   // writing the role you already have is not a change
+        expect(await as(pg, actor, () => err(pg.exec(`UPDATE profiles SET ${set} WHERE id='${actor}'`))), set).toMatch(/cannot change|only an admin|42501/i);
+      }
+      expect(await roleOf(pg, actor)).toBe(before);
+      expect(await one(pg, `select assigned_outlet_id from profiles where id='${actor}'`)).toEqual({ assigned_outlet_id: null });
+      expect(await ledger(pg, 'role_changed')).toEqual([]);
+    });
+    it(`${label}: own tags by direct table write are refused: no write grant, and the trigger refuses even if one is added back`, async () => {
+      const pg = await db();
+      const before = await tagsOf(pg, actor);
+      const writes = [
+        `INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${actor}', 'merdeka_house')`,
+        `INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${actor}', 'quackteow')`,
+        `UPDATE user_entities SET procurement_tag='merdeka_house' WHERE user_id='${actor}'`,
+        `DELETE FROM user_entities WHERE user_id='${actor}'`,
+      ];
+      for (const w of writes) expect(await as(pg, actor, () => err(pg.exec(w))), w).toMatch(/permission denied/i);
+      await pg.exec(GRANT_WRITES);                       // defense in depth: a future GRANT must not reopen it
+      for (const w of writes.filter((x) => x.startsWith('INSERT'))) expect(await as(pg, actor, () => err(pg.exec(w))), w).toMatch(/only an admin|row-level security|42501/i);
+      for (const w of writes.filter((x) => !x.startsWith('INSERT'))) await as(pg, actor, () => err(pg.exec(w)));   // RLS hides other rows: refused or no-op
+      expect(await tagsOf(pg, actor)).toEqual(before);
+      expect(await ledger(pg, 'tags_changed')).toEqual([]);
+    });
+    it(`${label}: cannot change another user's role or tags either`, async () => {
+      const pg = await db();
+      expect(await as(pg, actor, () => setRole(pg, BUYER_MH, 'admin'))).toMatchObject({ success: false, error: 'forbidden' });
+      expect(await as(pg, actor, () => setTags(pg, BUYER_MH, ['quackteow']))).toMatchObject({ success: false, error: 'forbidden' });
+      await as(pg, actor, () => err(pg.exec(`UPDATE profiles SET role='admin' WHERE id='${BUYER_MH}'`)));   // RLS hides the row (no-op) or the trigger refuses
+      expect(await roleOf(pg, BUYER_MH)).toBe('procurement');
+      expect(await tagsOf(pg, BUYER_MH)).toEqual(['merdeka_house']);
+    });
+  }
+  it('anon cannot call either RPC or write tags', async () => {
+    const pg = await db();
+    expect(await as(pg, '', () => err(pg.exec(`select admin_set_procurement_tags('${BUYER_QT}', ARRAY['quackteow'])`)), 'anon')).toMatch(/permission denied/i);
+    expect(await as(pg, '', () => err(pg.exec(`INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${BUYER_QT}','merdeka_house')`)), 'anon')).toMatch(/permission denied/i);
+  });
+});
+
+describe('090 an admin cannot change their own role or tags either', () => {
+  it('RPC: own role and own tags are refused; role unchanged', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => setRole(pg, ADMIN, 'staff'))).toMatchObject({ success: false, error: 'invalid_target' });
+    expect(await as(pg, ADMIN, () => setTags(pg, ADMIN, ['quackteow']))).toMatchObject({ success: false, error: 'invalid_target' });
+    expect(await roleOf(pg, ADMIN)).toBe('admin');
+  });
+  it('direct table update of own role / outlet is refused (the gap the old trigger left open for admins), even with another admin present', async () => {
+    const pg = await db();
+    for (const set of [`role='staff'`, `role='procurement'`, `assigned_outlet_id='${OUTLET}'`]) {
+      expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET ${set} WHERE id='${ADMIN}'`))), set).toMatch(/cannot change your own/i);
+    }
+    expect(await roleOf(pg, ADMIN)).toBe('admin');
+  });
+  it('direct own tags: no write grant; with one added back the trigger still refuses the admin\'s own row', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${ADMIN}','quackteow')`)))).toMatch(/permission denied/i);
+    await pg.exec(GRANT_WRITES);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${ADMIN}','quackteow')`)))).toMatch(/cannot change your own/i);
+    expect(await tagsOf(pg, ADMIN)).toEqual([]);
+  });
+  it('direct tag writes by an admin on someone else: still refused for a non-procurement target, and an admin cannot UPDATE user_id', async () => {
+    const pg = await db();
+    await pg.exec(GRANT_WRITES);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`INSERT INTO user_entities (user_id, procurement_tag) VALUES ('${STAFF}','quackteow')`)))).toMatch(/only be assigned to a procurement user/i);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE user_entities SET user_id='${STAFF}' WHERE user_id='${BUYER_QT}'`)))).toMatch(/procurement user|user_id cannot be changed/i);
+    expect(await tagsOf(pg, STAFF)).toEqual([]);
+  });
+});
+
+describe('090 admin success and the ledger (old and new values, allowed operations only)', () => {
+  it('admin sets a role: one ledger entry with old and new role, the admin as actor', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => setRole(pg, STAFF, 'procurement'))).toMatchObject({ success: true, role: 'procurement' });
+    expect(await roleOf(pg, STAFF)).toBe('procurement');
+    expect(await ledger(pg, 'role_changed')).toEqual([{
+      action: 'role_changed', entity_type: 'profile', entity_id: STAFF, module: 'users', operation: 'update', user_id: ADMIN,
+      b: { role: 'staff', assigned_outlet_id: null, tags: [] }, a: { role: 'procurement', assigned_outlet_id: null, tags: [] },
+      m: { source: 'profiles_trigger', tags_cleared: [] },
+    }]);
+  });
+  it('supervisor outlet change is ledgered with the old and new outlet', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => setRole(pg, STAFF, 'supervisor', `'${OUTLET}'`));
+    const l = await ledger(pg, 'role_changed');
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ b: { role: 'staff', assigned_outlet_id: null }, a: { role: 'supervisor', assigned_outlet_id: OUTLET } });
+  });
+  it('tags: admin assigns, replaces and shrinks the set; each change is ledgered with the old and new full tag list; unchanged writes nothing', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => setRole(pg, STAFF, 'procurement'));
+    expect(await as(pg, ADMIN, () => setTags(pg, STAFF, ['quackteow']))).toMatchObject({ success: true, old_tags: [], tags: ['quackteow'], unchanged: false });
+    expect(await as(pg, ADMIN, () => setTags(pg, STAFF, ['merdeka_house', 'quackteow']))).toMatchObject({ success: true, old_tags: ['quackteow'], tags: ['merdeka_house', 'quackteow'] });
+    expect(await as(pg, ADMIN, () => setTags(pg, STAFF, ['merdeka_house']))).toMatchObject({ success: true, old_tags: ['merdeka_house', 'quackteow'], tags: ['merdeka_house'] });
+    expect(await as(pg, ADMIN, () => setTags(pg, STAFF, ['merdeka_house']))).toMatchObject({ success: true, unchanged: true });
+    expect(await tagsOf(pg, STAFF)).toEqual(['merdeka_house']);
+    const l = (await ledger(pg, 'tags_changed')).filter((x) => x.entity_id === STAFF);
+    expect(l.map((x) => [x.b, x.a, (x.m as { change: string }).change])).toEqual([
+      [{ tags: [] }, { tags: ['quackteow'] }, 'added'],
+      [{ tags: ['quackteow'] }, { tags: ['merdeka_house', 'quackteow'] }, 'added'],
+      [{ tags: ['merdeka_house', 'quackteow'] }, { tags: ['merdeka_house'] }, 'removed'],
+    ]);
+    expect(l.every((x) => x.operation === 'update' && x.user_id === ADMIN && x.module === 'users')).toBe(true);
+  });
+  it('the guards also audit the direct-table admin path: role update by an admin on another user', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${BUYER_MH}'`)))).toBeNull();
+    const l = await ledger(pg, 'role_changed');
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ entity_id: BUYER_MH, user_id: ADMIN, b: { role: 'procurement', tags: ['merdeka_house'] }, a: { role: 'staff', tags: [] } });
+  });
+  it('every ledger row written uses an allowed operation (a bad one would be swallowed and lose the row)', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => setRole(pg, STAFF, 'procurement'));
+    await as(pg, ADMIN, () => setTags(pg, STAFF, ['quackteow', 'merdeka_house']));
+    await as(pg, ADMIN, () => setRole(pg, STAFF, 'staff'));
+    const ops = (await rows(pg, 'select distinct operation o from data_ledger')).map((r) => r.o);
+    expect(ops.length).toBeGreaterThan(0);
+    for (const o of ops) expect(['insert', 'update', 'delete', 'event']).toContain(o);
+    expect(await one(pg, `select count(*)::int n from data_ledger where action in ('role_changed','tags_changed')`)).toEqual({ n: 4 });
+  });
+});
+
+describe('090 RPC validation', () => {
+  it('tags: not signed in, unknown tag, none, not a procurement user, no such user; names are normalised and de-duplicated', async () => {
+    const pg = await db();
+    expect(await setTags(pg, BUYER_QT, ['quackteow'])).toMatchObject({ success: false, error: 'unauthenticated' });
+    expect(await as(pg, ADMIN, () => setTags(pg, BUYER_QT, ['quackteow', 'nope']))).toMatchObject({ success: false, error: 'unknown_tag', unknown_tags: ['nope'] });
+    expect(await as(pg, ADMIN, () => setTags(pg, BUYER_QT, []))).toMatchObject({ success: false, error: 'tags_required' });
+    expect(await as(pg, ADMIN, () => one(pg, `select admin_set_procurement_tags('${BUYER_QT}', NULL) r`).then((x) => x.r))).toMatchObject({ success: false, error: 'tags_required' });
+    expect(await as(pg, ADMIN, () => setTags(pg, STAFF, ['quackteow']))).toMatchObject({ success: false, error: 'not_procurement' });
+    expect(await as(pg, ADMIN, () => setTags(pg, NOBODY, ['quackteow']))).toMatchObject({ success: false, error: 'not_found' });
+    expect(await as(pg, ADMIN, () => setTags(pg, BUYER_QT, [' QuackTeow ', 'quackteow', 'MERDEKA_HOUSE']))).toMatchObject({ success: true, tags: ['merdeka_house', 'quackteow'] });
+    expect(await tagsOf(pg, BUYER_QT)).toEqual(['merdeka_house', 'quackteow']);
+  });
+  it('a procurement user with no tag can exist (role first, tags second) and sees nothing', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => setRole(pg, STAFF, 'procurement'));
+    expect(await tagsOf(pg, STAFF)).toEqual([]);
+  });
+  it('get_users_management_data returns entity_tags for each user to an admin and nothing to anyone else', async () => {
+    const pg = await db();
+    const d = await as(pg, ADMIN, () => one(pg, 'select get_users_management_data() d')).then((x) => x.d as { approved: { id: string; entity_tags: string[]; is_active: boolean }[] });
+    const by = Object.fromEntries(d.approved.map((u) => [u.id, u]));
+    expect(by[BUYER_QT].entity_tags).toEqual(['quackteow']);
+    expect(by[BUYER_MH].entity_tags).toEqual(['merdeka_house']);
+    expect(by[STAFF].entity_tags).toEqual([]);
+    expect(by[ADMIN].is_active).toBe(true);            // the rest of the live shape is untouched
+    for (const uid of [STAFF, BUYER_QT]) {
+      expect(await as(pg, uid, () => one(pg, 'select get_users_management_data() d'))).toEqual({ d: expect.objectContaining({ error: 'forbidden' }) });
+    }
+  });
+});
+
+describe('090 leaving procurement clears the tags, ledgered with old and new values', () => {
+  it('RPC: procurement -> staff clears a two-tag set; removals and the role change are all ledgered', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => setTags(pg, BUYER_QT, ['quackteow', 'merdeka_house']));
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await as(pg, ADMIN, () => setRole(pg, BUYER_QT, 'staff'))).toMatchObject({ success: true });
+    expect(await tagsOf(pg, BUYER_QT)).toEqual([]);
+    const t = await ledger(pg, 'tags_changed');
+    expect(t).toHaveLength(1);       // one statement, one entry per user, with the exact list before and after
+    expect(t[0]).toMatchObject({ b: { tags: ['merdeka_house', 'quackteow'] }, a: { tags: [] }, user_id: ADMIN,
+      m: { change: 'removed', tags_removed: ['merdeka_house', 'quackteow'], tags_added: [] } });
+    const r = await ledger(pg, 'role_changed');
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ b: { role: 'procurement', tags: ['merdeka_house', 'quackteow'] }, a: { role: 'staff', tags: [] }, m: { tags_cleared: ['merdeka_house', 'quackteow'] } });
+  });
+  it('direct admin table update to supervisor clears too; an outlet change that stays procurement does not', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET assigned_outlet_id='${OUTLET}' WHERE id='${BUYER_MH}'`)));
+    expect(await tagsOf(pg, BUYER_MH)).toEqual(['merdeka_house']);
+    await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET role='supervisor' WHERE id='${BUYER_MH}'`)));
+    expect(await tagsOf(pg, BUYER_MH)).toEqual([]);
+    expect((await ledger(pg, 'tags_changed')).filter((x) => x.entity_id === BUYER_MH)).toHaveLength(1);
+  });
+  it('a service-role role change clears and ledgers as the system actor', async () => {
+    const pg = await db();
+    await asService(pg, () => pg.exec(`UPDATE profiles SET role='pending' WHERE id='${BUYER_QT}'`));
+    expect(await tagsOf(pg, BUYER_QT)).toEqual([]);
+    const t = await ledger(pg, 'tags_changed');
+    expect(t).toHaveLength(1);
+    expect(t[0]).toMatchObject({ user_id: null, b: { tags: ['quackteow'] }, a: { tags: [] }, m: { change: 'removed' } });
+  });
+});
+
+describe('090 the last active admin cannot be demoted, deactivated or removed (no lock-out)', () => {
+  const apply = (pg: PGlite, actor: string, target: string, active: boolean) =>
+    one(pg, `select public.admin_apply_user_active('${actor}','${target}',${active},'test') r`).then((x) => x.r as Record<string, unknown>);
+  const bypass = (pg: PGlite, sql: string) => pg.exec(`SET quackmaster.bypass_profile_privilege_guard='on'; ${sql}; SET quackmaster.bypass_profile_privilege_guard='off';`);
+
+  it('two admins: one may demote the other through the RPC; then the remaining one is protected on every path', async () => {
+    const pg = await db();
+    expect(await as(pg, ADMIN, () => setRole(pg, ADMIN2, 'staff'))).toMatchObject({ success: true });
+    // ADMIN is now the only active admin
+    expect(await as(pg, ADMIN, () => setRole(pg, ADMIN, 'staff'))).toMatchObject({ success: false, error: 'invalid_target' });
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`)))).toMatch(/cannot change your own|last_active_admin/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`)))).toMatch(/last_active_admin/);
+    // service role / owner direct writes (no uid): the last-admin rule is not skipped
+    for (const sql of [`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`, `UPDATE profiles SET role='pending' WHERE id='${ADMIN}'`,
+      `UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`, `DELETE FROM profiles WHERE id='${ADMIN}'`]) {
+      expect(await asService(pg, () => err(pg.exec(sql))), sql).toMatch(/last_active_admin/);
+      expect(await err(bypass(pg, sql)), `bypass flag: ${sql}`).toMatch(/last_active_admin/);
+    }
+    expect(await roleOf(pg, ADMIN)).toBe('admin');
+    expect(await one(pg, `select is_active from profiles where id='${ADMIN}'`)).toEqual({ is_active: true });
+  });
+  it('via deactivate: an admin deactivates the other admin (allowed), then nobody can deactivate the one left', async () => {
+    const pg = await db();
+    expect(await apply(pg, ADMIN, ADMIN2, false)).toMatchObject({ success: true });
+    expect(await apply(pg, ADMIN2, ADMIN, false)).toMatchObject({ success: false, error: 'forbidden' });   // inactive admin cannot act
+    expect(await apply(pg, ADMIN, ADMIN, false)).toMatchObject({ success: false, error: 'invalid_target' });
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET is_active=false, deactivated_at=now() WHERE id='${ADMIN}'`)))).toMatch(/last_active_admin/);
+    expect(await one(pg, `select is_active from profiles where id='${ADMIN}'`)).toEqual({ is_active: true });
+  });
+  it('the 071 RPC counts inactive admins as admins; the trigger counts only ACTIVE ones, so an inactive admin cannot make a demotion look safe', async () => {
+    const pg = await db();
+    await apply(pg, ADMIN, ADMIN2, false);            // ADMIN2 is an inactive admin
+    // the RPC's own check (role = 'admin', any state) would let this through; the trigger refuses
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`)))).toMatch(/last_active_admin/);
+    expect(await roleOf(pg, ADMIN)).toBe('admin');
+  });
+  it('reactivating restores the freedom to demote; a non-last admin can be demoted or deactivated directly', async () => {
+    const pg = await db();
+    await apply(pg, ADMIN, ADMIN2, false);
+    await apply(pg, ADMIN, ADMIN2, true);
+    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE profiles SET is_active=false WHERE id='${ADMIN}'`)))).toBeNull();
+    expect(await one(pg, `select is_active from profiles where id='${ADMIN}'`)).toEqual({ is_active: false });
+  });
+});
+
+describe('090 rollback (exact restore) and order independence', () => {
+  const triggers = async (pg: PGlite, t: string) => (await rows(pg, `select tgname from pg_trigger where tgrelid='public.${t}'::regclass and not tgisinternal order by 1`)).map((r) => r.tgname);
+  const defs = async (pg: PGlite) => Object.fromEntries((await rows(pg, `select proname, pg_get_functiondef(oid) def from pg_proc where pronamespace='public'::regnamespace`)).map((r) => [r.proname as string, String(r.def)]));
+
+  it('after the rollback the profiles guard, its trigger and get_users_management_data equal the live capture; 090 objects are gone; grants are back', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    const d = await defs(pg);
+    expect(defOf(d.profiles_enforce_privileged_columns)).toBe(defOf(LIVE_GUARD));
+    expect(defOf(d.get_users_management_data)).toBe(defOf(LIVE_GUM));
+    for (const f of ['profiles_guard_role_change', 'profiles_audit_role_change', 'user_entities_guard_write', 'user_entities_audit_write', 'admin_set_procurement_tags']) expect(d[f], f).toBeUndefined();
+    expect(await triggers(pg, 'profiles')).toEqual(['trg_profiles_enforce_privileged_columns']);
+    expect(await triggers(pg, 'user_entities')).toEqual([]);
+    expect(await one(pg, `select count(*)::int n from procurement_exposure_allow where name='admin_set_procurement_tags'`)).toEqual({ n: 0 });
+    expect(await one(pg, `select has_table_privilege('authenticated','public.user_entities','INSERT') i, has_table_privilege('authenticated','public.user_entities','DELETE') d`)).toEqual({ i: true, d: true });
+    expect(await one(pg, `select pg_get_triggerdef(oid) t from pg_trigger where tgname='trg_profiles_enforce_privileged_columns'`)).toEqual({ t: expect.stringContaining('BEFORE INSERT OR UPDATE ON public.profiles') });
+  });
+  it('after the rollback behaviour is the old behaviour (an admin can edit their own role directly again; no tag audit)', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`)))).toBeNull();
+    expect(await roleOf(pg, ADMIN)).toBe('staff');
+    await pg.exec('DELETE FROM data_ledger');
+    await pg.exec(`DELETE FROM user_entities WHERE user_id='${BUYER_QT}'`);
+    expect(await ledger(pg)).toEqual([]);
+    // the 062/071 protection for non-admins is still there
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE profiles SET role='admin' WHERE id='${BUYER_QT}'`)))).toMatch(/cannot change/);
+  });
+  it('rollback is independent of 085: it runs cleanly if user_entities and the allow table are already gone, and twice in a row', async () => {
+    const pg = await db();
+    await pg.exec(`DROP TABLE user_entities CASCADE; DROP TABLE procurement_exposure_allow;`);
+    await pg.exec(RB090);
+    await pg.exec(RB090);
+    expect(await triggers(pg, 'profiles')).toEqual(['trg_profiles_enforce_privileged_columns']);
+  });
+  it('apply, roll back, apply again: the migration is re-runnable and leaves one of each trigger', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    await pg.exec(MIG090);
+    await pg.exec(MIG090);
+    expect(await triggers(pg, 'profiles')).toEqual(['trg_profiles_enforce_privileged_columns', 'trg_profiles_role_audit', 'trg_profiles_role_guard']);
+    expect(await triggers(pg, 'user_entities')).toEqual(['trg_user_entities_audit_del', 'trg_user_entities_audit_ins', 'trg_user_entities_audit_upd', 'trg_user_entities_guard']);
+    expect(await as(pg, ADMIN, () => setTags(pg, BUYER_QT, ['quackteow', 'merdeka_house']))).toMatchObject({ success: true });
+  });
+  it('090 refuses to apply without 085 (user_entities missing)', async () => {
+    const pg = await db();
+    await pg.exec(RB090);
+    await pg.exec(`DROP TABLE user_entities CASCADE`);
+    expect(await err(pg.exec(MIG090))).toMatch(/depends on 085/);
+  });
+});
+
+describe('090 files: documented order, snapshot, pre-apply requirement, version stamp', () => {
+  const files = import.meta.glob('../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+  const stamps = Object.keys(files).map((f) => /\/(\d{14})_(\d+)_/.exec(f)).filter(Boolean).map((m) => [m![2], m![1]]);
+  it('is stamped after 088 and before any 089', () => {
+    const st = Object.fromEntries(stamps);
+    expect(st['090'] > st['088']).toBe(true);
+    if (st['089']) expect(st['089'] > st['090']).toBe(true);
+  });
+  it('the migration header documents apply order, rollback order, the live snapshot, the seeded-copy JWT run and the scope', () => {
+    const head = MIG090.slice(0, MIG090.indexOf('*/'));
+    expect(head).toMatch(/APPLY ORDER: 084, 085, 087, 088, 090, then 089/);
+    expect(head).toMatch(/ROLLBACK ORDER[^\n]*089 -> 090 -> 088 -> 087 -> 085 -> 084/);
+    expect(head).toMatch(/SNAPSHOT/);
+    expect(head).toMatch(/SEEDED COPY[\s\S]*REAL JWTs/);
+    expect(head).toMatch(/bill void\/reverse route is a separate PR/);
+  });
+  it('the rollback header documents its order and that it is independent of 084/085/087/088', () => {
+    const head = RB090.slice(0, 900);
+    expect(head).toMatch(/089 -> 090 -> 088 -> 087 -> 085 -> 084/);
+    expect(head).toMatch(/Independent of 084\/085\/087\/088/);
+    expect(RB090).toContain(defOf(LIVE_GUARD));
+    expect(RB090).toContain(defOf(LIVE_GUM));
+  });
+  it('the new client-executable definer function is allow-listed with a reason; the trigger functions are revoked from clients', () => {
+    expect(MIG090).toMatch(/procurement_exposure_allow[^;]*'function', 'admin_set_procurement_tags'/s);
+    for (const f of ['profiles_guard_role_change', 'profiles_audit_role_change', 'user_entities_guard_write', 'user_entities_audit_write']) {
+      expect(MIG090, f).toMatch(new RegExp(`REVOKE ALL ON FUNCTION public\\.${f}\\(\\) FROM PUBLIC, anon, authenticated`));
+    }
+  });
+});

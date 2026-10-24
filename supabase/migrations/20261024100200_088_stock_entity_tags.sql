@@ -1,5 +1,5 @@
 /*
-  Depends on 085 (writes procurement_exposure_allow). Rollback order, newest first: 088 -> 087 -> 085 -> 084. 088_rollback.sql
+  Depends on 085 (writes procurement_exposure_allow). Rollback order, newest first: 090 -> 088 -> 087 -> 085 -> 084 (089, once built, goes before 090). 088_rollback.sql
   also tolerates running after 085's rollback (it skips the 085-owned allow row when the table is gone).
 
   088: every NEW stock posting carries a business-entity tag (Quackteow 'QT' / Merdeka House 'MH').

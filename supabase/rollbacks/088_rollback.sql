@@ -1,4 +1,4 @@
--- Rollback order: 088 -> 087 -> 085 -> 084 (newest first). This file also runs safely AFTER 085's rollback (it skips the 085-owned
+-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090). This file also runs safely AFTER 085's rollback (it skips the 085-owned
 -- procurement_exposure_allow row when that table is already gone); the other direction is the supported one.
 -- Rollback 088 (stock entity tags). Drops the tag columns and the hub movement ledger created by 088
 -- (tags written to inventory_lots / outlet_stock_movements since 088 are lost). Old rows are untouched.
