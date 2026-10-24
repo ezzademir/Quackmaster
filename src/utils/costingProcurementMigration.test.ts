@@ -4,6 +4,8 @@ import { pgliteTemplate } from '../test/pgliteTemplate';
 import MIG081 from '../../supabase/migrations/20261023130000_081_po_receipt_variance.sql?raw';
 import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.sql?raw';
 import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
+import MIG087 from '../../supabase/migrations/20261024110000_087_is_profiles_admin_scope_row_security.sql?raw';
+import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
 import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
 import SEED from '../../supabase/seeds/costing_seed_20261023.sql?raw';
@@ -19,6 +21,28 @@ const PO_QT = '00000000-0000-0000-0000-00000000f001';
 const PO_MH = '00000000-0000-0000-0000-00000000f002';
 const PO_NONE = '00000000-0000-0000-0000-00000000f003';
 const L_QT = '00000000-0000-0000-0000-00000000e001';
+
+/** Verbatim pg_get_functiondef output of public.is_profiles_admin() on live (Quackmaster fknrfntqycfrkaihwngg, 2026-10-24, read-only). */
+const LIVE_IS_PROFILES_ADMIN_DEF = `CREATE OR REPLACE FUNCTION public.is_profiles_admin()
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  ok boolean;
+BEGIN
+  SET LOCAL row_security = off;
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles
+    WHERE id = auth.uid() AND role = 'admin' AND is_active
+  )
+  INTO ok;
+  RETURN COALESCE(ok, false);
+END;
+$function$
+`;
 
 /** Minimal live-shaped schema: the tables / helpers 081-084 touch, with live-style permissive policies. */
 const BASE = `
@@ -36,14 +60,7 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT uid FRO
 CREATE TABLE profiles (id uuid primary key, full_name text, role text NOT NULL DEFAULT 'pending',
   is_active boolean NOT NULL DEFAULT true, assigned_outlet_id uuid,
   CONSTRAINT profiles_role_check CHECK (role IN ('admin','staff','pending','supervisor')));
--- verbatim live definition (pg_get_functiondef, project fknrfntqycfrkaihwngg, 2026-10-24): VOLATILE, SECURITY DEFINER,
--- proconfig = {search_path=public} and NO function-level row_security setting, so the SET LOCAL leaks to the end of the transaction.
-CREATE FUNCTION public.is_profiles_admin() RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' VOLATILE AS
-  $$ DECLARE ok boolean; BEGIN
-       SET LOCAL row_security = off;
-       SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active) INTO ok;
-       RETURN COALESCE(ok, false);
-     END; $$;
+${LIVE_IS_PROFILES_ADMIN_DEF};
 CREATE FUNCTION public.is_authenticated_active_staff() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS
   $$ SELECT auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin','staff') AND is_active) $$;
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -658,16 +675,7 @@ describe('PR #92 review fixes: S2 / S3 PO line guard', () => {
   });
 });
 
-describe('PR #92 review fixes: S4 is_profiles_admin() row_security leak', () => {
-  // Proposed (NOT applied live): scope row_security to the call with a function-level SET, drop the body-level SET LOCAL.
-  const PROPOSED_FIX = `
-    CREATE OR REPLACE FUNCTION public.is_profiles_admin() RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
-      SET search_path TO 'public' SET row_security TO 'off' VOLATILE AS $$
-    DECLARE ok boolean;
-    BEGIN
-      SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin' AND is_active) INTO ok;
-      RETURN COALESCE(ok, false);
-    END; $$;`;
+describe('S4 (own change set 087): is_profiles_admin() row_security leak', () => {
   const BATCH = `BEGIN; SELECT public.is_profiles_admin() a; SELECT current_setting('row_security') rs; SELECT count(*) FROM suppliers; COMMIT;`;
   const runBatch = (pg: PGlite, uid: string) => as(pg, uid, async () => {
     try {
@@ -678,32 +686,43 @@ describe('PR #92 review fixes: S4 is_profiles_admin() row_security leak', () => 
       return { rs: null, error: (e as Error).message };
     }
   });
+  const def = async (pg: PGlite) => String((await rows(pg, `select pg_get_functiondef('public.is_profiles_admin()'::regprocedure) d`))[0].d);
 
-  it('fixture is_profiles_admin() matches the live definition (VOLATILE definer, SET LOCAL row_security, no function-level row_security)', async () => {
+  it('fixture is byte-for-byte the live definition (so tests run against live behaviour)', async () => {
     const pg = await db();
-    const f = (await rows(pg, `select provolatile, prosecdef, proconfig::text cfg, prosrc from pg_proc where proname='is_profiles_admin'`))[0];
-    expect(f.provolatile).toBe('v');
-    expect(f.prosecdef).toBe(true);
-    expect(f.cfg).toBe('{search_path=public}');
-    expect(String(f.prosrc)).toMatch(/SET LOCAL row_security = off/);
+    expect(await def(pg)).toBe(LIVE_IS_PROFILES_ADMIN_DEF);
   });
 
-  it('LIVE BEHAVIOUR (documents S4): after is_profiles_admin() the rest of the transaction runs with row_security=off, so invoker queries on RLS tables fail', async () => {
+  it('LIVE BEHAVIOUR: after is_profiles_admin() the rest of the transaction runs with row_security=off, so invoker queries on RLS tables fail', async () => {
     const pg = await db();
     for (const uid of [BUYER_QT, STAFF, ADMIN]) {
       expect((await runBatch(pg, uid)).error).toMatch(/query would be affected by row-level security policy/);
     }
   });
 
-  it('PROPOSED FIX: function-level SET row_security restores the setting on return; admin checks still correct', async () => {
+  it('087 up: row_security is restored on return, admin answers unchanged, grants kept', async () => {
     const pg = await db();
-    await pg.exec(PROPOSED_FIX);
-    for (const uid of [BUYER_QT, STAFF, ADMIN]) {
-      expect(await runBatch(pg, uid)).toEqual({ rs: 'on', error: null });
-    }
+    const aclBefore = (await rows(pg, `select proacl::text a from pg_proc where proname='is_profiles_admin'`))[0].a;
+    await pg.exec(MIG087);
+    for (const uid of [BUYER_QT, STAFF, ADMIN]) expect(await runBatch(pg, uid)).toEqual({ rs: 'on', error: null });
     expect(await as(pg, ADMIN, () => rows(pg, 'select public.is_profiles_admin() a'))).toEqual([{ a: true }]);
     expect(await as(pg, STAFF, () => rows(pg, 'select public.is_profiles_admin() a'))).toEqual([{ a: false }]);
     expect(await as(pg, BUYER_QT, () => rows(pg, 'select public.is_profiles_admin() a'))).toEqual([{ a: false }]);
+    expect((await rows(pg, `select proconfig::text c from pg_proc where proname='is_profiles_admin'`))[0].c).toMatch(/row_security=off/);
+    expect((await rows(pg, `select proacl::text a from pg_proc where proname='is_profiles_admin'`))[0].a).toBe(aclBefore);
+  });
+
+  it('087 rollback restores the exact live definition (byte-for-byte), and the rollback file embeds it verbatim', async () => {
+    const pg = await db();
+    await pg.exec(MIG087);
+    expect(await def(pg)).not.toBe(LIVE_IS_PROFILES_ADMIN_DEF);
+    await pg.exec(RB087);
+    expect(await def(pg)).toBe(LIVE_IS_PROFILES_ADMIN_DEF);
+    expect(RB087).toContain(LIVE_IS_PROFILES_ADMIN_DEF.trimEnd());
+  });
+
+  it('087 is independent of 084/085 (does not mention them)', async () => {
+    expect(MIG087.replace(/^--.*$/gm, '')).not.toMatch(/procurement|084|085/i);
   });
 });
 
