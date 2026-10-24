@@ -617,6 +617,30 @@ describe('085_rollback refuses to run while 090 is live', () => {
     await pg.exec(RB090);
     expect(String(await err(pg.exec(RB085)))).not.toMatch(/085_rollback refused/);
   });
+  it('J: the procurement-to-pending demotion in 085_rollback runs in a plain session (no JWT, auth.uid() NULL) with procurement rows present, and the claim is cleared right after', async () => {
+    const lines = RB085.split('\n');
+    const u = lines.findIndex((l) => l.startsWith("UPDATE public.profiles SET role = 'pending' WHERE role = 'procurement';"));
+    expect(u).toBeGreaterThan(0);
+    let start = u; while (lines[start - 1].startsWith('SELECT set_config(')) start--;
+    let end = u; while (lines[end + 1].startsWith('SELECT set_config(')) end++;
+    const block = lines.slice(start, end + 1).join('\n');
+    const pg = await db();
+    await pg.exec(RB090);                       // 090 off, as 085_rollback requires; the 071 guard stays
+    expect(await roleOf(pg, BUYER_QT)).toBe('procurement');
+    expect(await roleOf(pg, BUYER_MH)).toBe('procurement');
+    await pg.exec('BEGIN');
+    const e = await err(pg.exec(block));        // exactly what the file does, in a plain (non-service, non-JWT) session
+    if (e) { await pg.exec('ROLLBACK'); throw new Error(`085_rollback demotion refused in a plain session: ${e}`); }
+    const claim = String((await one(pg, `select coalesce(current_setting('request.jwt.claim.role', true), '') c`)).c);
+    await pg.exec('COMMIT');
+    expect(claim).not.toBe('service_role');
+    expect(await roleOf(pg, BUYER_QT)).toBe('pending');
+    expect(await roleOf(pg, BUYER_MH)).toBe('pending');
+  });
+  it('J: 085_rollback sets the service_role claim transaction-local and never uses the 071 bypass flag; no other rollback or runbook sets that flag', () => {
+    expect(RB085).toMatch(/SELECT set_config\('request\.jwt\.claim\.role', 'service_role', true\);/);
+    for (const f of [RB085, RB087, RB090, BREAK_GLASS]) expect(f).not.toMatch(/set_config\('quackmaster\.bypass_profile_privilege_guard'/);
+  });
   it('the guard is the first statement after the header comments, and the header says so', () => {
     const body = RB085.split('\n').filter((l) => !l.startsWith('--')).join('\n').trimStart();
     expect(body.startsWith('DO $$ BEGIN')).toBe(true);

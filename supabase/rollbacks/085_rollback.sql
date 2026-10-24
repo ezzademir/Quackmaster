@@ -101,6 +101,11 @@ BEGIN
   END IF;
 END $$;
 -- Leak fixes (security_invoker views, _stock_take_sheet revoke) are intentionally NOT reverted.
+-- A plain psql / SQL-editor session has no JWT and auth.uid() is NULL, so the 071 guard profiles_enforce_privileged_columns refuses this role change
+-- (found in the 24 Oct 2026 seeded-copy rehearsal, step 4). Run the statement as service_role, the same transaction-local claim the 090 break-glass
+-- runbook uses (one tested pattern, no second route past the guard). set_config(..., true) ends at COMMIT/ROLLBACK; it is also cleared right after the statement.
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
 UPDATE public.profiles SET role = 'pending' WHERE role = 'procurement';
+SELECT set_config('request.jwt.claim.role', '', true);
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check CHECK (role IN ('admin', 'staff', 'pending', 'supervisor', 'viewer'));
