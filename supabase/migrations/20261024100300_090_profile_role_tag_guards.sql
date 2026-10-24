@@ -55,15 +55,19 @@
        not reverse the patch. Any later migration that changes that function must be rolled back (or re-based) before 090 is rolled back.
     All new SECURITY DEFINER functions pin search_path = public, pg_temp (pg_temp last).
   BREAK-GLASS (the only active admin is lost or locked out and must be removed or replaced). Run ONLY on Ezzad's explicit word; never improvise a
-  trigger drop, a DISABLE TRIGGER, or a bypass flag (the flag does not skip this guard anyway).
-    1. Confirm in SQL (read-only) that exactly one active admin exists and that the account is really unreachable.
-    2. Run supabase/rollbacks/090_rollback.sql (restores the pre-090 guard; the last-admin rule is gone with it).
-    3. As service_role / the owner, in one transaction: promote the replacement (UPDATE profiles SET role='admin' WHERE id = <replacement>), then
-       demote or deactivate the lost account. This goes through the existing 062/071 guard, which stays in place.
-    4. Check: SELECT count(*) FROM profiles WHERE role='admin' AND is_active  -> at least 1 (the replacement), then RE-APPLY this file (090 is re-runnable).
-    5. Write down who, when and why: 090's audit triggers are off between steps 2 and 4, so the role changes made in step 3 get NO data_ledger row.
-  (Note, tested: with 090 live, a service_role promote of a replacement admin is itself allowed; only demoting/deactivating/deleting the LAST active admin
-  is refused. If a replacement can be promoted first, the lost account can then be demoted with 090 still live and the rollback is not needed.)
+  trigger drop, a DISABLE TRIGGER, or a bypass flag. Copy-paste SQL: supabase/runbooks/090_break_glass_promote_then_demote.sql.
+  PRIMARY path, with 090 STILL LIVE (last-admin guard on, fully ledgered, no rollback, no audit gap):
+    1. Confirm in SQL (read-only) that exactly one active admin exists, that the account is really unreachable, and pick the replacement
+       (an active staff/supervisor user, NOT a procurement user).
+    2. Edit the two ids in the runbook file and send it as ONE batch (Supabase SQL editor, or psql -v ON_ERROR_STOP=1 -f). As service_role, in ONE
+       transaction, it promotes the replacement, then demotes and deactivates the lost account, and it ABORTS EVERYTHING (RAISE, so nothing changes)
+       unless the replacement is an active admin and at least one active admin remains. 090's triggers ledger every step (role_changed x2, deactivated).
+    3. Check: SELECT id, role, is_active FROM profiles WHERE role = 'admin' and the three ledger rows.
+  FALLBACK ONLY (090 itself is the problem, e.g. it refuses a step you cannot otherwise get past): run supabase/rollbacks/090_rollback.sql as ONE batch, then
+  the SAME runbook file, then re-apply this file. With 090 off there is NO last-admin guard and NO ledger: the runbook file's post-condition is the only safety
+  net (a mistyped id once left zero admins), so never run raw UPDATEs there; and write the ledger rows by hand (INSERT INTO data_ledger, operation 'update',
+  actions role_changed / deactivated, metadata source 'break_glass_manual' and the reason; template in the header of 090_rollback.sql).
+  (Tested: with 090 live a service_role promote of a replacement is allowed; only demoting, deactivating or deleting the LAST active admin is refused.)
   Ledger (fail closed): only the allowed operations (insert/update/delete/event) are used, and the audit triggers (role/outlet, tags, direct is_active) INSERT INTO
   data_ledger DIRECTLY (not through _append_data_ledger, which swallows a failed insert into a WARNING and is left untouched). If the
   ledger insert fails, the role / outlet / tag change is rolled back with it, on every path (role RPC, direct update, admin_set_procurement_tags,

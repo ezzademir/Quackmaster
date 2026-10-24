@@ -13,9 +13,15 @@
 -- OVERWRITES get_users_management_data() WHOLE with the captured live text (it does not reverse the 090 patch). If a later migration has changed that
 -- function since 090, roll that migration back (or re-base this file's copy) first, or its change is erased here. 090 did not change
 -- profiles_enforce_privileged_columns, so re-creating it is a no-op today.
--- BREAK-GLASS use: this file is also the written step for a lost/locked ONLY admin (see the BREAK-GLASS section in the 090 migration header):
--- run it ONLY on Ezzad's explicit word, then promote the replacement admin as service_role (existing 062/071 guard), demote the lost account, check that
--- an active admin exists, and re-apply 090. No trigger drop, no DISABLE TRIGGER. Role changes made while 090 is off are not ledgered.
+-- BREAK-GLASS: this file is the FALLBACK ONLY for a lost/locked only admin. The PRIMARY path needs NO rollback: with 090 live, run
+-- supabase/runbooks/090_break_glass_promote_then_demote.sql (promote the replacement, then demote the lost admin, in one transaction that aborts unless an
+-- active admin remains; fully ledgered). Rolling back first switches OFF the last-admin guard AND the ledger: a mistyped id then leaves zero admins.
+-- Only if you must use this file (ONLY on Ezzad's explicit word, no trigger drop, no DISABLE TRIGGER): run it as ONE batch, run the SAME runbook file (its
+-- post-condition is then your only guard), WRITE THE LEDGER ROWS BY HAND for every role change made while 090 is off (template below), then re-apply 090.
+--   INSERT INTO public.data_ledger (user_id, user_email, action, entity_type, entity_id, module, operation, before_data, after_data, metadata)
+--   VALUES (NULL, '', 'role_changed', 'profile', '<profile id>', 'users', 'update', jsonb_build_object('role', '<old>'), jsonb_build_object('role', '<new>'),
+--           jsonb_build_object('source', 'break_glass_manual', 'actor', 'system', 'reason', '<who / why>'));   -- same again for each demotion (action 'deactivated')
+-- RUN AS ONE BATCH: psql -1 or -v ON_ERROR_STOP=1; never plain psql -f.
 -- Tags cleared by 090 when a user left procurement, and the ledger rows 090 wrote, are NOT restored/deleted (the ledger is append-only).
 
 DROP TRIGGER IF EXISTS trg_profiles_role_audit ON public.profiles;

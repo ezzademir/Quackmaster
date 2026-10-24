@@ -9,6 +9,7 @@ import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_rol
 import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
 import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
+import BREAK_GLASS from '../../supabase/runbooks/090_break_glass_promote_then_demote.sql?raw';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
 import RB090 from '../../supabase/rollbacks/090_rollback.sql?raw';
 import LIVE from './__fixtures__/live_profiles_guard_20261024.sql?raw';
@@ -670,14 +671,94 @@ describe('090 break-glass: lost or locked only admin (rollback, then promote, th
     expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${ADMIN}'`)))).toBeNull();
     expect(await activeAdmins(pg)).toBe(1);
   });
-  it('the written step is in the migration header and the rollback header: only on Ezzad\'s word, rollback then promote, no improvised trigger drop', () => {
+  const NIL = '00000000-0000-0000-0000-000000000000';
+  const snippet = (replacement: string, lost: string) => BREAK_GLASS.replace(NIL, replacement).replace(NIL, lost);
+  // psql -v ON_ERROR_STOP=1 / the SQL editor end the session on a failed batch, which rolls the open transaction back; the test does that explicitly
+  const run = async (pg: PGlite, sql: string) => { const e = await err(pg.exec(sql)); if (e) await pg.exec('ROLLBACK'); return e; };
+  const admins = async (pg: PGlite) => (await rows(pg, `select id from profiles where role='admin' and is_active order by id`)).map((r) => r.id);
+
+  it('PRIMARY path (090 live, no rollback): the copy-paste snippet promotes the replacement, demotes+deactivates the lost admin, and every step is ledgered', async () => {
+    const pg = await only();
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await run(pg, snippet(STAFF, ADMIN))).toBeNull();
+    expect(await admins(pg)).toEqual([STAFF]);
+    expect(await roleOf(pg, ADMIN)).toBe('staff');
+    expect(await one(pg, `select is_active a from profiles where id='${ADMIN}'`)).toEqual({ a: false });
+    expect((await ledger(pg)).map((x) => `${x.action}:${x.entity_id}:${x.user_id}:${(x.m as Record<string, unknown>).actor}`).sort()).toEqual(
+      [`role_changed:${STAFF}:null:system`, `role_changed:${ADMIN}:null:system`, `deactivated:${ADMIN}:null:system`].sort());
+    // 090 stays live: the new admin is now the protected last one
+    expect(await asService(pg, () => err(pg.exec(`UPDATE profiles SET role='staff' WHERE id='${STAFF}'`)))).toMatch(/last_active_admin/);
+    expect(await triggers(pg, 'profiles')).toEqual(['trg_profiles_enforce_privileged_columns', 'trg_profiles_role_audit', 'trg_profiles_role_guard']);
+  });
+  it('the snippet ends its transaction cleanly (the service_role claim does not outlive it)', async () => {
+    const pg = await only();
+    await run(pg, snippet(STAFF, ADMIN));
+    expect(await one(pg, `select coalesce(current_setting('request.jwt.claim.role', true), '') r`)).toEqual({ r: '' });
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE profiles SET role='admin' WHERE id='${BUYER_QT}'`)))).toMatch(/cannot change|only an admin/);
+  });
+  it('a typo in the replacement id changes NOTHING (zero admins is impossible): the lost admin stays admin and active', async () => {
+    const pg = await only();
+    await pg.exec('DELETE FROM data_ledger');
+    const typo = '00000000-0000-0000-0000-0000000000ee';
+    expect(await run(pg, snippet(typo, ADMIN))).toMatch(/replacement .* must exist/);
+    expect(await admins(pg)).toEqual([ADMIN]);
+    expect(await ledger(pg)).toEqual([]);
+    expect(await one(pg, `select coalesce(current_setting('request.jwt.claim.role', true), '') r`)).toEqual({ r: '' });
+  });
+  it('refuses a procurement or pending replacement, a lost id that is not an admin, equal ids, and the untouched placeholders', async () => {
+    const pg = await only();
+    expect(await run(pg, snippet(BUYER_QT, ADMIN))).toMatch(/not procurement, not pending|must exist, be active/);
+    expect(await run(pg, snippet(STAFF, STAFF))).toMatch(/set two different real profile ids|must exist and currently be an admin/);
+    expect(await run(pg, snippet(STAFF, ADMIN2))).toMatch(/must exist and currently be an admin/);   // ADMIN2 was demoted by the fixture helper
+    expect(await run(pg, BREAK_GLASS)).toMatch(/set two different real profile ids/);
+    expect(await admins(pg)).toEqual([ADMIN]);
+    expect(await roleOf(pg, BUYER_QT)).toBe('procurement');
+  });
+  it('an inactive replacement is refused', async () => {
+    const pg = await only();
+    await asService(pg, () => pg.exec(`UPDATE profiles SET is_active=false WHERE id='${STAFF}'`));
+    expect(await run(pg, snippet(STAFF, ADMIN))).toMatch(/must exist, be active/);
+    expect(await admins(pg)).toEqual([ADMIN]);
+  });
+  it('the post-condition is the safety net with 090 OFF (no last-admin guard): a failing check aborts the whole thing; the same file still works', async () => {
+    const pg = await only();
+    await pg.exec(RB090);
+    await pg.exec('DELETE FROM data_ledger');
+    // sabotage: a trigger that stops the promote from sticking would leave zero admins; the in-transaction check must abort the demotion too
+    await pg.exec(`CREATE FUNCTION zz_undo() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.role='admin' AND OLD.role<>'admin' THEN NEW.role := OLD.role; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER zz_undo BEFORE UPDATE ON profiles FOR EACH ROW EXECUTE FUNCTION zz_undo();`);
+    expect(await run(pg, snippet(STAFF, ADMIN))).toMatch(/no active admin would remain/);
+    expect(await admins(pg)).toEqual([ADMIN]);
+    await pg.exec('DROP TRIGGER zz_undo ON profiles');
+    expect(await run(pg, snippet(STAFF, ADMIN))).toBeNull();
+    expect(await admins(pg)).toEqual([STAFF]);
+    expect(await ledger(pg, 'role_changed')).toEqual([]);                  // 090 is off: no ledger, hence the hand-written rows
+  });
+  it('the hand-written ledger row from the rollback header is accepted by data_ledger', async () => {
+    const pg = await only();
+    const tpl = RB090.split('\n').filter((l) => /^--\s+(INSERT INTO|VALUES|jsonb_build_object)/.test(l)).map((l) => l.replace(/^-- ?/, '')).join('\n');
+    const sql = tpl.replace(/<profile id>/g, STAFF).replace('<old>', 'staff').replace('<new>', 'admin').replace('<who / why>', 'break-glass test').replace(/--.*$/gm, '');
+    await pg.exec('DELETE FROM data_ledger');
+    expect(await err(pg.exec(sql))).toBeNull();
+    expect(await ledger(pg)).toMatchObject([{ action: 'role_changed', entity_id: STAFF, operation: 'update', m: { source: 'break_glass_manual' } }]);
+  });
+  it('the wording: PRIMARY = promote then demote with 090 live, rollback = FALLBACK ONLY, only on Ezzad\'s word, no trigger drop, hand-written ledger rows, one batch', () => {
     const head = MIG090.slice(0, MIG090.indexOf('*/'));
     expect(head).toMatch(/BREAK-GLASS/);
     expect(head).toMatch(/ONLY on Ezzad's explicit word/);
     expect(head).toMatch(/never improvise a\s+trigger drop/);
-    expect(head).toMatch(/090_rollback\.sql[\s\S]*promote the replacement[\s\S]*RE-APPLY/);
+    expect(head).toMatch(/PRIMARY path, with 090 STILL LIVE[\s\S]*no rollback[\s\S]*FALLBACK ONLY[\s\S]*090_rollback\.sql[\s\S]*re-apply this file/);
+    expect(head).toMatch(/ABORTS EVERYTHING/);
+    expect(head).toMatch(/at least one active admin remains/);
+    expect(head).toMatch(/NO last-admin guard and NO ledger/);
+    expect(head).toMatch(/write the ledger rows by hand/);
+    expect(head).toMatch(/psql -v ON_ERROR_STOP=1/);
     expect(head).not.toMatch(/Recovery means deliberately dropping the trigger/);
-    expect(RB090).toMatch(/BREAK-GLASS use:[\s\S]*ONLY on Ezzad's explicit word[\s\S]*No trigger drop/);
+    expect(RB090).toMatch(/FALLBACK ONLY[\s\S]*PRIMARY path needs NO rollback[\s\S]*ONLY on Ezzad's explicit word, no trigger drop[\s\S]*WRITE THE LEDGER ROWS BY HAND/);
+    expect(RB090).toMatch(/RUN AS ONE BATCH/);
+    expect(BREAK_GLASS).toMatch(/ONLY on Ezzad's explicit word/);
+    expect(BREAK_GLASS).toMatch(/ONE batch/);
+    expect(BREAK_GLASS).toMatch(/RAISE EXCEPTION 'break-glass: no active admin would remain; nothing was changed'/);
   });
 });
 
