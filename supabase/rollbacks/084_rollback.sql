@@ -22,6 +22,10 @@ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'suppliers' AND column_name = 'status') THEN
     EXECUTE 'CREATE TABLE IF NOT EXISTS public.suppliers_status_backup_084 AS
              SELECT id, status, delivery_day, created_by, approved_by, approved_at, now() AS backed_up_at FROM public.suppliers';
+    -- the backup is operator data, not API data: RLS on (no policies) and no grants to anon / authenticated / PUBLIC
+    -- (a CTAS table in public is otherwise readable through the Data API under the default grants)
+    EXECUTE 'ALTER TABLE public.suppliers_status_backup_084 ENABLE ROW LEVEL SECURITY';
+    EXECUTE 'REVOKE ALL ON public.suppliers_status_backup_084 FROM PUBLIC, anon, authenticated';
     EXECUTE 'SELECT count(*) FROM public.suppliers WHERE status IS DISTINCT FROM ''active''' INTO n_open;
     IF n_open > 0 THEN
       RAISE WARNING '084 rollback: % supplier(s) are pending/inactive and will look approved after suppliers.status is dropped; see public.suppliers_status_backup_084', n_open;

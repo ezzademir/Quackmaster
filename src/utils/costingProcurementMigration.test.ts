@@ -882,6 +882,20 @@ describe('S5: rollbacks are exact', () => {
     expect(await c0(pg, `select count(*) n from information_schema.columns where table_name='suppliers' and column_name='status'`)).toBe(0);
     expect(await rows(pg, `select status from suppliers_status_backup_084 where id='00000000-0000-0000-0000-0000000005e1'`)).toEqual([{ status: 'pending' }]);
   });
+  it('F4: the 084 rollback backup table is closed to the API: RLS on, no access for anon / authenticated / PUBLIC', async () => {
+    const pg = await db();
+    // like Supabase: new public tables are granted to anon / authenticated (and PUBLIC) by default
+    await pg.exec(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, PUBLIC`);
+    await pg.exec(`INSERT INTO suppliers (id, name, status) VALUES ('00000000-0000-0000-0000-0000000005e1','Pending Co','pending')`);
+    await pg.exec(RB088); await pg.exec(RB085); await pg.exec(RB084);
+    expect(await rows(pg, `select relrowsecurity from pg_class where relname='suppliers_status_backup_084'`)).toEqual([{ relrowsecurity: true }]);
+    expect(await count(pg, `select * from pg_class c, aclexplode(c.relacl) a where c.relname='suppliers_status_backup_084' and (a.grantee = 0 or a.grantee in (select oid from pg_roles where rolname in ('anon','authenticated')))`)).toBe(0);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`select * from suppliers_status_backup_084`)))).toMatch(/permission denied/);
+    await pg.exec(`SET ROLE anon`);
+    expect(await err(pg.exec(`select * from suppliers_status_backup_084`))).toMatch(/permission denied/);
+    await pg.exec(`RESET ROLE`);
+    expect(await count(pg, `select * from suppliers_status_backup_084 where status='pending'`)).toBe(1);      // the operator (owner) can still read it
+  });
 });
 
 describe('S6: bills view / bill amount / payment deletes', () => {

@@ -301,6 +301,9 @@ INSERT INTO public.delivery_location_entities (location_kind, outlet_id, entity_
 SELECT 'hub', NULL, 'QT'
 WHERE NOT EXISTS (SELECT 1 FROM public.delivery_location_entities WHERE location_kind = 'hub');
 
+-- CONFIRMED by Ezzad, 24 Oct 2026: all 32 existing POs are Quackteow. This backfill therefore stands as written (every live PO
+-- resolves to QT through the hub mapping). It is a ONE-TIME backfill of those existing POs only; nothing else is backfilled or
+-- guessed from it.
 -- Backfill existing POs from their delivery location. Unresolved POs stay NULL (invisible to procurement)
 -- and are listed by v_po_entity_unresolved + a NOTICE here.
 UPDATE public.purchase_orders po
