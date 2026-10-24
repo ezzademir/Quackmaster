@@ -1,3 +1,4 @@
+-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090). Apply order: 084, 085, 087, 088, 090, then 089.
 -- Rollback 084 (costing schema). Run 085_rollback first. Drops costing data (seeded or entered).
 DROP VIEW IF EXISTS public.v_price_flags_open, public.v_ingredient_usage, public.v_spend_by_supplier_ingredient,
   public.v_cost_drift, public.v_dish_cogs, public.v_recipe_cost;

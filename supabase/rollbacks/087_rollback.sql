@@ -1,3 +1,4 @@
+-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084 (newest first; 089 goes before 090). Apply order: 084, 085, 087, 088, 090, then 089.
 -- Rollback 087: restores the EXACT live definition of public.is_profiles_admin() as captured read-only with
 -- pg_get_functiondef on project fknrfntqycfrkaihwngg (Quackmaster) on 2026-10-24. proconfig is reset to {search_path=public}.
 CREATE OR REPLACE FUNCTION public.is_profiles_admin()

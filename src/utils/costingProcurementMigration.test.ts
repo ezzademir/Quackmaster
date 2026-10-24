@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { pgliteTemplate } from '../test/pgliteTemplate';
@@ -1524,6 +1525,13 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
       const sql = f === '085_rollback' ? RB085 : RB088;
       expect(sql).toMatch(/Rollback order: 090 -> 088 -> 087 -> 085 -> 084/);
     }
+  });
+  it('G5: all five rollback headers (084, 085, 087, 088, 090) state the same order, first line of the file for 084/085/087/088', () => {
+    for (const [n, sql] of [['084', RB084], ['085', RB085], ['087', RB087], ['088', RB088]] as const) {
+      expect(sql.split('\n')[0], n).toMatch(/^-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084/);
+    }
+    expect(RB084.split('\n')[0]).toMatch(/Apply order: 084, 085, 087, 088, 090, then 089/);
+    expect(readFileSync(new URL('../../supabase/rollbacks/090_rollback.sql', import.meta.url), 'utf8').split('\n')[0]).toMatch(/089 -> 090 -> 088 -> 087 -> 085 -> 084/);
   });
 });
 
