@@ -13,6 +13,8 @@
 --    If the lost account may be compromised, also ban it in Auth (dashboard, or the admin_set_user_active function after the new admin signs in): this file
 --    clears its sessions and refresh tokens and deactivates the profile, but does not set deactivated_by or an Auth ban.
 --    The transaction-local claim below is the same state a service-key request has; it ends at COMMIT/ROLLBACK.
+-- KNOWN GAP (K7, documented, not fixed): this file promotes with a direct UPDATE, so a replacement who was a supervisor keeps their assigned_outlet_id; the
+--    admin_set_profile_role_and_outlet RPC clears it. Harmless for an admin, but clear it afterwards (via that RPC, once signed in) if you want it tidy.
 BEGIN;
 SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
