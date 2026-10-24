@@ -1452,7 +1452,9 @@ describe('F6: migration versions follow the migration numbers (084 < 085 < 087 <
 });
 
 describe('F7: the default-deny also covers VIEWS and SECURITY DEFINER functions (exposure guard)', () => {
-  const unclassified = async (pg: PGlite) => ({
+  // the monitor views are admin-only (G4), so they are read as the admin, like the person who reviews them
+  const unclassified = (pg: PGlite) => as(pg, ADMIN, () => unclassifiedRaw(pg));
+  const unclassifiedRaw = async (pg: PGlite) => ({
     fns: (await rows(pg, `select function_name from v_procurement_unclassified_routines order by 1`)).map((r) => r.function_name),
     views: (await rows(pg, `select view_name from v_procurement_unclassified_views order by 1`)).map((r) => r.view_name),
     tables: (await rows(pg, `select table_name from v_procurement_unclassified_tables where table_name <> 'test_ctx' order by 1`)).map((r) => r.table_name),
@@ -1490,6 +1492,20 @@ describe('F7: the default-deny also covers VIEWS and SECURITY DEFINER functions 
     expect((await unclassified(pg)).views).toEqual([]);
     await pg.exec(`CREATE VIEW public.zz_open2 AS SELECT 1 AS x; INSERT INTO procurement_exposure_allow VALUES ('view','zz_open2','test: constant')`);
     expect((await unclassified(pg)).views).toEqual([]);
+  });
+  it('G4: the monitor views are admin-only: procurement, staff and anon see no function or view names', async () => {
+    const pg = await db();
+    // make sure there is something to see, so an empty result for others means "hidden", not "nothing there"
+    await pg.exec(`CREATE FUNCTION public.zz_g4_leaky() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$; CREATE VIEW public.zz_g4_open AS SELECT 1 AS x`);
+    await pg.exec(`GRANT EXECUTE ON FUNCTION public.zz_g4_leaky() TO authenticated`);
+    for (const [v, col, name] of [['v_procurement_unclassified_routines', 'function_name', 'zz_g4_leaky'], ['v_procurement_unclassified_views', 'view_name', 'zz_g4_open']] as const) {
+      expect((await as(pg, ADMIN, () => rows(pg, `select ${col} c from ${v}`))).map((r) => r.c)).toContain(name);
+      for (const uid of [BUYER_QT, BUYER_MH, STAFF]) expect(await as(pg, uid, () => count(pg, `select * from ${v}`))).toBe(0);
+      await pg.exec('SET ROLE anon');
+      const anonErr = await err(pg.exec(`select * from ${v}`));
+      await pg.exec('RESET ROLE');
+      expect(anonErr).toMatch(/permission denied/);
+    }
   });
   it('the exposure tables are closed to procurement', async () => {
     const pg = await db();

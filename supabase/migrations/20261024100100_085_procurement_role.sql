@@ -856,16 +856,18 @@ WHERE ns.nspname = 'public' AND c.relkind IN ('v', 'm')
   AND NOT COALESCE(c.reloptions::text[] && ARRAY['security_invoker=true', 'security_invoker=on'], false)
 ON CONFLICT (kind, name) DO NOTHING;
 
+-- ADMIN-ONLY (round 3, G4): pg_proc / pg_class are not row-secured, so without the is_profiles_admin() term every client
+-- (procurement, staff) would read the name of every client-executable definer function / non-invoker view as 'unclassified'.
 CREATE OR REPLACE VIEW public.v_procurement_unclassified_routines WITH (security_invoker = true) AS
 SELECT DISTINCT p.proname AS function_name
 FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
-WHERE ns.nspname = 'public' AND p.prosecdef
+WHERE public.is_profiles_admin() AND ns.nspname = 'public' AND p.prosecdef
   AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
   AND NOT EXISTS (SELECT 1 FROM public.procurement_exposure_allow a WHERE a.kind = 'function' AND a.name = p.proname);
 CREATE OR REPLACE VIEW public.v_procurement_unclassified_views WITH (security_invoker = true) AS
 SELECT c.relname AS view_name, c.relkind = 'm' AS materialized
 FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
-WHERE ns.nspname = 'public' AND c.relkind IN ('v', 'm')
+WHERE public.is_profiles_admin() AND ns.nspname = 'public' AND c.relkind IN ('v', 'm')
   AND (c.relkind = 'm' OR NOT COALESCE(c.reloptions::text[] && ARRAY['security_invoker=true', 'security_invoker=on'], false))
   AND NOT EXISTS (SELECT 1 FROM public.procurement_exposure_allow a WHERE a.kind = 'view' AND a.name = c.relname);
 REVOKE ALL ON public.v_procurement_unclassified_routines, public.v_procurement_unclassified_views FROM PUBLIC, anon;
