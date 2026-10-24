@@ -1318,7 +1318,7 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     const pg = await db();
     expect((await as(pg, BUYER_QT, () => deliver(pg, 10)))[0].r).toMatchObject({ success: true });
     expect(await split(pg)).toEqual([{ entity_code: 'QT', q: 10 }]);
-    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r as Record<string, unknown>;
     expect(r).toMatchObject({ success: true, po_kept_as_cancelled: true });
     expect(r.reversal_lines).toEqual([expect.objectContaining({ quantity_reversed: 10, entity_code: 'QT' })]);
     expect(await mov(pg)).toEqual([{ entity_code: 'QT', q: 10, s: L_QT }, { entity_code: 'QT', q: -10, s: L_QT }]);
@@ -1390,9 +1390,9 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     await as(pg, BUYER_QT, () => deliver(pg, 10));
     await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand - 7 WHERE raw_material_id='${RM}'`);   // 7 kg used in production
     const before = { mov: await mov(pg), rec: await count(pg, 'select * from po_receipt_records'), qoh: await qoh(pg), po: await poState(pg) };
-    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r as Record<string, unknown>;
     expect(r).toMatchObject({ success: false, error: 'insufficient_hub_quantity', on_hand: 3, required_return: 10 });
-    expect(r.message).toMatch(/partly used/);
+    expect(String(r.message)).toMatch(/partly used/);
     expect({ mov: await mov(pg), rec: await count(pg, 'select * from po_receipt_records'), qoh: await qoh(pg), po: await poState(pg) }).toEqual(before);
     expect(before.po[0].rcv).toBe(10);
     expect(await c0(pg, `select count(*) n from data_ledger where action='cancelled'`)).toBe(0);
@@ -1406,7 +1406,7 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
                    SELECT public.set_stock_entity('QT');
                    UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand - 27 WHERE raw_material_id='${RM}'`);   // 27 used, QT-tagged
     expect(await qoh(pg)).toBe(3);
-    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r;
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r as Record<string, unknown>;
     expect(r).toMatchObject({ success: false, error: 'insufficient_hub_quantity' });
     // with enough total stock the tagged guard is the one that refuses
     await pg.exec(`UPDATE hub_inventory SET quantity_on_hand = quantity_on_hand + 30 WHERE raw_material_id='${RM}'`);
