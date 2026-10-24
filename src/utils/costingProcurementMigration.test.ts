@@ -182,8 +182,13 @@ INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method, reference) V
   ('00000000-0000-0000-0000-0000000b1120',30,'2026-10-03','cheque','CHQ-9');
 `;
 
+// 084 refuses to run unless exactly 32 POs are untagged (G3). BASE has 2 live-style ones; pad to the live count before 084,
+// and drop the padding again right after, so every other test sees the same data as before.
+const PAD_UNTAGGED = `INSERT INTO purchase_orders (order_number, supplier_id, status) SELECT 'PO-PAD-' || g, '${SUP}', 'received' FROM generate_series(1, 30) g;`;
+const UNPAD = `DELETE FROM purchase_orders WHERE order_number LIKE 'PO-PAD-%';`;
+
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['LIVE_CANCEL', LIVE_CANCEL], ['084', MIG084], ['085', MIG085], ['088', MIG088], ['POS', POS]]) {
+  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['LIVE_CANCEL', LIVE_CANCEL], ['PAD', PAD_UNTAGGED], ['084', MIG084], ['UNPAD', UNPAD], ['085', MIG085], ['088', MIG088], ['POS', POS]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -1471,6 +1476,43 @@ describe('F6: migration versions follow the migration numbers (084 < 085 < 087 <
   it('every migration that has a rollback file is paired (084, 085, 087, 088)', () => {
     const rb = Object.keys(import.meta.glob('../../supabase/rollbacks/*.sql', { query: '?raw', import: 'default', eager: true }));
     for (const n of ['084', '085', '087', '088']) expect(rb.some((f) => f.endsWith(`/${n}_rollback.sql`))).toBe(true);
+  });
+});
+
+describe('G3: 084 only runs when exactly the 32 confirmed POs are untagged', () => {
+  const upTo084 = async (extraBefore: string) => {
+    const { PGlite } = await import('@electric-sql/pglite');
+    const pg = await PGlite.create();
+    await pg.exec(`SET TimeZone='UTC';`);
+    for (const sql of [BASE, MIG081, LIVE_CANCEL, extraBefore]) await pg.exec(sql);
+    return pg;
+  };
+  it('31 or 33 untagged POs abort 084 before any change; exactly 32 backfills them all to QT (and nothing else)', async () => {
+    for (const extra of [`INSERT INTO purchase_orders (order_number, supplier_id, status) SELECT 'X' || g, '${SUP}', 'received' FROM generate_series(1, 29) g;`,   // 2 + 29 = 31
+                         `INSERT INTO purchase_orders (order_number, supplier_id, status) SELECT 'X' || g, '${SUP}', 'received' FROM generate_series(1, 31) g;`]) { // 2 + 31 = 33
+      const pg = await upTo084(extra);
+      const e = await err(pg.exec(MIG084));
+      expect(e).toMatch(/084 aborted: (31|33) purchase orders have no entity, expected exactly 32/);
+      // nothing happened: no entity column, no new tables
+      expect(await count(pg, `select * from information_schema.columns where table_name='purchase_orders' and column_name='entity_code'`)).toBe(0);
+      expect(await count(pg, `select * from information_schema.tables where table_name in ('business_entities','delivery_location_entities')`)).toBe(0);
+      await pg.close();
+    }
+    const ok = await upTo084(PAD_UNTAGGED);
+    expect(await err(ok.exec(MIG084))).toBeNull();
+    expect(await rows(ok, `select entity_code, count(*)::int n from purchase_orders group by 1`)).toEqual([{ entity_code: 'QT', n: 32 }]);
+    // a second run (backfill already done: 0 untagged) is refused too, so the one-time backfill cannot be replayed on new POs
+    expect(await err(ok.exec(MIG084))).toMatch(/084 aborted: 0 purchase orders have no entity/);
+    await ok.close();
+  });
+  it('the backfill UPDATE itself is unchanged, and the Ezzad confirmation (24 Oct 2026, 32 POs, Quackteow) is in the migration comment', () => {
+    expect(MIG084).toMatch(/CONFIRMED by Ezzad, 24 Oct 2026: all 32 existing POs are Quackteow/);
+    expect(MIG084).toContain(`UPDATE public.purchase_orders po
+SET entity_code = dle.entity_code
+FROM public.delivery_location_entities dle
+WHERE po.entity_code IS NULL
+  AND ((po.delivery_outlet_id IS NULL AND dle.location_kind = 'hub')
+    OR (po.delivery_outlet_id IS NOT NULL AND dle.location_kind = 'outlet' AND dle.outlet_id = po.delivery_outlet_id));`);
   });
 });
 

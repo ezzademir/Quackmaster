@@ -22,6 +22,27 @@
     - Every view is security_invoker so the caller's RLS applies (no definer-view leak).
 */
 
+-- PRE-APPLY CHECK (round 3, G3). The PO entity backfill further down tags EVERY purchase order that has no entity at apply time,
+-- and Ezzad's confirmation (24 Oct 2026) covers exactly the 32 POs that exist today (all Quackteow). So the migration refuses
+-- to run unless there are exactly 32 untagged POs: a PO raised since (or a re-run after the backfill) aborts here, before any
+-- change, instead of being silently tagged QT. If the count moved on purpose, get a fresh confirmation and change the number.
+DO $$
+DECLARE
+  v_untagged bigint;
+  v_expected CONSTANT bigint := 32;
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'purchase_orders' AND column_name = 'entity_code') THEN
+    EXECUTE 'SELECT count(*) FROM public.purchase_orders WHERE entity_code IS NULL' INTO v_untagged;
+  ELSE
+    SELECT count(*) INTO v_untagged FROM public.purchase_orders;   -- column not added yet: every PO is untagged
+  END IF;
+  IF v_untagged <> v_expected THEN
+    RAISE EXCEPTION '084 aborted: % purchase orders have no entity, expected exactly % (the 32 POs Ezzad confirmed as Quackteow on 24 Oct 2026). Nothing was changed. Re-confirm the new POs with Ezzad before changing this number.', v_untagged, v_expected
+      USING ERRCODE = 'check_violation';
+  END IF;
+END $$;
+
 -- ---------------------------------------------------------------- entities
 -- Procurement tags (what a buyer is assigned to in 085). Extensible: add a row.
 CREATE TABLE IF NOT EXISTS public.procurement_tags (
