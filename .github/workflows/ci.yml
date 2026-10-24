@@ -1,0 +1,49 @@
+name: CI
+
+# PR checks only: install, typecheck, lint, test, build.
+# No deploy, no Pages, no secrets, no environments. Read-only token.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Dummy placeholders only so the Vite build can run. NOT real credentials;
+      # nothing in this workflow talks to Supabase (tests use in-process pglite).
+      VITE_SUPABASE_URL: https://placeholder.invalid
+      VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_placeholder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (frozen lockfile)
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.app.json
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
