@@ -705,6 +705,8 @@ DROP TRIGGER IF EXISTS supplier_payments_guard ON public.supplier_payments;
 CREATE TRIGGER supplier_payments_guard BEFORE INSERT OR UPDATE ON public.supplier_payments
   FOR EACH ROW EXECUTE FUNCTION public._supplier_payments_guard();
 
+-- (live data_ledger_operation_check allows only insert/update/delete/event; _append_data_ledger swallows a violation, so a wrong
+-- operation silently loses the audit row. Round 2, F2: 'create' -> 'insert'.)
 -- S6/S7: every payment insert / edit / DELETE leaves a data_ledger entry (full row before/after), written server-side
 -- by the definer so it works although data_ledger is closed to procurement and _append_data_ledger is not client-callable.
 -- A payment delete is therefore allowed for admin but can never be silent.
@@ -719,7 +721,7 @@ BEGIN
     PERFORM public._append_data_ledger('updated', 'supplier_payment', NEW.id::text, 'procurement', 'update', NEW.bill_id::text,
       to_jsonb(OLD), to_jsonb(NEW), NULL, NULL);
   ELSE
-    PERFORM public._append_data_ledger('created', 'supplier_payment', NEW.id::text, 'procurement', 'create', NEW.bill_id::text,
+    PERFORM public._append_data_ledger('created', 'supplier_payment', NEW.id::text, 'procurement', 'insert', NEW.bill_id::text,
       NULL, to_jsonb(NEW), NULL, NULL);
   END IF;
   RETURN NEW;

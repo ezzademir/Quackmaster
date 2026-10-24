@@ -74,13 +74,19 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Admins can view all" ON profiles FOR SELECT TO authenticated USING (public.is_profiles_admin());
 CREATE POLICY "Own" ON profiles FOR SELECT TO authenticated USING (auth.uid() = id);
 CREATE TABLE data_ledger (id serial, action text, entity_type text, entity_id text, module text, operation text,
-  reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb, metadata jsonb, user_id uuid);
+  reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb, metadata jsonb, user_id uuid,
+  -- live: data_ledger_operation_check (verified read-only, pg_get_constraintdef, round 2)
+  CONSTRAINT data_ledger_operation_check CHECK (operation = ANY (ARRAY['insert','update','delete','event'])));
 ALTER TABLE data_ledger ENABLE ROW LEVEL SECURITY;   -- live: RLS on, no client policies
--- like live: SECURITY DEFINER, not callable by clients (only definer functions can write the ledger)
+-- like live: SECURITY DEFINER, not callable by clients (only definer functions can write the ledger) and, like live,
+-- a failed insert (e.g. a CHECK violation) is swallowed into a WARNING, so a bad operation silently LOSES the audit row
 CREATE FUNCTION public._append_data_ledger(a text, et text, eid text, m text, op text, ref text,
-  b jsonb, af jsonb, d jsonb, md jsonb) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path=public AS
-  $$ INSERT INTO data_ledger(action,entity_type,entity_id,module,operation,reference_id,before_data,after_data,delta_data,metadata,user_id)
-     VALUES (a,et,eid,m,op,ref,b,af,d,md,auth.uid()) $$;
+  b jsonb, af jsonb, d jsonb, md jsonb) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS
+  $$ BEGIN
+       INSERT INTO data_ledger(action,entity_type,entity_id,module,operation,reference_id,before_data,after_data,delta_data,metadata,user_id)
+       VALUES (a,et,eid,m,op,ref,b,af,d,md,auth.uid());
+     EXCEPTION WHEN OTHERS THEN RAISE WARNING 'data_ledger insert failed: %', SQLERRM;
+     END $$;
 REVOKE ALL ON FUNCTION public._append_data_ledger(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb) FROM PUBLIC, anon, authenticated;
 CREATE TABLE suppliers (id uuid primary key default gen_random_uuid(), name text NOT NULL, payment_terms text,
   created_at timestamptz default now(), updated_at timestamptz default now());
@@ -912,6 +918,48 @@ describe('S6: bills view / bill amount / payment deletes', () => {
       { action: 'updated', user_id: ADMIN, b: 'TX1', a: 'TX1-fixed', amt: '40.00', reference_id: B_QT },
       { action: 'deleted', user_id: ADMIN, b: 'CHQ-9', a: null, amt: '30.00', reference_id: '00000000-0000-0000-0000-0000000b1120' },
     ]);
+    // F2: operations must satisfy the live data_ledger_operation_check (the fixture enforces it and swallows violations like live)
+    expect(await rows(pg, `select operation, count(*)::int n from data_ledger where entity_type='supplier_payment' group by 1 order by 1`))
+      .toEqual([{ operation: 'delete', n: 1 }, { operation: 'insert', n: 3 }, { operation: 'update', n: 1 }]);
+  });
+  it('F2: the fixture ledger enforces the live operation CHECK and swallows a violation (so a wrong operation loses the row)', async () => {
+    const pg = await db();
+    await pg.exec(`DELETE FROM data_ledger`);
+    expect(await err(pg.exec(`INSERT INTO data_ledger(operation) VALUES ('create')`))).toMatch(/data_ledger_operation_check/);
+    await pg.exec(`SELECT public._append_data_ledger('created','x','1','m','create',null,null,null,null,null)`);
+    expect(await c0(pg, `select count(*) n from data_ledger`)).toBe(0);
+    await pg.exec(`SELECT public._append_data_ledger('created','x','1','m','insert',null,null,null,null,null)`);
+    expect(await c0(pg, `select count(*) n from data_ledger`)).toBe(1);
+  });
+  it('F2 repo guard: every _append_data_ledger call in the migrations uses an operation the live CHECK allows', () => {
+    const files = import.meta.glob('../../supabase/migrations/*.sql', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+    const allowed = new Set(['insert', 'update', 'delete', 'event']);
+    const bad: string[] = [];
+    let calls = 0;
+    for (const [f, sql] of Object.entries(files)) {
+      const body = sql.replace(/--.*$/gm, '');
+      for (const m of body.matchAll(/_append_data_ledger\s*\(/g)) {
+        // split the argument list at top-level commas
+        let depth = 1, i = m.index! + m[0].length, cur = '', q = false;
+        const args: string[] = [];
+        for (; i < body.length && depth > 0; i++) {
+          const ch = body[i];
+          if (ch === "'") q = !q;
+          if (!q && ch === '(') depth++;
+          if (!q && ch === ')') { depth--; if (depth === 0) break; }
+          if (!q && depth === 1 && ch === ',') { args.push(cur.trim()); cur = ''; } else cur += ch;
+        }
+        args.push(cur.trim());
+        if (args.length !== 10 && args.length < 5) continue;       // the CREATE FUNCTION signature (typed parameter list), not a call
+        if (/^p_?\w*\s+text/i.test(args[0]) || /\btext\b/.test(args[4] ?? '')) continue;
+        calls++;
+        const op = args[4];
+        const lit = /^'([^']*)'$/.exec(op);
+        if (lit ? !allowed.has(lit[1]) : !/^lower\(TG_OP\)$/i.test(op)) bad.push(`${f.split('/').pop()}: operation ${op}`);
+      }
+    }
+    expect(calls).toBeGreaterThanOrEqual(8);
+    expect(bad).toEqual([]);
   });
 });
 
