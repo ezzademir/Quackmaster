@@ -73,11 +73,13 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Admins can view all" ON profiles FOR SELECT TO authenticated USING (public.is_profiles_admin());
 CREATE POLICY "Own" ON profiles FOR SELECT TO authenticated USING (auth.uid() = id);
 CREATE TABLE data_ledger (id serial, action text, entity_type text, entity_id text, module text, operation text,
-  reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb, metadata jsonb);
+  reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb, metadata jsonb, user_id uuid);
+-- like live: SECURITY DEFINER, not callable by clients (only definer functions can write the ledger)
 CREATE FUNCTION public._append_data_ledger(a text, et text, eid text, m text, op text, ref text,
-  b jsonb, af jsonb, d jsonb, md jsonb) RETURNS void LANGUAGE sql AS
-  $$ INSERT INTO data_ledger(action,entity_type,entity_id,module,operation,reference_id,before_data,after_data,delta_data,metadata)
-     VALUES (a,et,eid,m,op,ref,b,af,d,md) $$;
+  b jsonb, af jsonb, d jsonb, md jsonb) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path=public AS
+  $$ INSERT INTO data_ledger(action,entity_type,entity_id,module,operation,reference_id,before_data,after_data,delta_data,metadata,user_id)
+     VALUES (a,et,eid,m,op,ref,b,af,d,md,auth.uid()) $$;
+REVOKE ALL ON FUNCTION public._append_data_ledger(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb) FROM PUBLIC, anon, authenticated;
 CREATE TABLE suppliers (id uuid primary key default gen_random_uuid(), name text NOT NULL, payment_terms text,
   created_at timestamptz default now(), updated_at timestamptz default now());
 CREATE TABLE raw_materials (id uuid primary key, name text, unit_of_measure text, cost_price numeric(12,2),
@@ -869,6 +871,44 @@ describe('S5: rollbacks are exact', () => {
     await pg.exec(RB088); await pg.exec(RB085); await pg.exec(RB084);
     expect(await c0(pg, `select count(*) n from information_schema.columns where table_name='suppliers' and column_name='status'`)).toBe(0);
     expect(await rows(pg, `select status from suppliers_status_backup_084 where id='00000000-0000-0000-0000-0000000005e1'`)).toEqual([{ status: 'pending' }]);
+  });
+});
+
+describe('S6: bills view / bill amount / payment deletes', () => {
+  const B_QT = '00000000-0000-0000-0000-0000000b1110';
+  it('a procurement user\'s own bill never vanishes from the status view, even when the supplier is outside their RLS scope', async () => {
+    const pg = await db();
+    // a supplier the QT buyer did not create and has no QT supplier_items for
+    const OTHER = '00000000-0000-0000-0000-0000000005e2';
+    await pg.exec(`INSERT INTO suppliers (id, name, status) VALUES ('${OTHER}','Outside Scope Co','active')`);
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from suppliers where id='${OTHER}'`))).toBe(0);     // invisible to the buyer
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('QT','${OTHER}','OWN-1','2026-10-20',25)`)))).toBeNull();
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from supplier_bills where bill_number='OWN-1'`))).toBe(1);
+    const v = await as(pg, BUYER_QT, () => rows(pg, `select supplier_name, payment_status from v_supplier_bill_status where bill_number='OWN-1'`));
+    expect(v).toEqual([{ supplier_name: 'Outside Scope Co', payment_status: 'unpaid' }]);
+  });
+  it('bill amount cannot be edited below what has been paid (admin included); raising or equalling is fine', async () => {
+    const pg = await db();                                   // INV-1: amount 100, paid 40
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET amount_rm = 39.99 WHERE id='${B_QT}'`)))).toMatch(/bill_amount_below_paid/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET amount_rm = 40 WHERE id='${B_QT}'`)))).toBeNull();
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET amount_rm = 500 WHERE id='${B_QT}'`)))).toBeNull();
+    await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE supplier_bills SET amount_rm = 1 WHERE id='${B_QT}'`)));   // no UPDATE policy for procurement: 0 rows
+    expect(await rows(pg, `select amount_rm::float a from supplier_bills where id='${B_QT}'`)).toEqual([{ a: 500 }]);
+  });
+  it('payment delete / edit / insert always leave a ledger entry with the full row; procurement and staff cannot delete', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => err(pg.exec(`DELETE FROM supplier_payments`)));      // no DELETE policy: 0 rows
+    await as(pg, STAFF, () => pg.exec(`DELETE FROM supplier_payments`));
+    expect(await c0(pg, `select count(*) n from supplier_payments`)).toBe(3);
+    await as(pg, ADMIN, () => pg.exec(`UPDATE supplier_payments SET reference='TX1-fixed' WHERE reference='TX1'`));
+    await as(pg, ADMIN, () => pg.exec(`DELETE FROM supplier_payments WHERE reference='CHQ-9'`));
+    expect(await c0(pg, `select count(*) n from supplier_payments`)).toBe(2);
+    const l = await rows(pg, `select action, user_id, before_data->>'reference' b, after_data->>'reference' a, before_data->>'amount_rm' amt, reference_id from data_ledger where entity_type='supplier_payment' and action <> 'created' order by id`);
+    expect(await c0(pg, `select count(*) n from data_ledger where entity_type='supplier_payment' and action='created'`)).toBe(3);   // the 3 seeded inserts
+    expect(l).toEqual([
+      { action: 'updated', user_id: ADMIN, b: 'TX1', a: 'TX1-fixed', amt: '40.00', reference_id: B_QT },
+      { action: 'deleted', user_id: ADMIN, b: 'CHQ-9', a: null, amt: '30.00', reference_id: '00000000-0000-0000-0000-0000000b1120' },
+    ]);
   });
 });
 

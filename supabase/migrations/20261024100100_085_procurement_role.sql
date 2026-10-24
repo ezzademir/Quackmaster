@@ -529,6 +529,7 @@ CREATE POLICY supplier_bills_procurement_insert ON public.supplier_bills FOR INS
 
 CREATE OR REPLACE FUNCTION public._supplier_bills_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_paid numeric;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     NEW.entered_by := COALESCE(auth.uid(), NEW.entered_by);
@@ -536,6 +537,13 @@ BEGIN
   ELSE
     NEW.entered_by := OLD.entered_by;
     NEW.entered_at := OLD.entered_at;
+    -- S6: a bill's amount can never be edited below what has already been paid against it
+    IF NEW.amount_rm < OLD.amount_rm THEN
+      SELECT COALESCE(sum(amount_rm), 0) INTO v_paid FROM public.supplier_payments WHERE bill_id = NEW.id;
+      IF NEW.amount_rm < v_paid THEN
+        RAISE EXCEPTION 'bill_amount_below_paid' USING ERRCODE = 'P0001';
+      END IF;
+    END IF;
   END IF;
   -- a bill can only be booked against an approved (active) supplier; applies to every writer, including admin
   IF (TG_OP = 'INSERT' OR NEW.supplier_id IS DISTINCT FROM OLD.supplier_id)
@@ -600,6 +608,29 @@ DROP TRIGGER IF EXISTS supplier_payments_guard ON public.supplier_payments;
 CREATE TRIGGER supplier_payments_guard BEFORE INSERT OR UPDATE ON public.supplier_payments
   FOR EACH ROW EXECUTE FUNCTION public._supplier_payments_guard();
 
+-- S6/S7: every payment insert / edit / DELETE leaves a data_ledger entry (full row before/after), written server-side
+-- by the definer so it works although data_ledger is closed to procurement and _append_data_ledger is not client-callable.
+-- A payment delete is therefore allowed for admin but can never be silent.
+CREATE OR REPLACE FUNCTION public._supplier_payments_audit()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM public._append_data_ledger('deleted', 'supplier_payment', OLD.id::text, 'procurement', 'delete', OLD.bill_id::text,
+      to_jsonb(OLD), NULL, NULL, NULL);
+    RETURN OLD;
+  ELSIF TG_OP = 'UPDATE' THEN
+    PERFORM public._append_data_ledger('updated', 'supplier_payment', NEW.id::text, 'procurement', 'update', NEW.bill_id::text,
+      to_jsonb(OLD), to_jsonb(NEW), NULL, NULL);
+  ELSE
+    PERFORM public._append_data_ledger('created', 'supplier_payment', NEW.id::text, 'procurement', 'create', NEW.bill_id::text,
+      NULL, to_jsonb(NEW), NULL, NULL);
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS supplier_payments_audit ON public.supplier_payments;
+CREATE TRIGGER supplier_payments_audit AFTER INSERT OR UPDATE OR DELETE ON public.supplier_payments
+  FOR EACH ROW EXECUTE FUNCTION public._supplier_payments_audit();
+
 -- Paid total for a bill the caller can see. Owner-rights so procurement gets the status without reading
 -- supplier_payments; returns NULL for a bill outside the caller's scope.
 CREATE OR REPLACE FUNCTION public.supplier_bill_paid_rm(p_bill_id uuid)
@@ -612,6 +643,15 @@ $$;
 REVOKE ALL ON FUNCTION public.supplier_bill_paid_rm(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.supplier_bill_paid_rm(uuid) TO authenticated;
 
+-- S6: the supplier's display name, owner-rights. The view used to INNER JOIN suppliers under the caller's RLS, so a
+-- procurement user's own bill vanished whenever the supplier was outside their scope (not created by them, no item in their tag).
+CREATE OR REPLACE FUNCTION public._supplier_display_name(p_supplier_id uuid)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT s.name FROM public.suppliers s WHERE s.id = p_supplier_id;
+$$;
+REVOKE ALL ON FUNCTION public._supplier_display_name(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._supplier_display_name(uuid) TO authenticated;
+
 -- Payment status derived from payments: paid / overdue / part_paid / unpaid. Caller's RLS applies to bills.
 CREATE OR REPLACE VIEW public.v_supplier_bill_status WITH (security_invoker = true) AS
 SELECT x.id, x.entity_code, x.supplier_id, x.supplier_name, x.purchase_order_id, x.bill_number, x.bill_date, x.due_date,
@@ -621,10 +661,10 @@ SELECT x.id, x.entity_code, x.supplier_id, x.supplier_name, x.purchase_order_id,
             WHEN x.paid_rm > 0 THEN 'part_paid'
             ELSE 'unpaid' END AS payment_status,
        x.entered_by, x.entered_at
-FROM (SELECT b.*, s.name AS supplier_name, COALESCE(public.supplier_bill_paid_rm(b.id), 0) AS paid_rm
-      FROM public.supplier_bills b JOIN public.suppliers s ON s.id = b.supplier_id) x;
+FROM (SELECT b.*, public._supplier_display_name(b.supplier_id) AS supplier_name, COALESCE(public.supplier_bill_paid_rm(b.id), 0) AS paid_rm
+      FROM public.supplier_bills b) x;
 REVOKE ALL ON public.v_supplier_bill_status FROM PUBLIC, anon;
 GRANT SELECT ON public.v_supplier_bill_status TO authenticated;
 
 REVOKE ALL ON FUNCTION public._po_procurement_workflow(), public._po_item_procurement_guard(),
-  public._supplier_bills_guard(), public._supplier_payments_guard() FROM PUBLIC, anon, authenticated;
+  public._supplier_bills_guard(), public._supplier_payments_guard(), public._supplier_payments_audit() FROM PUBLIC, anon, authenticated;
