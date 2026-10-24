@@ -21,6 +21,7 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'hub_below_reserved',
   'insufficient_hub_quantity',
   'cannot_cancel_missing_hub_row',
+  'bills_on_po',
   'missing_raw_material',
   'raw_material_hub_row_missing',
   'insufficient_raw_material',
@@ -85,6 +86,10 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
       return 'This purchase order no longer exists.';
     case 'forbidden':
       return 'Only an admin can cancel a purchase order.';
+    case 'bills_on_po':
+      return 'Cannot cancel: this purchase order has a supplier bill. Handle the bill through accounting first (void or reverse it, payments through the payments record), then cancel.';
+    case 'already_cancelled':
+      return 'This purchase order is already cancelled.';
     default:
       return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
   }

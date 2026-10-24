@@ -1437,6 +1437,37 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     expect(await err(pg.exec(`SELECT 1 FROM pg_proc WHERE proname='_po_cancel_plan'`))).toBeNull();
     expect(await count(pg, `select * from pg_proc where proname='_po_cancel_plan'`)).toBe(0);
   });
+  it('G1 (Ezzad, "follow the accounting flow"): a PO with a bill is not cancelled while the bill exists; nothing is reversed, deleted or edited', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 4));
+    const BILL = '00000000-0000-0000-0000-0000000b9901';
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, purchase_order_id, bill_number, bill_date, amount_rm) VALUES ('${BILL}','QT','${SUP}','${PO_QT}','G1-1','2026-10-20',12)`));
+    const snap = async () => ({ mov: await mov(pg), qoh: await qoh(pg), po: await poState(pg), rec: await count(pg, 'select * from po_receipt_records'),
+      bills: await rows(pg, `select id, amount_rm::float a from supplier_bills order by id`), pays: await count(pg, 'select * from supplier_payments'),
+      ledger: await count(pg, `select * from data_ledger where entity_type='purchase_order' and action='cancelled'`) });
+    const before = await snap();
+    const r = (await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r as Record<string, unknown>;
+    expect(r).toMatchObject({ success: false, error: 'bills_on_po', bill_count: 1, bill_numbers: ['G1-1'] });
+    expect(String(r.message)).toMatch(/bill.*accounting/i);
+    expect(await snap()).toEqual(before);
+    // a part-paid bill: same refusal, payments untouched
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('${BILL}',5,'2026-10-21','cash')`));
+    const before2 = await snap();
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: false, error: 'bills_on_po' });
+    expect(await snap()).toEqual(before2);
+    expect(before2.pays).toBe(before.pays + 1);
+    // admin gate still comes first for everyone else; a bill on ANOTHER PO does not block this one
+    expect((await as(pg, STAFF, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ error: 'forbidden' });
+    await pg.exec(`DELETE FROM supplier_payments; DELETE FROM supplier_bills WHERE id='${BILL}'`);
+    await as(pg, BUYER_MH, () => pg.exec(`INSERT INTO supplier_bills (entity_code, supplier_id, purchase_order_id, bill_number, bill_date, amount_rm) VALUES ('MH','${SUP}','${PO_MH}','G1-MH','2026-10-20',3)`));
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true });
+    expect(await count(pg, `select * from supplier_bills where bill_number='G1-MH'`)).toBe(1);
+  });
+  it('G1: the repo has NO void / reverse route for a bill (no status or void column, no void function): the refusal is all that exists', async () => {
+    const pg = await db();
+    expect(await count(pg, `select * from information_schema.columns where table_name in ('supplier_bills','supplier_payments') and column_name ~* '(status|void|revers|cancel)'`)).toBe(0);
+    expect(await count(pg, `select * from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname ~* '(void|revers).*(bill|payment)|(bill|payment).*(void|revers)'`)).toBe(0);
+  });
   it('G2 (Ezzad): only an admin can cancel, in the database: staff, procurement (any tag) and anon are refused, even by direct RPC; nothing changes', async () => {
     const pg = await db();
     await as(pg, BUYER_QT, () => deliver(pg, 4));

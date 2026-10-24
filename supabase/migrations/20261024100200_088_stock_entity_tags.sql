@@ -348,6 +348,18 @@ BEGIN
   IF v_po.status = 'cancelled' THEN
     RETURN jsonb_build_object('success', false, 'error', 'already_cancelled');
   END IF;
+  -- BILL RULE (Ezzad, 24 Oct 2026: "follow the proper steps, accounting flow"). A PO with a bill cannot be cancelled while the bill
+  -- exists: no silent cancel that leaves a bill 'unpaid', and cancel never deletes or edits accounting records (bills, payments).
+  -- The repo has NO void / reverse route for a bill (supplier_bills has no status or voided column, no void function), so every
+  -- bill row counts as live. Until such a route is built (follow-up), the only way past this refusal is an admin changing the
+  -- accounting records themselves, deliberately and audited (payments are ledgered on delete), then cancelling.
+  IF EXISTS (SELECT 1 FROM public.supplier_bills b WHERE b.purchase_order_id = p_po_id) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'bills_on_po',
+      'bill_count', (SELECT count(*) FROM public.supplier_bills b WHERE b.purchase_order_id = p_po_id),
+      'bill_numbers', (SELECT jsonb_agg(b.bill_number ORDER BY b.bill_number) FROM public.supplier_bills b WHERE b.purchase_order_id = p_po_id),
+      'message', 'This purchase order has a supplier bill. Handle the bill through accounting first (void or reverse it, with any payments handled in the payments record), then cancel. Nothing was cancelled.');
+  END IF;
+
   SELECT COALESCE(
     jsonb_agg(
       jsonb_build_object(
@@ -366,6 +378,7 @@ BEGIN
   WHERE poi.purchase_order_id = p_po_id;
 
   -- records that make a hard DELETE impossible (RESTRICT foreign keys): such a PO is kept, as 'cancelled'
+  -- (bills cannot be present here: refused above; the term stays as a safety net)
   v_keep := EXISTS (SELECT 1 FROM public.po_receipt_records r WHERE r.purchase_order_id = p_po_id)
          OR EXISTS (SELECT 1 FROM public.supplier_bills b WHERE b.purchase_order_id = p_po_id)
          OR EXISTS (SELECT 1 FROM public.price_history ph JOIN public.purchase_order_items poi ON poi.id = ph.purchase_order_item_id

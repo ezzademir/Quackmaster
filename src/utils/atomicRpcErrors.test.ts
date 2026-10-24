@@ -29,8 +29,9 @@ describe('cancelPurchaseOrderErrorMessage', () => {
     expect(cancelPurchaseOrderErrorMessage('insufficient_hub_quantity')).toMatch(/hub no longer holds/i);
   });
 
-  it('explains the admin-only rule', () => {
+  it('explains the admin-only rule and the bill rule', () => {
     expect(cancelPurchaseOrderErrorMessage('forbidden')).toMatch(/only an admin/i);
+    expect(cancelPurchaseOrderErrorMessage('bills_on_po')).toMatch(/bill.*accounting/i);
   });
 
   it('includes unknown codes in the fallback', () => {
