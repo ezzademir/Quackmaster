@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, EmptyState, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
+import { buildDeliveryLines, receivingErrorMessage } from '../utils/receiving';
 
 interface PoItem {
   id: string;
@@ -47,13 +48,12 @@ export function Receiving() {
   }, [load]);
 
   async function submit(po: Po) {
-    const p_lines = po.purchase_order_items
-      .filter((i) => Number(lines[i.id]?.qty) > 0)
-      .map((i) => ({
-        purchase_order_item_id: i.id,
-        quantity_received: Number(lines[i.id].qty),
-        ...(lines[i.id].price !== '' && lines[i.id].price !== undefined ? { invoice_unit_price: Number(lines[i.id].price) } : {}),
-      }));
+    // the screen asks for what arrived in THIS delivery; the server wants the new cumulative total per line
+    const p_lines = buildDeliveryLines(po.purchase_order_items, lines);
+    if (p_lines.length === 0) {
+      setMsg('Enter the quantity that arrived on at least one line.');
+      return;
+    }
     setBusy(true);
     const { data, error } = await supabase.rpc('record_po_delivery', {
       p_po_id: po.id,
@@ -62,9 +62,10 @@ export function Receiving() {
       p_invoice_number: invNo || null,
     });
     setBusy(false);
-    const res = data as { success?: boolean; error?: string } | null;
+    const res = data as { success?: boolean; error?: string; message?: string; current_received?: number } | null;
     if (error || !res?.success) {
-      setMsg(error?.message ?? res?.error ?? 'Receipt failed');
+      setMsg(error?.message ?? receivingErrorMessage(res, 'Receipt failed'));
+      if (res?.error === 'stale_received_quantity') void load();
       return;
     }
     setMsg('Delivery recorded.');
@@ -77,7 +78,7 @@ export function Receiving() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Receiving" description="Record deliveries against ordered POs. A DO number or invoice number is required." />
+      <PageHeader title="Receiving" description="Record deliveries against ordered POs. Enter only what arrived in this delivery; a DO number or invoice number is required." />
       {msg && <div className="rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700">{msg}</div>}
       {pos.length === 0 ? (
         <EmptyState title="Nothing to receive" description="No ordered or part-received POs in your entities." />
@@ -91,11 +92,11 @@ export function Receiving() {
             {open === po.id && (
               <div className="mt-3 space-y-2">
                 {po.purchase_order_items.map((i) => (
-                  <div key={i.id} className="grid grid-cols-[1fr_6rem_7rem] items-center gap-2 text-sm">
+                  <div key={i.id} className="grid grid-cols-[1fr_8rem_7rem] items-center gap-2 text-sm">
                     <span>
                       {catalog[i.raw_material_id]?.name ?? 'Item'} ({i.quantity_received ?? 0}/{i.quantity_ordered} {catalog[i.raw_material_id]?.unit_of_measure ?? ''})
                     </span>
-                    <input aria-label="Quantity received" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Qty"
+                    <input aria-label="Quantity in this delivery" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Qty this delivery"
                       value={lines[i.id]?.qty ?? ''} onChange={(e) => setLines({ ...lines, [i.id]: { qty: e.target.value, price: lines[i.id]?.price ?? '' } })} />
                     <input aria-label="Invoice unit price" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Invoice RM"
                       value={lines[i.id]?.price ?? ''} onChange={(e) => setLines({ ...lines, [i.id]: { qty: lines[i.id]?.qty ?? '', price: e.target.value } })} />

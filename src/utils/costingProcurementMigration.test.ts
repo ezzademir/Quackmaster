@@ -547,6 +547,70 @@ describe('PR #92 review fixes: B1 pending supplier blocked on POs and bills (DB 
   });
 });
 
+describe('PR #92 review fixes: B2 received quantity is cumulative and can never go down via record_po_delivery', () => {
+  const recv = (pg: PGlite, qty: number | string, extra = '', po = PO_QT, line = L_QT) =>
+    rows(pg, `select record_po_delivery('${po}', '[{"purchase_order_item_id":"${line}","quantity_received":${qty},"quantity_uom":"kg"${extra}}]'::jsonb, 'DO-B2') r`);
+  const hub = async (pg: PGlite) => Number((await rows(pg, `select coalesce(sum(quantity_on_hand),0)::float q from hub_inventory where raw_material_id='${RM}'`))[0].q);
+  const lineQty = async (pg: PGlite) => Number((await rows(pg, `select quantity_received::float q from purchase_order_items where id='${L_QT}'`))[0].q);
+  const tickets = (pg: PGlite) => c0(pg, 'select count(*) n from po_receipt_tickets');
+
+  it('4 more on a line that already has 5 is sent as 9 and lands on 9; typing 4 as the total is refused and leaves stock alone', async () => {
+    const pg = await db();
+    expect((await as(pg, BUYER_QT, () => recv(pg, 5)))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(5);
+    // the old UI behaviour: typed "4" sent as the total -> would have cut hub stock by 1
+    expect((await as(pg, BUYER_QT, () => recv(pg, 4)))[0].r).toMatchObject({ success: false, error: 'cannot_reduce_received', current_received: 5, entered: 4 });
+    expect(await hub(pg)).toBe(5);
+    expect(await lineQty(pg)).toBe(5);
+    // the corrected UI sends existing + typed
+    expect((await as(pg, BUYER_QT, () => recv(pg, 9)))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(9);
+    expect(await lineQty(pg)).toBe(9);
+    expect(await tickets(pg)).toBe(0);
+  });
+
+  it('two successive part-deliveries accumulate; equal total is a harmless no-op', async () => {
+    const pg = await db();
+    expect((await as(pg, BUYER_QT, () => recv(pg, 3)))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, BUYER_QT, () => recv(pg, 7)))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(7);
+    expect((await as(pg, BUYER_QT, () => recv(pg, 7)))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(7);
+    expect((await rows(pg, `select status from purchase_orders where id='${PO_QT}'`))[0].status).toBe('partial');
+    expect((await as(pg, BUYER_QT, () => recv(pg, 6.9999)))[0].r).toMatchObject({ success: false, error: 'cannot_reduce_received' });
+    expect(await hub(pg)).toBe(7);
+    expect(await tickets(pg)).toBe(0);
+  });
+
+  it('refusal also holds for admin / staff through record_po_delivery (reductions go through adjust_po_receipt)', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => recv(pg, 5));
+    expect((await as(pg, ADMIN, () => recv(pg, 2)))[0].r).toMatchObject({ success: false, error: 'cannot_reduce_received' });
+    expect((await as(pg, STAFF, () => recv(pg, 2)))[0].r).toMatchObject({ success: false, error: 'cannot_reduce_received' });
+    expect(await hub(pg)).toBe(5);
+    expect((await as(pg, ADMIN, () => rows(pg, `select adjust_po_receipt('${L_QT}', 4, 'miscount') r`)))[0].r).toMatchObject({ success: true });
+    expect(await hub(pg)).toBe(4);
+  });
+
+  it('stale screens, duplicate lines and bad quantities are refused before anything posts', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => recv(pg, 5));
+    // screen showed 5 but another receipt took it to 8 meanwhile
+    await as(pg, ADMIN, () => recv(pg, 8));
+    expect((await as(pg, BUYER_QT, () => recv(pg, 9, ',"expected_previous_received":5')))[0].r)
+      .toMatchObject({ success: false, error: 'stale_received_quantity', current_received: 8 });
+    expect((await as(pg, BUYER_QT, () => recv(pg, 9, ',"expected_previous_received":8')))[0].r).toMatchObject({ success: true });
+    const dup = `[{"purchase_order_item_id":"${L_QT}","quantity_received":9.5},{"purchase_order_item_id":"${L_QT}","quantity_received":9.2}]`;
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '${dup}'::jsonb, 'DO') r`)))[0].r).toMatchObject({ success: false, error: 'duplicate_line' });
+    expect((await as(pg, BUYER_QT, () => recv(pg, -1)))[0].r).toMatchObject({ success: false, error: 'invalid_quantity_received' });
+    expect((await as(pg, BUYER_QT, () => rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}"}]'::jsonb, 'DO') r`)))[0].r)
+      .toMatchObject({ success: false, error: 'invalid_quantity_received' });
+    expect(await hub(pg)).toBe(9);
+    expect(await c0(pg, `select count(*) n from po_receipt_records`)).toBe(3); // only the three accepted deliveries are recorded
+    expect(await tickets(pg)).toBe(0);
+  });
+});
+
 describe('084 costing rules', () => {
   it('price_history is append-only, even for admin and the owner', async () => {
     const pg = await db();

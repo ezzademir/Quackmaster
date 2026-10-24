@@ -396,6 +396,7 @@ DECLARE
   v_res jsonb;
   v_line jsonb;
   v_item record;
+  v_cur numeric;
 BEGIN
   IF NOT (public.is_authenticated_active_staff() OR public.procurement_has_po(p_po_id)) THEN
     RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
@@ -413,6 +414,39 @@ BEGIN
                                WHERE poi.id = (l->>'purchase_order_item_id')::uuid AND poi.purchase_order_id = p_po_id)) THEN
     RETURN jsonb_build_object('success', false, 'error', 'line_not_on_po');
   END IF;
+  -- Received quantity is a CUMULATIVE total (081): this function may only raise it. A lower value would post a
+  -- negative delta against hub stock; reductions are an admin job (adjust_po_receipt). Serialise per PO first so
+  -- two concurrent deliveries cannot each pass the check against the same old total.
+  PERFORM 1 FROM public.purchase_orders WHERE id = p_po_id FOR UPDATE;
+  IF (SELECT count(*) <> count(DISTINCT l->>'purchase_order_item_id') FROM jsonb_array_elements(p_lines) l) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'duplicate_line',
+      'message', 'Each PO line may appear once per delivery.');
+  END IF;
+  PERFORM 1 FROM public.purchase_order_items poi
+    WHERE poi.id IN (SELECT (l->>'purchase_order_item_id')::uuid FROM jsonb_array_elements(p_lines) l)
+    ORDER BY poi.id FOR UPDATE;
+  FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines) LOOP
+    IF NULLIF(v_line->>'quantity_received', '') IS NULL OR (v_line->>'quantity_received')::numeric < 0 THEN
+      RETURN jsonb_build_object('success', false, 'error', 'invalid_quantity_received',
+        'purchase_order_item_id', v_line->>'purchase_order_item_id');
+    END IF;
+    SELECT COALESCE(poi.quantity_received, 0) INTO v_cur FROM public.purchase_order_items poi
+      WHERE poi.id = (v_line->>'purchase_order_item_id')::uuid;
+    -- optional optimistic check: the screen sends the total it showed; if someone else received since, refuse
+    -- instead of silently overwriting (e.g. +4 typed on a stale 5 would otherwise land on 9 when it is now 9)
+    IF NULLIF(v_line->>'expected_previous_received', '') IS NOT NULL
+       AND (v_line->>'expected_previous_received')::numeric <> v_cur THEN
+      RETURN jsonb_build_object('success', false, 'error', 'stale_received_quantity',
+        'purchase_order_item_id', v_line->>'purchase_order_item_id', 'current_received', v_cur,
+        'message', 'Another delivery was recorded on this line. Reload and enter this delivery again.');
+    END IF;
+    IF (v_line->>'quantity_received')::numeric < v_cur THEN
+      RETURN jsonb_build_object('success', false, 'error', 'cannot_reduce_received',
+        'purchase_order_item_id', v_line->>'purchase_order_item_id', 'current_received', v_cur,
+        'entered', (v_line->>'quantity_received')::numeric,
+        'message', 'Received quantity can only go up. Send the new cumulative total (already received + this delivery). A reduction needs an admin adjustment.');
+    END IF;
+  END LOOP;
   IF public.is_procurement_user() THEN
     INSERT INTO public.po_receipt_tickets (purchase_order_id, user_id, txid)
     VALUES (p_po_id, auth.uid(), txid_current()) ON CONFLICT DO NOTHING;
