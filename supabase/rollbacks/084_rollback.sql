@@ -13,6 +13,21 @@ DROP TRIGGER IF EXISTS price_history_no_update ON public.price_history;
 DROP TABLE IF EXISTS public.price_flag_reviews, public.price_history, public.supplier_items, public.ingredients;
 DROP FUNCTION IF EXISTS public._po_line_supplier_item_active(), public._supplier_items_price_log(), public._supplier_items_audit(),
   public._price_history_before_insert(), public._price_history_append_only();
+-- WARNING: rolling back 084 DROPS suppliers.status (pending / active / inactive approval state) plus approved_by, approved_at,
+-- created_by and delivery_day. After the rollback every supplier looks approved. The values are preserved in a backup table first;
+-- re-apply them by hand if you re-run 084.
+DO $$
+DECLARE n_open int;
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'suppliers' AND column_name = 'status') THEN
+    EXECUTE 'CREATE TABLE IF NOT EXISTS public.suppliers_status_backup_084 AS
+             SELECT id, status, delivery_day, created_by, approved_by, approved_at, now() AS backed_up_at FROM public.suppliers';
+    EXECUTE 'SELECT count(*) FROM public.suppliers WHERE status IS DISTINCT FROM ''active''' INTO n_open;
+    IF n_open > 0 THEN
+      RAISE WARNING '084 rollback: % supplier(s) are pending/inactive and will look approved after suppliers.status is dropped; see public.suppliers_status_backup_084', n_open;
+    END IF;
+  END IF;
+END $$;
 ALTER TABLE public.suppliers DROP CONSTRAINT IF EXISTS suppliers_status_check;
 ALTER TABLE public.suppliers DROP COLUMN IF EXISTS status, DROP COLUMN IF EXISTS delivery_day, DROP COLUMN IF EXISTS created_by,
   DROP COLUMN IF EXISTS approved_by, DROP COLUMN IF EXISTS approved_at;

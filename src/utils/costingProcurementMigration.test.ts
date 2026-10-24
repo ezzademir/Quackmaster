@@ -848,6 +848,30 @@ describe('S12: supplier bills / payments / status readable by admin + procuremen
   });
 });
 
+describe('S5: rollbacks are exact', () => {
+  it('085 rollback keeps 081 procurement_settings policies working and drops every 085 policy by exact name', async () => {
+    const pg = await db();
+    const before = await rows(pg, `select policyname, cmd, permissive from pg_policies where tablename='procurement_settings' and policyname in ('procurement_settings_read','procurement_settings_admin_write') order by 1`);
+    expect(before).toHaveLength(2);
+    expect(await c0(pg, `select count(*) n from pg_policies where policyname='procurement_settings_deny_procurement'`)).toBe(1);
+    await pg.exec(RB088);
+    await pg.exec(RB085);
+    const after = await rows(pg, `select policyname, cmd, permissive from pg_policies where tablename='procurement_settings' order by 1`);
+    expect(after).toEqual(before);                                       // 081's policies untouched, 085's deny gone
+    expect(await as(pg, STAFF, () => count(pg, 'select * from procurement_settings'))).toBe(1);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE procurement_settings SET over_receipt_tolerance_pct = 12`)))).toBeNull();
+    expect(await c0(pg, `select count(*) n from pg_policies where policyname like '%\_deny\_procurement'`)).toBe(0);
+    expect(await c0(pg, `select count(*) n from pg_policies where policyname in ('profiles_procurement_own_only','document_links_procurement_own','purchase_orders_procurement_scope','purchase_orders_procurement_rw','suppliers_procurement_scope')`)).toBe(0);
+  });
+  it('084 rollback preserves suppliers.status in a backup table and warns about pending suppliers', async () => {
+    const pg = await db();
+    await pg.exec(`INSERT INTO suppliers (id, name, status) VALUES ('00000000-0000-0000-0000-0000000005e1','Pending Co','pending')`);
+    await pg.exec(RB088); await pg.exec(RB085); await pg.exec(RB084);
+    expect(await c0(pg, `select count(*) n from information_schema.columns where table_name='suppliers' and column_name='status'`)).toBe(0);
+    expect(await rows(pg, `select status from suppliers_status_backup_084 where id='00000000-0000-0000-0000-0000000005e1'`)).toEqual([{ status: 'pending' }]);
+  });
+});
+
 describe('S4 (own change set 087): is_profiles_admin() row_security leak', () => {
   const BATCH = `BEGIN; SELECT public.is_profiles_admin() a; SELECT current_setting('row_security') rs; SELECT count(*) FROM suppliers; COMMIT;`;
   const runBatch = (pg: PGlite, uid: string) => as(pg, uid, async () => {
@@ -991,7 +1015,9 @@ describe('084 costing rules', () => {
     expect(await c0(pg, `select count(*) n from pg_tables where tablename in ('supplier_items','price_history','menu_items','supplier_bills','supplier_payments','user_entities','business_entities','procurement_tags','delivery_location_entities')`)).toBe(0);
     const [a] = await rows(pg, `select position('procurement' in pg_get_functiondef('admin_set_profile_role_and_outlet(uuid,text,uuid)'::regprocedure)) p`);
     expect(a.p).toBe(0);
-    expect(await c0(pg, `select count(*) n from pg_policies where policyname like '%procurement%'`)).toBe(0);
+    // only 081's two live procurement_settings policies remain (S5)
+    expect((await rows(pg, `select policyname from pg_policies where policyname like '%procurement%' order by 1`)).map((r) => r.policyname))
+      .toEqual(['procurement_settings_admin_write', 'procurement_settings_read']);
     const [d] = await rows(pg, `select position('_consume_po_receipt_ticket' in pg_get_functiondef('receive_po_shipment(uuid,jsonb)'::regprocedure)) p`);
     expect(d.p).toBe(0);
   });
