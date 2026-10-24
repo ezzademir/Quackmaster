@@ -1,3 +1,5 @@
+-- Rollback order: 088 -> 087 -> 085 -> 084 (newest first). This file also runs safely AFTER 085's rollback (it skips the 085-owned
+-- procurement_exposure_allow row when that table is already gone); the other direction is the supported one.
 -- Rollback 088 (stock entity tags). Drops the tag columns and the hub movement ledger created by 088
 -- (tags written to inventory_lots / outlet_stock_movements since 088 are lost). Old rows are untouched.
 -- cancel_purchase_order: restore the live definition captured read-only on 24 Oct 2026 (pre-088, untagged reversal, always deletes)
@@ -214,7 +216,12 @@ BEGIN
 END;
 $function$;
 DROP FUNCTION IF EXISTS public._po_cancel_plan(uuid);
-DELETE FROM public.procurement_exposure_allow WHERE kind = 'function' AND name = 'set_stock_tag_enforcement';
+-- safe in any order (G5): the allow table belongs to 085, so skip when 085 was already rolled back
+DO $$ BEGIN
+  IF to_regclass('public.procurement_exposure_allow') IS NOT NULL THEN
+    DELETE FROM public.procurement_exposure_allow WHERE kind = 'function' AND name = 'set_stock_tag_enforcement';
+  END IF;
+END $$;
 DROP VIEW IF EXISTS public.v_stock_movements, public.v_hub_stock_by_entity;
 DROP TRIGGER IF EXISTS outlet_movement_entity_guard ON public.outlet_stock_movements;
 DROP TRIGGER IF EXISTS inventory_lot_entity_guard ON public.inventory_lots;
@@ -229,3 +236,5 @@ DROP TABLE IF EXISTS public.hub_stock_movements, public.stock_tag_enforcement;
 DROP INDEX IF EXISTS public.idx_inventory_lots_entity, public.idx_osm_entity;
 ALTER TABLE public.inventory_lots DROP COLUMN IF EXISTS entity_code;
 ALTER TABLE public.outlet_stock_movements DROP COLUMN IF EXISTS entity_code;
+-- cancel_purchase_order keeps the explicit grants 088 stated (no PUBLIC / anon, authenticated only). The live function also let anon
+-- execute it by default; that is deliberately not restored (its body refuses a caller without auth.uid()).

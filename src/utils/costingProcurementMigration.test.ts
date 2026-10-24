@@ -1432,6 +1432,29 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     expect(await err(pg.exec(`SELECT 1 FROM pg_proc WHERE proname='_po_cancel_plan'`))).toBeNull();
     expect(await count(pg, `select * from pg_proc where proname='_po_cancel_plan'`)).toBe(0);
   });
+  it('G6: cancel_purchase_order grants are stated by 088: authenticated only, no PUBLIC, no anon (and they survive the rollback)', async () => {
+    const pg = await db();
+    const grants = async () => ({
+      authenticated: (await rows(pg, `select has_function_privilege('authenticated','public.cancel_purchase_order(uuid)','EXECUTE') b`))[0].b,
+      anon: (await rows(pg, `select has_function_privilege('anon','public.cancel_purchase_order(uuid)','EXECUTE') b`))[0].b,
+      public: await count(pg, `select * from pg_proc p, aclexplode(p.proacl) a where p.proname='cancel_purchase_order' and a.grantee = 0`),
+    });
+    expect(await grants()).toEqual({ authenticated: true, anon: false, public: 0 });
+    await pg.exec(RB088);
+    expect(await grants()).toEqual({ authenticated: true, anon: false, public: 0 });
+  });
+  it('G5: the 088 rollback also runs after 085 was rolled back first (no error), and in the documented order', async () => {
+    const forward = await db();
+    await forward.exec(RB088); await forward.exec(RB085);   // documented order: newest first
+    const reverse = await db();
+    await reverse.exec(RB085);
+    expect(await err(reverse.exec(RB088))).toBeNull();      // out of order must not fail on the 085-owned allow table
+    expect(await count(reverse, `select * from pg_proc where proname in ('_po_cancel_plan','_hub_inventory_movement')`)).toBe(0);
+    for (const f of ['085_rollback', '088_rollback']) {
+      const sql = f === '085_rollback' ? RB085 : RB088;
+      expect(sql).toMatch(/Rollback order: 088 -> 087 -> 085 -> 084/);
+    }
+  });
 });
 
 describe('F6: migration versions follow the migration numbers (084 < 085 < 087 < 088); live-applied 081-083 / 086 keep their live versions', () => {

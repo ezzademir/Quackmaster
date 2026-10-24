@@ -1,4 +1,7 @@
 /*
+  Depends on 085 (writes procurement_exposure_allow). Rollback order, newest first: 088 -> 087 -> 085 -> 084. 088_rollback.sql
+  also tolerates running after 085's rollback (it skips the 085-owned allow row when the table is gone).
+
   088: every NEW stock posting carries a business-entity tag (Quackteow 'QT' / Merdeka House 'MH').
 
   Why: MH stock posts into the single shared hub. Read-only inspection of live (24 Oct 2026) shows hub_inventory holds
@@ -553,3 +556,7 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'reversal_lines', v_lines, 'po_kept_as_cancelled', v_keep);
 END;
 $function$;
+-- Grants stated explicitly (round 3, G6) instead of relying on what 045/063 left in place: no PUBLIC, no anon (the body would refuse
+-- an anonymous caller anyway: auth.uid() is NULL), signed-in clients only. CREATE OR REPLACE keeps the grants of the live function.
+REVOKE ALL ON FUNCTION public.cancel_purchase_order(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.cancel_purchase_order(uuid) TO authenticated;
