@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { pgliteTemplate } from '../test/pgliteTemplate';
@@ -12,6 +11,7 @@ import { receivingUom } from './procurementPayloads';
 import { buildDeliveryLines } from './receiving';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB087 from '../../supabase/rollbacks/087_rollback.sql?raw';
+import RB090 from '../../supabase/rollbacks/090_rollback.sql?raw';
 import RB084 from '../../supabase/rollbacks/084_rollback.sql?raw';
 import RB085 from '../../supabase/rollbacks/085_rollback.sql?raw';
 import SEED from '../../supabase/seeds/costing_seed_20261023.sql?raw';
@@ -1531,7 +1531,7 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
       expect(sql.split('\n')[0], n).toMatch(/^-- Rollback order: 090 -> 088 -> 087 -> 085 -> 084/);
     }
     expect(RB084.split('\n')[0]).toMatch(/Apply order: 084, 085, 087, 088, 090, then 089/);
-    expect(readFileSync(new URL('../../supabase/rollbacks/090_rollback.sql', import.meta.url), 'utf8').split('\n')[0]).toMatch(/089 -> 090 -> 088 -> 087 -> 085 -> 084/);
+    expect(RB090.split('\n')[0]).toMatch(/089 -> 090 -> 088 -> 087 -> 085 -> 084/);
   });
 });
 
