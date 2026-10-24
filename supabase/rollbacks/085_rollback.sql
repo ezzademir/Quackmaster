@@ -31,6 +31,7 @@ END $$;
 DROP FUNCTION IF EXISTS public._po_procurement_workflow();
 DROP FUNCTION IF EXISTS public._po_item_procurement_guard();
 DROP FUNCTION IF EXISTS public._supplier_bills_guard();
+DROP FUNCTION IF EXISTS public._supplier_is_active(uuid);
 ALTER TABLE public.purchase_orders DROP COLUMN IF EXISTS created_by, DROP COLUMN IF EXISTS submitted_by,
   DROP COLUMN IF EXISTS submitted_at, DROP COLUMN IF EXISTS approved_by, DROP COLUMN IF EXISTS approved_at;
 ALTER TABLE public.purchase_order_items DROP COLUMN IF EXISTS entered_by, DROP COLUMN IF EXISTS last_edited_by;

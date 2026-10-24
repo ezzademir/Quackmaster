@@ -178,6 +178,16 @@ CREATE POLICY purchase_order_items_procurement_rw ON public.purchase_order_items
 -- close_po_short, adjust_po_receipt) runs as the function owner. The procurement draft-only rules apply to
 -- direct writes; RPC writes are governed by the explicit checks inside each RPC (tag scope, DO / invoice,
 -- tolerance + admin reason, admin-only close / adjust). Nothing a client can set changes current_user.
+-- A supplier may be used on a PO / bill only when suppliers.status = 'active' (084 enum: active / inactive /
+-- pending). SECURITY DEFINER so the answer does not depend on the caller's RLS view of suppliers (a procurement
+-- user cannot see suppliers outside its tags; an unseen row must not read as "usable"). A missing row is not usable.
+CREATE OR REPLACE FUNCTION public._supplier_is_active(p_supplier_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT COALESCE((SELECT s.status = 'active' FROM public.suppliers s WHERE s.id = p_supplier_id), false);
+$$;
+REVOKE ALL ON FUNCTION public._supplier_is_active(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._supplier_is_active(uuid) TO authenticated;   -- the invoker-rights PO trigger calls it
+
 CREATE OR REPLACE FUNCTION public._po_procurement_workflow()
 RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
 DECLARE
@@ -189,6 +199,12 @@ BEGIN
     IF v_proc AND NEW.status IS DISTINCT FROM 'draft' THEN
       RAISE EXCEPTION 'procurement_po_must_start_draft' USING ERRCODE = 'P0001';
     END IF;
+    -- pending / inactive suppliers cannot be used on a live PO, whoever writes it and whether or not any line
+    -- carries a supplier_item_id (the line-level gate in 084 cannot see ad-hoc lines)
+    IF NEW.supplier_id IS NOT NULL AND NEW.status IN ('draft', 'pending_approval', 'ordered')
+       AND NOT public._supplier_is_active(NEW.supplier_id) THEN
+      RAISE EXCEPTION 'supplier_not_approved' USING ERRCODE = 'P0001';
+    END IF;
     RETURN NEW;
   END IF;
   IF TG_OP = 'DELETE' THEN
@@ -198,6 +214,14 @@ BEGIN
     RETURN OLD;
   END IF;
   NEW.created_by := OLD.created_by;
+  -- supplier must be active when a live PO changes supplier, is submitted, or is approved. Not checked on
+  -- receipt / close-short / adjust status moves, so a supplier deactivated later never strands goods in transit.
+  IF NEW.supplier_id IS NOT NULL
+     AND ((NEW.supplier_id IS DISTINCT FROM OLD.supplier_id AND NEW.status IN ('draft', 'pending_approval', 'ordered'))
+          OR (NEW.status IS DISTINCT FROM OLD.status AND NEW.status IN ('pending_approval', 'ordered')))
+     AND NOT public._supplier_is_active(NEW.supplier_id) THEN
+    RAISE EXCEPTION 'supplier_not_approved' USING ERRCODE = 'P0001';
+  END IF;
   IF NEW.status IS DISTINCT FROM OLD.status THEN
     IF OLD.status = 'pending_approval' AND NEW.status = 'ordered' THEN
       IF NOT v_admin THEN
@@ -456,6 +480,11 @@ BEGIN
   ELSE
     NEW.entered_by := OLD.entered_by;
     NEW.entered_at := OLD.entered_at;
+  END IF;
+  -- a bill can only be booked against an approved (active) supplier; applies to every writer, including admin
+  IF (TG_OP = 'INSERT' OR NEW.supplier_id IS DISTINCT FROM OLD.supplier_id)
+     AND NOT public._supplier_is_active(NEW.supplier_id) THEN
+    RAISE EXCEPTION 'supplier_not_approved' USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
 END $$;

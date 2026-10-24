@@ -446,6 +446,107 @@ describe('084/085 procurement role RLS', () => {
   });
 });
 
+describe('PR #92 review fixes: B1 pending supplier blocked on POs and bills (DB level)', () => {
+  const PEND = '00000000-0000-0000-0000-0000000000d2';
+  const PO_X = '00000000-0000-0000-0000-00000000f0a1';
+  const mkPendingSupplier = (pg: PGlite) => pg.exec(`INSERT INTO suppliers (id, name, status) VALUES ('${PEND}', 'Pending Co', 'pending')`);
+  const poSql = (supplier: string, status = 'draft') =>
+    `INSERT INTO purchase_orders (id, order_number, supplier_id, status, entity_code) VALUES ('${PO_X}','PX','${supplier}','${status}','QT')`;
+
+  it('procurement cannot create a PO against a pending (or inactive) supplier, but can against an active one', async () => {
+    const pg = await db();
+    await mkPendingSupplier(pg);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(poSql(PEND))))).toMatch(/supplier_not_approved/);
+    await pg.exec(`UPDATE suppliers SET status='inactive' WHERE id='${PEND}'`);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(poSql(PEND))))).toMatch(/supplier_not_approved/);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(poSql(SUP))))).toBeNull();
+    expect(await c0(pg, `select count(*) n from purchase_orders where id='${PO_X}'`)).toBe(1);
+  });
+
+  it('a pending supplier the buyer created themselves (visible to them) is also refused', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO suppliers (id, name, status) VALUES ('${PEND}', 'Mine', 'pending')`));
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(poSql(PEND))))).toMatch(/supplier_not_approved/);
+  });
+
+  it('admin-created pending supplier outside the buyer tags (invisible to RLS) is refused, not treated as usable', async () => {
+    const pg = await db();
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO suppliers (id, name, status) VALUES ('${PEND}', 'Hidden', 'pending')`));
+    expect(await as(pg, BUYER_QT, () => count(pg, `select * from suppliers where id='${PEND}'`))).toBe(0);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(poSql(PEND))))).toMatch(/supplier_not_approved/);
+  });
+
+  it('switching a draft PO to a pending supplier is refused', async () => {
+    const pg = await db();
+    await mkPendingSupplier(pg);
+    await as(pg, BUYER_QT, () => pg.exec(poSql(SUP)));
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET supplier_id='${PEND}' WHERE id='${PO_X}'`)))).toMatch(/supplier_not_approved/);
+    expect((await rows(pg, `select supplier_id from purchase_orders where id='${PO_X}'`))[0].supplier_id).toBe(SUP);
+    // editing other fields while the supplier is untouched still works
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET notes='ok' WHERE id='${PO_X}'`)))).toBeNull();
+  });
+
+  it('submit (draft -> pending_approval) and approve (-> ordered) are refused once the supplier is not active; lines without supplier_item_id do not help', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => pg.exec(poSql(SUP)));
+    // ad-hoc line: no supplier_item_id, so 084's line gate never fires
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO purchase_order_items (purchase_order_id, raw_material_id, quantity_ordered, unit_price) VALUES ('${PO_X}','${RM}',2,3)`));
+    expect(await c0(pg, `select count(*) n from purchase_order_items where purchase_order_id='${PO_X}' and supplier_item_id is null`)).toBe(1);
+    // supplier is demoted to pending after the draft was written
+    await pg.exec(`UPDATE suppliers SET status='pending' WHERE id='${SUP}'`);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE id='${PO_X}'`)))).toMatch(/supplier_not_approved/);
+    // the rule is on the row, not the role: admin and the table owner are refused too
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE id='${PO_X}'`)))).toMatch(/supplier_not_approved/);
+    expect(await err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE id='${PO_X}'`))).toMatch(/supplier_not_approved/);
+    expect((await rows(pg, `select status from purchase_orders where id='${PO_X}'`))[0].status).toBe('draft');
+    // approving the supplier unblocks the same submit
+    await pg.exec(`UPDATE suppliers SET status='active' WHERE id='${SUP}'`);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE id='${PO_X}'`)))).toBeNull();
+  });
+
+  it('approval of a PO whose supplier is not active is refused for admin; works once the supplier is active', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => pg.exec(poSql(SUP)));
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE id='${PO_X}'`)))).toBeNull();
+    await pg.exec(`UPDATE suppliers SET status='pending' WHERE id='${SUP}'`);
+    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE id='${PO_X}'`)))).toMatch(/supplier_not_approved/);
+    expect((await rows(pg, `select status from purchase_orders where id='${PO_X}'`))[0].status).toBe('pending_approval');
+    await as(pg, ADMIN2, () => pg.exec(`UPDATE suppliers SET status='active' WHERE id='${SUP}'`));
+    expect(await as(pg, ADMIN2, () => err(pg.exec(`UPDATE purchase_orders SET status='ordered' WHERE id='${PO_X}'`)))).toBeNull();
+    expect((await rows(pg, `select status from purchase_orders where id='${PO_X}'`))[0].status).toBe('ordered');
+  });
+
+  it('submit of a draft with a pending supplier and no lines is refused (buyer submit path, lines irrelevant)', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => pg.exec(poSql(SUP)));
+    await pg.exec(`UPDATE suppliers SET status='inactive' WHERE id='${SUP}'`);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`UPDATE purchase_orders SET status='pending_approval' WHERE id='${PO_X}'`)))).toMatch(/supplier_not_approved/);
+  });
+
+  it('receiving on an existing ordered PO still works after its supplier is deactivated (goods in transit are not stranded)', async () => {
+    const pg = await db();
+    await pg.exec(`UPDATE suppliers SET status='inactive' WHERE id='${SUP}'`);
+    const r = await as(pg, BUYER_QT, () =>
+      rows(pg, `select record_po_delivery('${PO_QT}', '[{"purchase_order_item_id":"${L_QT}","quantity_received":2,"quantity_uom":"kg"}]'::jsonb, 'DO-1') r`));
+    expect(r[0].r).toMatchObject({ success: true });
+  });
+
+  it('bills: refused against a pending supplier (buyer and admin), allowed for active; re-pointing a bill is checked too', async () => {
+    const pg = await db();
+    await mkPendingSupplier(pg);
+    const bill = (sup: string, no: string) =>
+      `INSERT INTO supplier_bills (entity_code, supplier_id, bill_number, bill_date, amount_rm) VALUES ('QT','${sup}','${no}','2026-10-20',10)`;
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(bill(PEND, 'P-1'))))).toMatch(/supplier_not_approved/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(bill(PEND, 'P-2'))))).toMatch(/supplier_not_approved/);
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(bill(SUP, 'A-1'))))).toBeNull();
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET supplier_id='${PEND}' WHERE bill_number='A-1'`)))).toMatch(/supplier_not_approved/);
+    // editing an existing bill whose supplier was later deactivated is not blocked (only new / re-pointed bills are)
+    await pg.exec(`UPDATE suppliers SET status='inactive' WHERE id='${SUP}'`);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET notes='n' WHERE bill_number='A-1'`)))).toBeNull();
+    expect(await c0(pg, `select count(*) n from supplier_bills where bill_number in ('P-1','P-2')`)).toBe(0);
+  });
+});
+
 describe('084 costing rules', () => {
   it('price_history is append-only, even for admin and the owner', async () => {
     const pg = await db();
