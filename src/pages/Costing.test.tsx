@@ -115,7 +115,7 @@ describe('Costing', () => {
     render(<Costing />);
     expect(await screen.findByRole('button', { name: 'Nasi Ayam' })).toBeTruthy();
     expect(screen.getAllByText('RM 0.7249').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('20.00%').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/20\.00%/).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Laksa' })).toBeTruthy();
     expect(screen.getAllByText('RM 1.5000 partial').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Incomplete').length).toBeGreaterThan(0);

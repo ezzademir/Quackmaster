@@ -201,9 +201,9 @@ export function AuditDashboard() {
         </div>
       ) : (
         <>
-          <div className="space-y-2 md:hidden">
+          <div className="ios-group">
             {loading && rows.length === 0 ? (
-              <p className="px-1 py-6 text-center text-sm text-stone-400">Loading audit data…</p>
+              <p className="px-4 py-6 text-center text-sm text-stone-400">Loading audit data…</p>
             ) : (
               rows.map((row) => (
                 <ListRow
@@ -211,83 +211,30 @@ export function AuditDashboard() {
                   title={row.outlet.name}
                   meta={`${row.lastCountDate ?? '—'} · ${row.countStatus}`}
                   body={
-                    <div className="space-y-1 text-xs tabular-nums text-stone-600">
-                      <p>On-hand {row.liveOnHand.toLocaleString()}</p>
-                      <p>Transit {row.inTransit.toLocaleString()}</p>
-                      <p className={Math.abs(row.unexplainedVariance) > 0.001 ? 'font-semibold text-amber-700' : ''}>
-                        Unexplained {row.loading ? '…' : row.unexplainedVariance.toLocaleString()}
-                      </p>
+                    <div className="space-y-2 text-[13px] text-stone-600">
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 tabular-nums">
+                        <span>On-hand {row.liveOnHand.toLocaleString()}</span>
+                        <span>Count variance {row.lastCountVariance.toLocaleString()}</span>
+                        <span>Transit {row.inTransit.toLocaleString()}</span>
+                        <span className={Math.abs(row.unexplainedVariance) > 0.001 ? 'font-semibold text-amber-700' : ''}>
+                          Unexplained {row.loading ? '…' : row.unexplainedVariance.toLocaleString()}
+                        </span>
+                      </div>
+                      <StatusBadge status={row.countStatus} />
                       {row.error ? <p className="text-red-600">{row.error}</p> : null}
-                    </div>
-                  }
-                  aside={
-                    <div className="flex flex-col items-end gap-1 text-xs">
-                      <Link to={`/reconciliation?outlet=${row.outlet.id}`} className="font-medium text-teal-600 hover:underline">
-                        Reconcile
-                      </Link>
-                      <Link to={`/stock-take?outlet=${row.outlet.id}`} className="font-medium text-teal-600 hover:underline">
-                        Stock take
-                      </Link>
+                      <div className="flex gap-4">
+                        <Link to={`/reconciliation?outlet=${row.outlet.id}`} className="font-medium text-brand-800">
+                          Reconcile
+                        </Link>
+                        <Link to={`/stock-take?outlet=${row.outlet.id}`} className="font-medium text-brand-800">
+                          Stock take
+                        </Link>
+                      </div>
                     </div>
                   }
                 />
               ))
             )}
-          </div>
-
-          <div className="panel hidden overflow-x-auto md:block">
-            <table className="data-table min-w-[800px]">
-              <thead>
-                <tr>
-                  <th>Outlet</th>
-                  <th className="text-right">Live on-hand</th>
-                  <th>Last count</th>
-                  <th className="text-right">Count variance</th>
-                  <th className="text-right">In transit</th>
-                  <th className="text-right">Unexplained (30d)</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-stone-400">Loading audit data…</td>
-                  </tr>
-                ) : (
-                  rows.map((row) => (
-                    <tr key={row.outlet.id}>
-                      <td className="font-medium">{row.outlet.name}</td>
-                      <td className="text-right tabular-nums">{row.liveOnHand.toLocaleString()}</td>
-                      <td className="text-stone-600">{row.lastCountDate ?? '—'}</td>
-                      <td className="text-right tabular-nums">{row.lastCountVariance.toLocaleString()}</td>
-                      <td className="text-right tabular-nums">{row.inTransit.toLocaleString()}</td>
-                      <td className={`text-right tabular-nums font-semibold ${Math.abs(row.unexplainedVariance) > 0.001 ? 'text-amber-700' : ''}`}>
-                        {row.loading ? '…' : row.unexplainedVariance.toLocaleString()}
-                      </td>
-                      <td><StatusBadge status={row.countStatus} /></td>
-                      <td>
-                        <div className="flex flex-wrap gap-x-3 gap-y-1">
-                          <Link
-                            to={`/reconciliation?outlet=${row.outlet.id}`}
-                            className="text-teal-600 hover:underline"
-                          >
-                            Reconcile
-                          </Link>
-                          <Link
-                            to={`/stock-take?outlet=${row.outlet.id}`}
-                            className="text-teal-600 hover:underline"
-                          >
-                            Stock take
-                          </Link>
-                        </div>
-                        {row.error && <span className="mt-1 block text-xs text-red-600">{row.error}</span>}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
           </div>
         </>
       )}

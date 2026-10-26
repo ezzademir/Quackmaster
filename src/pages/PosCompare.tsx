@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Archive, ChevronRight, CircleDollarSign, HelpCircle, Package, Scale, Truck } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, EmptyState, PageHeader, StatCard } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import {
   formatDateForInput,
@@ -893,6 +893,23 @@ export function PosCompare() {
   );
 }
 
+function PeriodFigures({ row, showSplit }: { row: StorehubReportRow; showSplit: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-stone-600">
+      <span className="tabular-nums">POS {fmtQty(row.posQty)}</span>
+      <span className="tabular-nums">{fmtRm(row.posRm)}</span>
+      {showSplit ? (
+        <>
+          <span className="tabular-nums">StoreHub {fmtQty(row.dashStorehubQty)}</span>
+          <span className="tabular-nums">Manual {fmtQty(row.dashManualQty)}</span>
+        </>
+      ) : null}
+      <span className="tabular-nums">Sold {fmtQty(row.dashQty)}</span>
+      <StatusChip status={row.status} />
+    </div>
+  );
+}
+
 function PeriodTable({
   rows,
   canDrill,
@@ -905,140 +922,62 @@ function PeriodTable({
   onDrill: (row: StorehubReportRow) => void;
 }) {
   return (
-    <table className={`data-table data-table-sticky-col ${showSplit ? 'min-w-[48rem]' : 'min-w-[36rem]'}`}>
-      <thead>
-        <tr>
-          <th>
-            Row
-            {canDrill ? (
-              <span className="ml-2 font-normal text-stone-400">· click bucket for days</span>
-            ) : null}
-          </th>
-          <th className="text-right">POS sold</th>
-          <th className="text-right">POS RM</th>
-          {showSplit ? (
-            <>
-              <th className="text-right">Outlet sold (StoreHub)</th>
-              <th className="text-right">Outlet sold (manual)</th>
-              <th className="text-right">Outlet sold (all)</th>
-            </>
-          ) : (
-            <th className="text-right">Outlet sold (all)</th>
-          )}
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-stone-100">
-        {rows.map((row) => (
-          <tr
-            key={row.key}
-            className={
-              row.status === 'qty_mismatch' || row.status === 'missing_in_dashboard'
-                ? 'bg-amber-50/60'
-                : 'hover:bg-stone-50'
-            }
-          >
-            <td>
-              {canDrill ? (
-                <button
-                  type="button"
-                  onClick={() => onDrill(row)}
-                  className="inline-flex items-center gap-1 text-left font-medium text-sky-900 underline-offset-2 hover:underline"
-                  title="Show daily rows for this bucket"
-                >
-                  {row.label}
-                  <ChevronRight size={14} className="shrink-0 text-sky-700" />
-                </button>
-              ) : (
-                row.label
-              )}
-            </td>
-            <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
-            <td className="text-right tabular-nums">{fmtRm(row.posRm)}</td>
-            {showSplit ? (
-              <>
-                <td className="text-right tabular-nums">{fmtQty(row.dashStorehubQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.dashManualQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-              </>
-            ) : (
-              <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-            )}
-            <td>
-              <StatusChip status={row.status} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="ios-group">
+      {rows.map((row) => (
+        <ListRow
+          key={row.key}
+          title={
+            <span className="inline-flex items-center gap-1">
+              {row.label}
+              {canDrill ? <ChevronRight size={14} className="shrink-0 text-brand-800" /> : null}
+            </span>
+          }
+          onClick={canDrill ? () => onDrill(row) : undefined}
+          body={<PeriodFigures row={row} showSplit={showSplit} />}
+        />
+      ))}
+    </div>
   );
 }
 
-function TallyQtyCells({
+function TallyFigures({
   row,
   showSplit,
-  muted,
 }: {
   row: Pick<
     StorehubReportRow,
-    'posQty' | 'dashQty' | 'dashStorehubQty' | 'dashManualQty' | 'suppliedQty' | 'leftoverQty' | 'posVsSold'
+    'posQty' | 'dashQty' | 'dashStorehubQty' | 'dashManualQty' | 'suppliedQty' | 'leftoverQty' | 'posVsSold' | 'status'
   >;
   showSplit: boolean;
-  muted?: boolean;
 }) {
-  const numClass = muted ? 'text-right text-xs tabular-nums' : 'text-right tabular-nums';
   return (
-    <>
-      <td className={numClass}>{fmtQty(row.posQty)}</td>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-stone-600">
+      <span className="tabular-nums">POS {fmtQty(row.posQty)}</span>
       {showSplit ? (
         <>
-          <td className={numClass}>{fmtQty(row.dashStorehubQty)}</td>
-          <td className={numClass}>{fmtQty(row.dashManualQty)}</td>
-          <td className={numClass}>{fmtQty(row.dashQty)}</td>
+          <span className="tabular-nums">StoreHub {fmtQty(row.dashStorehubQty)}</span>
+          <span className="tabular-nums">Manual {fmtQty(row.dashManualQty)}</span>
         </>
-      ) : (
-        <td className={numClass}>{fmtQty(row.dashQty)}</td>
-      )}
-      <td className={numClass}>{fmtQty(row.suppliedQty)}</td>
-      <td className={numClass}>{fmtQty(row.leftoverQty)}</td>
-      <td className={numClass}>{fmtQty(row.posVsSold)}</td>
-    </>
+      ) : null}
+      <span className="tabular-nums">Sold {fmtQty(row.dashQty)}</span>
+      <span className="tabular-nums">Supplied {fmtQty(row.suppliedQty)}</span>
+      <span className="tabular-nums">Leftover {fmtQty(row.leftoverQty)}</span>
+      <span className="tabular-nums">POS vs sold {fmtQty(row.posVsSold)}</span>
+      <StatusChip status={row.status} help={TALLY_STATUS_HELP} />
+    </div>
   );
 }
 
-function TallyLotRows({
-  parentKey,
-  lots,
-  showSplit,
-  indentClass,
-}: {
-  parentKey: string;
-  lots: NonNullable<StorehubReportRow['lots']>;
-  showSplit: boolean;
-  indentClass: string;
-}) {
+function TallyLotLines({ lots }: { lots: NonNullable<StorehubReportRow['lots']> }) {
+  if (lots.length === 0) return null;
   return (
-    <>
+    <div className="space-y-1 text-[13px] text-stone-500">
       {lots.map((lot) => (
-        <tr key={`${parentKey}:${lot.label}`} className="bg-stone-50/80 text-stone-600">
-          <td className={`${indentClass} text-xs`}>{lot.label}</td>
-          <td className="text-right text-xs text-stone-400">—</td>
-          {showSplit ? (
-            <>
-              <td className="text-right text-xs text-stone-400">—</td>
-              <td className="text-right text-xs text-stone-400">—</td>
-              <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
-            </>
-          ) : (
-            <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
-          )}
-          <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied)}</td>
-          <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied - lot.sold)}</td>
-          <td className="text-right text-xs text-stone-400">—</td>
-          <td />
-        </tr>
+        <p key={lot.label}>
+          {lot.label} · sold {fmtQty(lot.sold)} · supplied {fmtQty(lot.supplied)} · leftover {fmtQty(lot.supplied - lot.sold)}
+        </p>
       ))}
-    </>
+    </div>
   );
 }
 
@@ -1058,91 +997,42 @@ function TallyTable({
   showSplit: boolean;
 }) {
   return (
-    <table className={`data-table data-table-sticky-col ${showSplit ? 'min-w-[60rem]' : 'min-w-[48rem]'}`}>
-      <thead>
-        <tr>
-          <th>Product</th>
-          <th className="text-right">POS sold</th>
-          {showSplit ? (
-            <>
-              <th className="text-right">Outlet sold (StoreHub)</th>
-              <th className="text-right">Outlet sold (manual)</th>
-              <th className="text-right">Outlet sold (all)</th>
-            </>
-          ) : (
-            <th className="text-right">Outlet sold</th>
-          )}
-          <th className="text-right">Outlet supplied</th>
-          <th className="text-right">Leftover</th>
-          <th className="text-right">POS vs Outlet sold</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-stone-100">
-        {rows.map((row) => {
-          const open = expanded.has(row.key);
-          const days = gapsOnly ? (row.days ?? []).filter((d) => isGapStatus(d.status)) : (row.days ?? []);
-          const hasExpand = days.length > 0 || (row.lots?.length ?? 0) > 0 || (row.days?.length ?? 0) > 0;
-          const label = displayProductLabel(row.key, row.label, picks);
-          return (
-            <Fragment key={row.key}>
-              <tr
-                className={
-                  row.status === 'qty_mismatch' || row.status === 'missing_in_dashboard'
-                    ? 'bg-amber-50/60'
-                    : 'hover:bg-stone-50'
-                }
-              >
-                <td>
-                  {hasExpand ? (
-                    <button
-                      type="button"
-                      onClick={() => onToggle(row.key)}
-                      className="inline-flex items-center gap-1 text-left font-medium text-stone-800"
-                    >
-                      <ChevronRight size={14} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-                      {label}
-                    </button>
-                  ) : (
-                    label
-                  )}
-                </td>
-                <TallyQtyCells row={row} showSplit={showSplit} />
-                <td>
-                  <StatusChip status={row.status} help={TALLY_STATUS_HELP} />
-                </td>
-              </tr>
-              {open &&
-                days.map((day) => (
-                  <Fragment key={day.key}>
-                    <tr
-                      className={
-                        day.status === 'qty_mismatch' || day.status === 'missing_in_dashboard'
-                          ? 'bg-amber-50/40 text-stone-800'
-                          : 'bg-stone-50/60 text-stone-700'
-                      }
-                    >
-                      <td className="pl-8 text-sm font-medium">{day.label}</td>
-                      <TallyQtyCells row={day} showSplit={showSplit} muted />
-                      <td>
-                        <StatusChip status={day.status} help={TALLY_STATUS_HELP} />
-                      </td>
-                    </tr>
-                    <TallyLotRows
-                      parentKey={day.key}
-                      lots={day.lots ?? []}
-                      showSplit={showSplit}
-                      indentClass="pl-12"
-                    />
-                  </Fragment>
-                ))}
-              {open && (row.lots?.length ?? 0) > 0 && (
-                <TallyLotRows parentKey={row.key} lots={row.lots ?? []} showSplit={showSplit} indentClass="pl-8" />
-              )}
-            </Fragment>
-          );
-        })}
-      </tbody>
-    </table>
+    <div className="ios-group">
+      {rows.map((row) => {
+        const open = expanded.has(row.key);
+        const days = gapsOnly ? (row.days ?? []).filter((d) => isGapStatus(d.status)) : (row.days ?? []);
+        const hasExpand = days.length > 0 || (row.lots?.length ?? 0) > 0 || (row.days?.length ?? 0) > 0;
+        const label = displayProductLabel(row.key, row.label, picks);
+        return (
+          <ListRow
+            key={row.key}
+            title={
+              <span className="inline-flex items-center gap-1">
+                {hasExpand ? (
+                  <ChevronRight size={14} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+                ) : null}
+                {label}
+              </span>
+            }
+            onClick={hasExpand ? () => onToggle(row.key) : undefined}
+            body={
+              <div className="space-y-2">
+                <TallyFigures row={row} showSplit={showSplit} />
+                {open
+                  ? days.map((day) => (
+                      <div key={day.key} className="space-y-1 rounded-xl bg-stone-50 px-3 py-2">
+                        <p className="text-[15px] font-medium text-stone-800">{day.label}</p>
+                        <TallyFigures row={day} showSplit={showSplit} />
+                        <TallyLotLines lots={day.lots ?? []} />
+                      </div>
+                    ))
+                  : null}
+                {open ? <TallyLotLines lots={row.lots ?? []} /> : null}
+              </div>
+            }
+          />
+        );
+      })}
+    </div>
   );
 }

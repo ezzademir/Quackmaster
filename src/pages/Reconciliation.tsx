@@ -43,8 +43,8 @@ function MovementRow({
       </span>
     </>
   );
-  const className = `flex items-center justify-between rounded-lg border px-4 py-3 ${
-    emphasize ? 'border-amber-300 bg-amber-50' : 'border-stone-200 bg-white'
+  const className = `flex min-h-12 items-center justify-between bg-white px-4 py-3 ${
+    emphasize ? 'bg-amber-50' : ''
   }`;
   if (to && Math.abs(value) > 0.001) {
     return (
@@ -215,11 +215,14 @@ export function Reconciliation() {
           )}
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="panel space-y-2 p-5">
-              <h2 className="text-sm font-semibold text-stone-900">Movement equation</h2>
-              <p className="text-xs text-stone-500">
-                Period: {result.period_from} → {result.period_to}
-              </p>
+            <div className="space-y-3">
+              <div>
+                <h2 className="text-sm font-semibold text-stone-900">Movement equation</h2>
+                <p className="text-xs text-stone-500">
+                  Period: {result.period_from} → {result.period_to}
+                </p>
+              </div>
+              <div className="ios-group">
               <MovementRow label="Opening (before period)" value={Number(result.opening_qoh ?? 0)} />
               <MovementRow label="Supply received" value={Number(result.supply_in ?? 0)} to="/distribution" />
               <MovementRow label="Transfers in" value={Number(result.transfers_in ?? 0)} to="/distribution" />
@@ -230,6 +233,7 @@ export function Reconciliation() {
               <MovementRow label="Reversals" value={Number(result.reversals ?? 0)} />
               <MovementRow label="Computed closing" value={Number(result.computed_closing ?? 0)} emphasize />
               <MovementRow label="Live on-hand now" value={Number(result.live_on_hand ?? 0)} emphasize />
+              </div>
             </div>
 
             <div className="space-y-4">
@@ -289,7 +293,7 @@ export function Reconciliation() {
               <p className="mt-1 text-xs text-stone-500">
                 Per-product equation — click a row to focus. Unexplained variance uses that SKU only (same units).
               </p>
-              <div className="mt-3 space-y-2 md:hidden">
+              <div className="ios-group mt-3">
                 {skuRows.map((row) => {
                   const net =
                     Number(row.supply_in) +
@@ -320,58 +324,8 @@ export function Reconciliation() {
                   );
                 })}
               </div>
-              <div className="mt-3 hidden overflow-x-auto md:block">
-                <table className="data-table min-w-[720px]">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th className="text-right">Opening</th>
-                      <th className="text-right">Net moves</th>
-                      <th className="text-right">Computed</th>
-                      <th className="text-right">Live</th>
-                      <th className="text-right">Unexplained</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {skuRows.map((row) => {
-                      const net =
-                        Number(row.supply_in) +
-                        Number(row.transfers_in) +
-                        Number(row.transfers_out) +
-                        Number(row.sales) +
-                        Number(row.waste) +
-                        Number(row.stock_take_adjustments) +
-                        Number(row.reversals);
-                      const bad = Math.abs(Number(row.unexplained_variance)) > 0.001;
-                      return (
-                        <tr
-                          key={row.sku_key}
-                          className={`cursor-pointer hover:bg-teal-50/50 ${selectedSku?.sku_key === row.sku_key ? 'bg-teal-50' : ''}`}
-                          onClick={() => setSelectedSku(row)}
-                        >
-                          <td className="font-medium">
-                            {row.label}
-                            <span className="ml-2 text-[10px] uppercase text-stone-400">{row.kind}</span>
-                          </td>
-                          <td className="text-right tabular-nums">{fmt(row.opening_qoh)}</td>
-                          <td className="text-right tabular-nums">{fmt(net)}</td>
-                          <td className="text-right tabular-nums">{fmt(row.computed_closing)}</td>
-                          <td className="text-right tabular-nums">{fmt(row.live_on_hand)}</td>
-                          <td
-                            className={`text-right tabular-nums font-semibold ${
-                              bad ? 'text-amber-800' : 'text-stone-600'
-                            }`}
-                          >
-                            {fmt(row.unexplained_variance)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
               {selectedSku && (
-                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="ios-group mt-4">
                   <MovementRow label="Supply in" value={Number(selectedSku.supply_in)} />
                   <MovementRow label="Transfers in" value={Number(selectedSku.transfers_in)} />
                   <MovementRow label="Transfers out" value={Number(selectedSku.transfers_out)} />
