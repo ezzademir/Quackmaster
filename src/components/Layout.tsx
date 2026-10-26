@@ -20,6 +20,7 @@ import {
   GitBranch,
   BarChart3,
   PackageCheck,
+  PieChart,
   Receipt,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
@@ -31,6 +32,7 @@ const hubNav = [
   { path: '/procurement', label: 'Procurement', icon: ShoppingCart, exact: false },
   { path: '/receiving', label: 'Receiving', icon: PackageCheck, exact: true },
   { path: '/bills', label: 'Bills', icon: Receipt, exact: true },
+  { path: '/costing', label: 'Costing', icon: PieChart, exact: true },
   { path: '/production', label: 'Production', icon: FlaskConical, exact: false },
   { path: '/inventory', label: 'Inventory', icon: Boxes, exact: false },
   { path: '/distribution', label: 'Distribution', icon: Truck, exact: false },
@@ -211,7 +213,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ) : (
             <>
               <NavSection title="Overview" collapsed={collapsed} items={mainNav} />
-              <NavSection title="Hub" collapsed={collapsed} items={isAdmin ? hubNav : hubNav.filter((i) => i.path !== '/bills')} />
+              <NavSection
+                title="Hub"
+                collapsed={collapsed}
+                items={isAdmin ? hubNav : hubNav.filter((item) => item.path !== '/bills' && item.path !== '/costing')}
+              />
               <NavSection title="Outlets" collapsed={collapsed} items={outletNav} />
               {isAdmin && <NavSection title="POS" collapsed={collapsed} items={posCompareNav} />}
               <NavSection title="Find" collapsed={collapsed} items={findNav} />

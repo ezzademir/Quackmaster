@@ -9,7 +9,7 @@ describe('roleAccess', () => {
   });
 
   it('procurement cannot reach costing, sales, stock, POS compare or users', () => {
-    for (const p of ['/', '/sales', '/pos-compare', '/inventory', '/stock-take', '/production', '/users', '/ledger', '/settings', '/genealogy', '/audit', '/reconciliation', '/waste', '/distribution']) {
+    for (const p of ['/', '/sales', '/pos-compare', '/inventory', '/stock-take', '/production', '/users', '/ledger', '/settings', '/genealogy', '/audit', '/reconciliation', '/waste', '/distribution', '/costing']) {
       expect(isPathAllowedForRole('procurement', p), p).toBe(false);
     }
     for (const p of ['/procurement', '/procurement/x', '/receiving', '/bills', '/suppliers', '/required-password-reset']) {
