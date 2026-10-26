@@ -68,6 +68,11 @@ export interface BomLineRow {
   status: string;
   issues: string | null;
   shared_ingredient: boolean;
+  entity_code?: string | null;
+  source_sheet?: string | null;
+  source_row?: number | string | null;
+  supplier_item_id?: string | null;
+  component_sub_recipe_id?: string | null;
 }
 
 export interface RecipeParent {
