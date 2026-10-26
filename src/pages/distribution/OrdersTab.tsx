@@ -25,7 +25,7 @@ export function OrdersTab({
 
   return (
     <>
-      <div className="space-y-2 md:hidden">
+      <div className="ios-group">
         {orders.map((so) => (
           <ListRow
             key={so.id}
@@ -57,7 +57,7 @@ export function OrdersTab({
         ))}
       </div>
 
-      <div className="panel hidden overflow-x-auto md:block">
+      <div className="hidden">
         <table className="data-table">
           <thead>
             <tr>

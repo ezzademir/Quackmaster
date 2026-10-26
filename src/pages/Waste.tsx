@@ -8,6 +8,7 @@ import type { Outlet } from '../types';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 import { getOutletSaleBatches } from '../utils/outletStockTakeService';
 
 const HISTORY_PAGE_SIZE = 25;
@@ -358,6 +359,12 @@ export function Waste() {
     }
   }, [historyRange, isSupervisor, profile?.assigned_outlet_id]);
 
+  useRegisterRefresh(() => {
+    void load();
+    void loadHistory(0, false);
+    void loadOverview();
+  });
+
   useEffect(() => {
     setHistoryPage(0);
   }, [historyRange]);
@@ -538,7 +545,7 @@ export function Waste() {
               <EmptyState title="No posted waste events in this period" />
             ) : (
               <>
-                <div className="space-y-2 md:hidden">
+                <div className="ios-group">
                   {history.map((row) => {
                     const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
                     const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
@@ -561,7 +568,7 @@ export function Waste() {
                     );
                   })}
                 </div>
-                <div className="hidden overflow-x-auto rounded-lg border border-stone-100 md:block">
+                <div className="hidden">
                   <table className="data-table">
                     <thead>
                       <tr>

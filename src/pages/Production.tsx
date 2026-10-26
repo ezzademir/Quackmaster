@@ -19,6 +19,7 @@ import {
 } from '../utils/productionService';
 import { voidConfirmMatches } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
 type Tab = 'runs' | 'recipes' | 'planning';
@@ -925,6 +926,7 @@ function RunDetailModal({
 // ---- Main Production Page ----
 export function Production() {
   const { profile, isAdmin } = useAuth();
+  useRegisterRefresh(() => loadAll());
   const [tab, setTab] = useState<Tab>('runs');
   const [runs, setRuns] = useState<RunWithDetails[]>([]);
   const [recipes, setRecipes] = useState<RecipeWithIngredients[]>([]);
@@ -1113,7 +1115,7 @@ export function Production() {
               </div>
             ) : (
               <>
-                <div className="space-y-2 md:hidden">
+                <div className="ios-group">
                   {filteredRuns.map((run) => (
                     <ListRow
                       key={run.id}
@@ -1137,7 +1139,7 @@ export function Production() {
                     />
                   ))}
                 </div>
-                <div className="panel hidden overflow-x-auto md:block">
+                <div className="hidden">
                   <table className="data-table">
                     <thead>
                       <tr>
@@ -1193,65 +1195,39 @@ export function Production() {
           )}
 
           {tab === 'recipes' && (
-            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-              {recipes.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-stone-200 px-6 py-12 text-center text-stone-400 sm:col-span-3">
-                  No recipes yet
-                </div>
-              ) : (
-                recipes.map((recipe) => (
-                  <div key={recipe.id} className="panel p-5 transition-colors hover:border-stone-300">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="font-semibold text-stone-900">{recipe.name}</h3>
-                        <p className="mt-0.5 text-xs text-stone-500">
-                          Batch: {recipe.standard_batch_size} {recipe.batch_unit}
-                        </p>
-                      </div>
-                      <div className="flex gap-1">
+            recipes.length === 0 ? (
+              <div className="panel py-2">
+                <EmptyState title="No recipes yet" />
+              </div>
+            ) : (
+              <div className="ios-group">
+                {recipes.map((recipe) => (
+                  <ListRow
+                    key={recipe.id}
+                    title={recipe.name}
+                    meta={`Batch ${recipe.standard_batch_size} ${recipe.batch_unit} · ${(recipe.ingredients ?? []).length} ingredients · yield ${recipe.target_yield_percentage ?? 100}%`}
+                    body={
+                      <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
                           onClick={() => openEditRecipe(recipe)}
-                          className="p-1 text-stone-400 transition-colors hover:text-brand-800"
+                          className="inline-flex min-h-11 items-center gap-1 rounded-full bg-stone-100 px-4 text-[15px] font-medium text-stone-800"
                         >
-                          <Edit2 size={15} />
+                          <Edit2 size={16} aria-hidden /> Edit
                         </button>
                         <button
                           type="button"
                           onClick={() => deleteRecipe(recipe.id)}
-                          className="p-1 text-stone-400 transition-colors hover:text-red-600"
+                          className="inline-flex min-h-11 items-center gap-1 rounded-full bg-red-50 px-4 text-[15px] font-medium text-red-700"
                         >
-                          <Trash2 size={15} />
+                          <Trash2 size={16} aria-hidden /> Delete
                         </button>
                       </div>
-                    </div>
-                    {recipe.description && (
-                      <p className="mt-2 line-clamp-2 text-xs text-stone-600">{recipe.description}</p>
-                    )}
-                    <div className="mt-3 space-y-1">
-                      <p className="text-xs font-semibold text-stone-500">
-                        Ingredients ({(recipe.ingredients ?? []).length})
-                      </p>
-                      {(recipe.ingredients ?? []).slice(0, 4).map((ing) => (
-                        <div key={ing.id} className="flex items-center justify-between text-xs text-stone-700">
-                          <span>{ing.material?.name ?? ing.raw_material_id}</span>
-                          <span className="font-medium">
-                            {ing.quantity_required} {ing.material?.unit_of_measure}
-                          </span>
-                        </div>
-                      ))}
-                      {(recipe.ingredients ?? []).length > 4 && (
-                        <p className="text-xs text-stone-400">+{(recipe.ingredients ?? []).length - 4} more…</p>
-                      )}
-                    </div>
-                    <div className="mt-3 flex items-center justify-between border-t border-stone-100 pt-3">
-                      <span className="text-xs text-stone-500">Target yield</span>
-                      <span className="text-sm font-bold text-emerald-600">{recipe.target_yield_percentage ?? 100}%</span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+                    }
+                  />
+                ))}
+              </div>
+            )
           )}
         </>
       )}

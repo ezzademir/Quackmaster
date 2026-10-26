@@ -24,6 +24,7 @@ import { suggestReorder, type ReorderSuggestion } from '../utils/parService';
 import { validateSupplyOrder } from '../utils/validation';
 import type { Outlet, OutletInventory } from '../types';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 import {
   aggregateFinishedGoodsHubTotals,
   hubRowAvailableQuantity,
@@ -1534,6 +1535,7 @@ export function Distribution() {
     });
     setLoading(false);
   }, []);
+  useRegisterRefresh(() => loadAll());
 
   useEffect(() => {
     void loadAll();

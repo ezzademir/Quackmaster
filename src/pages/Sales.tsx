@@ -7,6 +7,7 @@ import { supabase } from '../utils/supabase';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { outletRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 import { getOutletSaleBatches } from '../utils/outletStockTakeService';
 import {
   postSalesJournal,
@@ -539,6 +540,11 @@ export function Sales() {
       if (gen === overviewGenRef.current) setOverviewLoading(false);
     }
   }, [outletId, journalDateRange]);
+
+  useRegisterRefresh(() => {
+    void loadHistory();
+    void loadOverview();
+  });
 
   async function handleLoadMoreHistory() {
     const start = history.length;
@@ -1139,7 +1145,7 @@ export function Sales() {
         </div>
 
         {/* Mobile cards */}
-        <div className="space-y-2 md:hidden">
+        <div className="ios-group">
           {history.length === 0 ? (
             <div className="panel py-2">
               <EmptyState
@@ -1201,7 +1207,7 @@ export function Sales() {
         </div>
 
         {/* Desktop table */}
-        <div className="panel hidden overflow-x-auto md:block">
+        <div className="hidden">
           <table className="data-table">
             <thead>
               <tr>

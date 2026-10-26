@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+/** One row in an inset grouped list. Put several inside `.ios-group`. */
 export function ListRow({
   title,
   meta,
@@ -15,30 +16,30 @@ export function ListRow({
   muted?: boolean;
   onClick?: () => void;
 }) {
-  const className = `flex w-full flex-col gap-2 rounded-xl border border-stone-200 bg-white p-3.5 text-left transition-colors ${
-    muted ? 'opacity-70' : ''
+  const className = `flex min-h-16 w-full flex-col gap-1 bg-white px-4 py-3 text-left ${
+    muted ? 'opacity-60' : ''
   } ${onClick ? 'active:bg-stone-50' : ''}`;
 
-  const content = (
-    <>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-stone-900">{title}</div>
-          {meta ? <div className="mt-0.5 text-xs text-stone-500">{meta}</div> : null}
-        </div>
-        {aside ? <div className="shrink-0">{aside}</div> : null}
+  const titleRow = (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[17px] font-medium leading-6 tracking-tight text-stone-900">{title}</div>
+        {meta ? <div className="mt-0.5 truncate text-[13px] leading-5 text-stone-500">{meta}</div> : null}
       </div>
-      {body ? <div className="text-sm text-stone-700">{body}</div> : null}
-    </>
+      {aside ? <div className="shrink-0 text-[15px]">{aside}</div> : null}
+    </div>
   );
 
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} className={className}>
-        {content}
-      </button>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
+  return (
+    <div className={className}>
+      {onClick ? (
+        <button type="button" onClick={onClick} className="w-full text-left">
+          {titleRow}
+        </button>
+      ) : (
+        titleRow
+      )}
+      {body ? <div className="text-[15px] leading-6 text-stone-700">{body}</div> : null}
+    </div>
+  );
 }

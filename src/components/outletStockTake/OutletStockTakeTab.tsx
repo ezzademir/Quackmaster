@@ -322,7 +322,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         <h3 className="text-sm font-semibold text-stone-800">
           {title} <span className="font-normal text-stone-500">({subset.length})</span>
         </h3>
-        <div className="hidden max-h-[min(28rem,55vh)] overflow-auto rounded-lg border border-stone-200 md:block">
+        <div className="hidden">
           <table className="w-full min-w-[480px] text-sm">
             <thead className="sticky top-0 z-10 border-b border-stone-200 bg-stone-50">
               <tr>
@@ -370,9 +370,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             </tbody>
           </table>
         </div>
-        <div className="max-h-[min(28rem,55vh)] space-y-3 overflow-y-auto overscroll-y-contain md:hidden">
+        <div className="ios-group max-h-[min(36rem,70vh)] overflow-y-auto overscroll-y-contain">
           {subset.map((r) => (
-            <div key={r.id} className="panel p-3">
+            <div key={r.id} className="bg-white px-4 py-3">
               <p className="font-medium leading-snug text-stone-900">{r.item_label}</p>
               <p className="mt-0.5 text-xs text-stone-500">
                 {[r.item_detail, r.expiry_date ? `Exp ${r.expiry_date}` : ''].filter(Boolean).join(' · ')}

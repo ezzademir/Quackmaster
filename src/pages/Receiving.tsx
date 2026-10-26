@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, EmptyState, PageHeader } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { buildDeliveryLines, receivingErrorMessage } from '../utils/receiving';
 import { receivingUom } from '../utils/procurementPayloads';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 
 interface PoItem {
   id: string;
@@ -48,6 +49,7 @@ export function Receiving() {
   useEffect(() => {
     void load();
   }, [load]);
+  useRegisterRefresh(() => load());
 
   async function submit(po: Po) {
     // the screen asks for what arrived in THIS delivery; the server wants the new cumulative total per line
@@ -93,34 +95,36 @@ export function Receiving() {
       {pos.length === 0 ? (
         <EmptyState title="Nothing to receive" description="No ordered or part-received POs in your entities." />
       ) : (
-        pos.map((po) => (
-          <div key={po.id} className="rounded-xl border border-stone-200 bg-white p-3">
-            <button type="button" className="flex w-full justify-between text-left" onClick={() => setOpen(open === po.id ? null : po.id)}>
-              <span className="font-medium">{po.order_number ?? po.id.slice(0, 8)} · {po.suppliers?.name ?? '-'}</span>
-              <span className="text-xs text-stone-500">{po.entity_code ?? 'untagged'} · {po.status}</span>
-            </button>
-            {open === po.id && (
-              <div className="mt-3 space-y-2">
+        <div className="ios-group">
+        {pos.map((po) => (
+          <ListRow
+            key={po.id}
+            title={`${po.order_number ?? po.id.slice(0, 8)} · ${po.suppliers?.name ?? '-'}`}
+            meta={`${po.entity_code ?? 'untagged'} · ${po.status}`}
+            onClick={() => setOpen(open === po.id ? null : po.id)}
+            body={open === po.id ? (
+              <div className="space-y-2" data-no-swipe>
                 {po.purchase_order_items.map((i) => (
-                  <div key={i.id} className="grid grid-cols-[1fr_8rem_7rem] items-center gap-2 text-sm">
+                  <div key={i.id} className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-[1fr_8rem_7rem] sm:items-center">
                     <span>
                       {catalog[i.raw_material_id]?.name ?? 'Item'} ({i.quantity_received ?? 0}/{i.quantity_ordered} {catalog[i.raw_material_id]?.unit_of_measure ?? ''})
                     </span>
-                    <input aria-label="Quantity in this delivery" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Qty this delivery"
+                    <input aria-label="Quantity in this delivery" inputMode="decimal" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Qty this delivery"
                       value={lines[i.id]?.qty ?? ''} onChange={(e) => setLines({ ...lines, [i.id]: { qty: e.target.value, price: lines[i.id]?.price ?? '' } })} />
-                    <input aria-label="Invoice unit price" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Invoice RM"
+                    <input aria-label="Invoice unit price" inputMode="decimal" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Invoice RM"
                       value={lines[i.id]?.price ?? ''} onChange={(e) => setLines({ ...lines, [i.id]: { qty: lines[i.id]?.qty ?? '', price: e.target.value } })} />
                   </div>
                 ))}
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <input aria-label="DO number" className="rounded border px-2 py-1" placeholder="DO number" value={doNo} onChange={(e) => setDoNo(e.target.value)} />
-                  <input aria-label="Invoice number" className="rounded border px-2 py-1" placeholder="Invoice number" value={invNo} onChange={(e) => setInvNo(e.target.value)} />
+                <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                  <input aria-label="DO number" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="DO number" value={doNo} onChange={(e) => setDoNo(e.target.value)} />
+                  <input aria-label="Invoice number" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Invoice number" value={invNo} onChange={(e) => setInvNo(e.target.value)} />
                 </div>
                 <Button disabled={busy || (!doNo && !invNo)} onClick={() => void submit(po)}>Record delivery</Button>
               </div>
-            )}
-          </div>
-        ))
+            ) : null}
+          />
+        ))}
+        </div>
       )}
     </div>
   );
