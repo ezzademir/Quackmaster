@@ -4,6 +4,9 @@ import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
 import { Layout } from './components/Layout';
+import { isPathAllowedForRole, homePathForRole } from './utils/roleAccess';
+import { Receiving } from './pages/Receiving';
+import { Bills } from './pages/Bills';
 
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
 const Register = lazy(() => import('./pages/Register').then((m) => ({ default: m.Register })));
@@ -186,13 +189,8 @@ function ProtectedShell() {
     return <Navigate to="/required-password-reset" replace />;
   }
 
-  if (role === 'supervisor') {
-    const path = location.pathname;
-    const allowed =
-      path === '/stock-take' || path === '/sales' || path === '/waste' || path === '/required-password-reset';
-    if (!allowed) {
-      return <Navigate to="/stock-take" replace />;
-    }
+  if (!isPathAllowedForRole(role, location.pathname)) {
+    return <Navigate to={homePathForRole(role)} replace />;
   }
 
   return <Outlet />;
@@ -216,6 +214,9 @@ function App() {
                 <Route path="/production/*" element={<Production />} />
                 <Route path="/inventory/*" element={<Inventory />} />
                 <Route path="/distribution/*" element={<Distribution />} />
+                <Route path="/receiving" element={<Receiving />} />
+                <Route path="/bills" element={<Bills />} />
+                <Route path="/suppliers" element={<Navigate to="/procurement?tab=suppliers" replace />} />
                 <Route path="/sales" element={<Sales />} />
                 <Route path="/pos-compare" element={<PosCompareGate />} />
                 <Route path="/waste" element={<Waste />} />

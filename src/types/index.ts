@@ -9,6 +9,8 @@ export interface Supplier {
   city?: string;
   country?: string;
   payment_terms?: string;
+  /** 084: active | inactive | pending (pending = created by procurement, awaiting admin approval) */
+  status?: 'active' | 'inactive' | 'pending';
   created_at: string;
   updated_at: string;
 }
@@ -62,7 +64,9 @@ export interface PurchaseOrder {
   id: string;
   order_number: string;
   supplier_id: string;
-  status: 'draft' | 'ordered' | 'received' | 'partial' | 'closed_short' | 'cancelled';
+  status: 'draft' | 'pending_approval' | 'ordered' | 'received' | 'partial' | 'closed_short' | 'cancelled';
+  /** 084/085: entity (QT / MH) the PO is booked to; procurement scope is by entity tag */
+  entity_code?: string | null;
   order_date: string;
   expected_delivery_date?: string;
   actual_delivery_date?: string;
