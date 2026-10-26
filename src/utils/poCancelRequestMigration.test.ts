@@ -8,6 +8,7 @@ import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_adm
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import MIG089 from '../../supabase/migrations/20261024100400_089_po_cancel_request.sql?raw';
 import MIG091 from '../../supabase/migrations/20261026091332_091_void_supplier_bill.sql?raw';
+import MIG092 from '../../supabase/migrations/20261026120000_092_tag_po_receipt_adjustments.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
@@ -192,7 +193,7 @@ const UP_TO_088: [string, string][] = [
 ];
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091]]) {
+  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091], ['092', MIG092]]) {
     try {
       await pg.exec(sql);
     } catch (e) {

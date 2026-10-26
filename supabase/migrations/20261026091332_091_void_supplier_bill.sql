@@ -54,6 +54,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+REVOKE ALL ON FUNCTION public._supplier_bills_guard() FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.void_supplier_bill(p_bill_id uuid, p_reason text)
 RETURNS jsonb
@@ -123,6 +124,9 @@ END $$;
 
 REVOKE ALL ON FUNCTION public.void_supplier_bill(uuid, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.void_supplier_bill(uuid, text) TO authenticated;
+INSERT INTO public.procurement_exposure_allow (kind, name, note)
+VALUES ('function', 'void_supplier_bill', 'admin only: refuses unless is_profiles_admin(); voids an unpaid supplier bill and detaches it from its purchase order')
+ON CONFLICT (kind, name) DO UPDATE SET note = EXCLUDED.note;
 
 CREATE OR REPLACE VIEW public.v_supplier_bill_status WITH (security_invoker = true) AS
 SELECT x.id, x.entity_code, x.supplier_id, x.supplier_name,
