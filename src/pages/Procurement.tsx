@@ -3,6 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, PackagePlus, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { EntityChip } from '../components/EntityChip';
+import { PoCancelPanel } from '../components/PoCancelPanel';
+import { PoCancelRequestsTab, usePoCancelPendingCount } from '../components/PoCancelRequestsTab';
 import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
@@ -11,14 +14,11 @@ import { retryWithBackoff } from '../utils/errorHandling';
 import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
 import { DEFAULT_OVER_RECEIPT_TOLERANCE_PCT, planReceipt, rpcLines } from '../utils/poReceipt';
-import {
-  cancelPurchaseOrderErrorMessage,
-  extractAtomicRpcErrorCode,
-} from '../utils/atomicRpcErrors';
+import { extractAtomicRpcErrorCode } from '../utils/atomicRpcErrors';
 import { defaultEntityCode, poSelectableSuppliers, purchaseOrderInsertPayload, supplierInsertPayload, type MyEntity } from '../utils/procurementPayloads';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
-type Tab = 'orders' | 'suppliers' | 'materials';
+type Tab = 'orders' | 'suppliers' | 'materials' | 'cancellations';
 
 interface SupplierScoreRow {
   supplier_id: string;
@@ -447,12 +447,6 @@ function purchaseOrderUseCancelRpc(po: POWithDetails): boolean {
   const st = String(po.status ?? '').trim().toLowerCase();
   return st === 'partial' || st === 'received';
 }
-
-/** Row / modal Delete is allowed whenever simple delete or cancel RPC applies. */
-function purchaseOrderCanRemove(po: POWithDetails): boolean {
-  return purchaseOrderCanSimpleDelete(po) || purchaseOrderUseCancelRpc(po);
-}
-
 
 function NewPOModal({
   suppliers,
@@ -891,6 +885,7 @@ function PODetailModal({
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
+  const { user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [receivedQtys, setReceivedQtys] = useState<Record<string, string>>(
@@ -1038,7 +1033,17 @@ function PODetailModal({
   }
 
   return (
-    <Modal isOpen onClose={onClose} title={`Purchase Order: ${po.order_number}`} size="xl">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={
+        <span className="inline-flex items-center gap-2">
+          Purchase Order: {po.order_number}
+          <EntityChip code={po.entity_code} />
+        </span>
+      }
+      size="xl"
+    >
       {error && (
         <div className="mb-4 flex items-start gap-3 rounded-lg bg-red-50 p-3">
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0 text-red-600" />
@@ -1142,6 +1147,18 @@ function PODetailModal({
         )}
       </div>
 
+      {user && (isAdmin || isProcurement) && purchaseOrderUseCancelRpc(po) && (
+        <div className="mt-6">
+          <PoCancelPanel
+            po={po}
+            role={isAdmin ? 'admin' : 'procurement'}
+            uid={user.id}
+            disabled={saving}
+            onCancelled={onStatusChange}
+          />
+        </div>
+      )}
+
       <div className="mt-6 flex flex-wrap justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           {po.status === 'draft' && isProcurement && (
@@ -1179,9 +1196,9 @@ function PODetailModal({
               Edit order
             </Button>
           )}
-          {purchaseOrderCanRemove(po) && onDelete && (
+          {purchaseOrderCanSimpleDelete(po) && onDelete && (
             <Button type="button" variant="danger" onClick={onDelete} disabled={saving}>
-              {purchaseOrderUseCancelRpc(po) ? 'Cancel & delete order' : 'Delete order'}
+              Delete order
             </Button>
           )}
         </div>
@@ -1193,11 +1210,15 @@ function PODetailModal({
 
 // ---- Main Procurement Page ----
 export function Procurement() {
-  const { isAdmin, isProcurement } = useAuth();
+  const { isAdmin, isProcurement, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const initialTab: Tab =
-    tabParam === 'suppliers' || tabParam === 'materials' || tabParam === 'orders' ? tabParam : 'orders';
+    tabParam === 'suppliers' || tabParam === 'materials' || tabParam === 'orders' || tabParam === 'cancellations'
+      ? tabParam
+      : 'orders';
+  const [cancelTick, setCancelTick] = useState(0);
+  const pendingCancelCount = usePoCancelPendingCount(isAdmin, cancelTick);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierScores, setSupplierScores] = useState<SupplierScoreRow[]>([]);
@@ -1244,8 +1265,12 @@ export function Procurement() {
     const t = searchParams.get('tab');
     if (t === 'suppliers' || t === 'materials' || t === 'orders') {
       setTab(t);
+    } else if (t === 'cancellations' && isAdmin) {
+      setTab('cancellations');
+    } else if (t === 'cancellations' && !isAdmin) {
+      setTab('orders');
     }
-  }, [searchParams]);
+  }, [searchParams, isAdmin]);
 
   function selectTab(next: Tab) {
     setTab(next);
@@ -1328,60 +1353,10 @@ export function Procurement() {
   }
 
   async function deletePurchaseOrder(po: POWithDetails) {
-    if (!purchaseOrderCanRemove(po)) {
+    if (!purchaseOrderCanSimpleDelete(po)) {
       alert('This purchase order cannot be removed in its current state.');
       return;
     }
-
-    if (purchaseOrderUseCancelRpc(po)) {
-      const lines = po.items ?? [];
-      const qty = lines.reduce((a, i) => a + (Number(i.quantity_received) || 0), 0);
-      const hint =
-        qty > 0
-          ? ' Received quantities will be deducted from hub inventory and weighted-average raw material costs will be adjusted.'
-          : '';
-      if (
-        !confirm(
-          `Cancel and permanently delete purchase order ${po.order_number}?${hint} You cannot undo this.`
-        )
-      )
-        return;
-
-      type CancelPoResult = { success?: boolean; error?: string; reversal_lines?: unknown };
-      let rpcPayload: CancelPoResult | null = null;
-      const { data: rpcRaw, error: rpcErr } = await retryWithBackoff(async () =>
-        supabase.rpc('cancel_purchase_order', { p_po_id: po.id })
-      );
-
-      if (rpcErr) {
-        alert(
-          cancelPurchaseOrderErrorMessage(
-            extractAtomicRpcErrorCode(undefined, rpcErr.message)
-          )
-        );
-        return;
-      }
-
-      if (rpcRaw != null && typeof rpcRaw === 'object' && !Array.isArray(rpcRaw)) {
-        rpcPayload = rpcRaw as CancelPoResult;
-      }
-
-      if (rpcPayload?.success !== true) {
-        alert(
-          cancelPurchaseOrderErrorMessage(
-            extractAtomicRpcErrorCode(rpcPayload?.error)
-          )
-        );
-        return;
-      }
-
-      if (viewPO?.id === po.id) setViewPO(null);
-      if (editPO?.id === po.id) setEditPO(null);
-      loadAll();
-      return;
-    }
-
-    if (!purchaseOrderCanSimpleDelete(po)) return;
 
     const isDraft = String(po.status ?? '').trim().toLowerCase() === 'draft';
     const message = isDraft
@@ -1465,6 +1440,9 @@ export function Procurement() {
           onChange={selectTab}
           items={[
             { id: 'orders', label: 'Purchase Orders' },
+            ...(isAdmin
+              ? [{ id: 'cancellations' as const, label: `Cancellations (${pendingCancelCount})` }]
+              : []),
             { id: 'suppliers', label: 'Suppliers' },
             { id: 'materials', label: 'Raw Materials' },
           ]}
@@ -1503,7 +1481,12 @@ export function Procurement() {
                     {filteredOrders.map((order) => (
                       <ListRow
                         key={order.id}
-                        title={order.order_number}
+                        title={
+                          <span className="inline-flex items-center gap-2">
+                            {order.order_number}
+                            <EntityChip code={order.entity_code} />
+                          </span>
+                        }
                         meta={`${(order.supplier as Supplier | null)?.name ?? '—'} · ${new Date(order.order_date).toLocaleDateString()} · MYR ${order.total_amount?.toFixed(2) ?? '0.00'}`}
                         aside={<StatusBadge status={order.status} />}
                         body={
@@ -1515,7 +1498,7 @@ export function Procurement() {
                             >
                               Manage <ChevronRight size={14} aria-hidden />
                             </button>
-                            {isAdmin && purchaseOrderCanRemove(order) && (
+                            {isAdmin && purchaseOrderCanSimpleDelete(order) && (
                               <button
                                 type="button"
                                 onClick={() => deletePurchaseOrder(order)}
@@ -1546,7 +1529,12 @@ export function Procurement() {
                       <tbody>
                         {filteredOrders.map((order) => (
                           <tr key={order.id}>
-                            <td className="font-medium">{order.order_number}</td>
+                            <td className="font-medium">
+                              <span className="inline-flex items-center gap-2">
+                                {order.order_number}
+                                <EntityChip code={order.entity_code} />
+                              </span>
+                            </td>
                             <td>{(order.supplier as Supplier | null)?.name ?? '—'}</td>
                             <td className="text-stone-500">{new Date(order.order_date).toLocaleDateString()}</td>
                             <td className="text-right font-medium">
@@ -1567,16 +1555,12 @@ export function Procurement() {
                                 >
                                   Manage <ChevronRight size={14} aria-hidden />
                                 </button>
-                                {isAdmin && purchaseOrderCanRemove(order) && (
+                                {isAdmin && purchaseOrderCanSimpleDelete(order) && (
                                   <button
                                     type="button"
                                     onClick={() => deletePurchaseOrder(order)}
                                     className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
-                                    title={
-                                      purchaseOrderUseCancelRpc(order)
-                                        ? 'Cancel purchase order and reverse hub receipts (admin)'
-                                        : 'Delete purchase order (admin)'
-                                    }
+                                    title="Delete purchase order (admin)"
                                   >
                                     <Trash2 size={14} aria-hidden />
                                     Delete
@@ -1592,6 +1576,16 @@ export function Procurement() {
                 </>
               )}
             </div>
+          )}
+
+          {tab === 'cancellations' && isAdmin && user && (
+            <PoCancelRequestsTab
+              uid={user.id}
+              onChanged={() => {
+                setCancelTick((n) => n + 1);
+                void loadAll();
+              }}
+            />
           )}
 
           {/* Suppliers Tab */}

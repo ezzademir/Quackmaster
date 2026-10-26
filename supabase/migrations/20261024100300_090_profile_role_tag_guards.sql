@@ -30,7 +30,7 @@
     b. authenticated and anon hold NO privilege at all on user_entities except SELECT for authenticated (no TRUNCATE, REFERENCES, TRIGGER);
     c. get_users_management_data() contains the 'email' line exactly once (the in-place patch did not duplicate it);
     d. data_ledger ACCEPTS the new rows (role_changed and tags_changed, operation 'update'): one real role change and one tag change as admin, both ledgered;
-    e. a reverse-order ROLLBACK REHEARSAL: 090, 088, 087, 085, 084 in that order (and 085 refuses while 090 is live), then apply 084, 085, 087, 088, 090 again;
+    e. a reverse-order ROLLBACK REHEARSAL: 089 (if applied), 090, 088, 087, 085, 084 in that order (and 085 refuses while 090 is live), then apply 084, 085, 087, 088, 090, 089 again;
     f. a same-day count of exactly 32 untagged purchase orders (the number the tag backfill was written against) before 084/085 are applied.
 
   What it does

@@ -120,6 +120,15 @@ describe('Users screen business tags (procurement users)', () => {
     expect(saveErrorText('something else', 'Server said no')).toBe('Server said no');
   });
 
+  it('Users.tsx never writes user_entities or profiles.role from the client; it uses the 085/090 RPCs and shows the server error', () => {
+    expect(USERS_TSX).not.toMatch(/from\(\s*['"]user_entities['"]\s*\)/);
+    expect(USERS_TSX).not.toMatch(/from\(\s*['"]profiles['"]\s*\)[\s\S]{0,240}\.update\(\s*\{[^}]*\brole\s*:/);
+    expect(USERS_TSX).toMatch(/admin_set_profile_role_and_outlet/);
+    expect(USERS_TSX).toMatch(/admin_set_procurement_tags/);
+    expect(USERS_TSX).toMatch(/saveErrorText\(/);
+    expect(USERS_TSX).toMatch(/setRoleNotice\(\{ tone: 'err'/);
+  });
+
   it('Users.tsx: tag checkboxes for procurement, tags in list and drawer, tags RPC after the role RPC, no client-side role ledger write', () => {
     expect(USERS_TSX).toMatch(/PROCUREMENT_TAG_OPTIONS\.map/);
     expect(USERS_TSX).toMatch(/roleDraft === 'procurement' &&/);

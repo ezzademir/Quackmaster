@@ -1,5 +1,5 @@
 /*
-  Depends on 085 (writes procurement_exposure_allow). Rollback order, newest first: 090 -> 088 -> 087 -> 085 -> 084 (089, once built, goes before 090). 088_rollback.sql
+  Depends on 085 (writes procurement_exposure_allow). Rollback order, newest first: 089 -> 090 -> 088 -> 087 -> 085 -> 084 (089 is built; it is applied last and rolled back first). 088_rollback.sql
   also tolerates running after 085's rollback (it skips the 085-owned allow row when the table is gone).
 
   088: every NEW stock posting carries a business-entity tag (Quackteow 'QT' / Merdeka House 'MH').
@@ -332,7 +332,7 @@ BEGIN
   END IF;
   -- ADMIN ONLY (Ezzad, 24 Oct 2026: "nobody can cancel the purchase order without the approval of the admin"). The live function
   -- also let plain active staff cancel any PO; that is closed here, in the database, so a direct RPC call by staff, procurement
-  -- or anon is refused too. (A request / approval path for non-admins is a separate follow-up, 089.)
+  -- or anon is refused too. (089 adds the procurement request / admin-approval path; this function stays admin-only.)
   IF NOT public.is_profiles_admin() THEN
     RETURN jsonb_build_object('success', false, 'error', 'forbidden', 'message', 'Only an admin can cancel a purchase order');
   END IF;

@@ -34,6 +34,12 @@ describe('cancelPurchaseOrderErrorMessage', () => {
     expect(cancelPurchaseOrderErrorMessage('bills_on_po')).toMatch(/bill.*accounting/i);
   });
 
+  it('explains a pending request, a missing reason, and a self-decision', () => {
+    expect(cancelPurchaseOrderErrorMessage('pending_request_exists')).toMatch(/already pending/i);
+    expect(cancelPurchaseOrderErrorMessage('reason_required')).toMatch(/reason/i);
+    expect(cancelPurchaseOrderErrorMessage('cannot_decide_own_request')).toMatch(/your own/i);
+  });
+
   it('includes unknown codes in the fallback', () => {
     expect(cancelPurchaseOrderErrorMessage('weird')).toContain('weird');
   });

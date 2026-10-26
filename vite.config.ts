@@ -53,7 +53,7 @@ export default defineConfig(({ command }) => ({
         extends: true,
         test: {
           name: 'unit',
-          include: ['src/**/*.test.ts'],
+          include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
           exclude: [...PGLITE_TESTS],
           sequence: { groupOrder: 0 },
         },
