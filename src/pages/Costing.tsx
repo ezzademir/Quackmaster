@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EntityChip } from '../components/EntityChip';
 import { Modal } from '../components/Modal';
+import { RecipeEditor } from '../components/RecipeEditor';
 import { Button, EmptyState, PageHeader, StatCard, Status, Tabs } from '../components/ui';
 import { useAuth } from '../utils/auth';
 import {
@@ -34,7 +35,7 @@ const DRIFT_COLS =
 const FLAG_COLS =
   'id, item_name, procurement_tag, price_rm, unit_cost_rm, previous_unit_cost_rm, pct_change, source, entered_at, note';
 const LINE_COLS =
-  'id, component_name, qty, unit, base_qty, line_cost_rm, cost_complete, price_basis, status, issues, shared_ingredient';
+  'id, entity_code, component_name, qty, unit, base_qty, line_cost_rm, cost_complete, price_basis, status, issues, shared_ingredient, source_sheet, source_row, supplier_item_id, component_sub_recipe_id';
 
 function costStatus(complete: boolean) {
   return complete ? <Status tone="success">Complete</Status> : <Status tone="warning">Incomplete</Status>;
@@ -46,10 +47,11 @@ function foodCost(row: { cost_complete: boolean; food_cost_rm: number | string |
   return `${formatRm(row.known_cost_rm, 4)} partial`;
 }
 
-function RecipeLines({ recipe }: { recipe: RecipeCostRow }) {
+function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () => void }) {
   const [lines, setLines] = useState<BomLineRow[]>([]);
   const [parent, setParent] = useState<RecipeParent | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,7 +90,7 @@ function RecipeLines({ recipe }: { recipe: RecipeCostRow }) {
     return () => {
       cancelled = true;
     };
-  }, [recipe]);
+  }, [recipe.id, recipe.kind, reloadKey]);
 
   return (
     <div className="space-y-4">
@@ -152,6 +154,15 @@ function RecipeLines({ recipe }: { recipe: RecipeCostRow }) {
           </table>
         </div>
       )}
+      <RecipeEditor
+        recipe={recipe}
+        parent={parent}
+        lines={lines}
+        onSaved={() => {
+          setReloadKey((key) => key + 1);
+          onSaved();
+        }}
+      />
     </div>
   );
 }
@@ -222,8 +233,8 @@ export function Costing() {
   const [busyFlagId, setBusyFlagId] = useState<string | null>(null);
   const busyFlagRef = useRef<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     const [recipeRes, cogsRes, driftRes, flagRes] = await Promise.all([
       supabase.from('v_recipe_cost').select(RECIPE_COLS).order('name'),
       supabase.from('v_dish_cogs').select(COGS_COLS),
@@ -242,6 +253,13 @@ export function Costing() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setSelected((current) => {
+      if (!current) return current;
+      return recipes.find((row) => row.id === current.id && row.kind === current.kind) ?? current;
+    });
+  }, [recipes]);
 
   const dishes = useMemo(() => mergeDishCogs(recipes, cogs), [recipes, cogs]);
   const subRecipes = useMemo(() => recipes.filter((row) => row.kind === 'sub-recipe'), [recipes]);
@@ -421,8 +439,9 @@ export function Costing() {
         onClose={() => setSelected(null)}
         title={
           selected ? (
-            <span className="inline-flex items-center gap-2">
+            <span className="inline-flex flex-wrap items-center gap-2">
               {selected.name}
+              {selected.source_sheet ? <span className="text-sm font-normal text-stone-500">{selected.source_sheet}</span> : null}
               <EntityChip code={selected.entity_code} />
             </span>
           ) : (
@@ -431,7 +450,7 @@ export function Costing() {
         }
         size="xl"
       >
-        {selected ? <RecipeLines key={selected.id} recipe={selected} /> : null}
+        {selected ? <RecipeLines key={selected.id} recipe={selected} onSaved={() => void load(true)} /> : null}
       </Modal>
     </div>
   );
@@ -457,7 +476,10 @@ function RecipeTable({
             className="flex w-full flex-col gap-2 rounded-xl border border-stone-200 bg-white p-3.5 text-left"
           >
             <div className="flex items-start justify-between gap-3">
-              <span className="text-sm font-medium text-stone-900">{row.name}</span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-stone-900">{row.name}</span>
+                {row.source_sheet ? <span className="mt-0.5 block text-xs font-normal text-stone-400">{row.source_sheet}</span> : null}
+              </span>
               <EntityChip code={row.entity_code} />
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500">
@@ -495,6 +517,7 @@ function RecipeTable({
                   <button type="button" className="text-left font-medium text-brand-800 hover:underline" onClick={() => onOpen(row)}>
                     {row.name}
                   </button>
+                  {row.source_sheet ? <div className="text-xs text-stone-400">{row.source_sheet}</div> : null}
                   {row.status !== 'active' ? <div className="text-xs text-stone-400">{row.status}</div> : null}
                 </td>
                 <td>
