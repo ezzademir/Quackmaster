@@ -6,7 +6,9 @@ import MIG084 from '../../supabase/migrations/20261024100000_084_costing_schema.
 import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_role.sql?raw';
 import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
+import MIG092 from '../../supabase/migrations/20261026120000_092_tag_po_receipt_adjustments.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
+import RB092 from '../../supabase/rollbacks/092_rollback.sql?raw';
 import { receivingUom } from './procurementPayloads';
 import { buildDeliveryLines } from './receiving';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
@@ -189,7 +191,7 @@ const PAD_UNTAGGED = `INSERT INTO purchase_orders (order_number, supplier_id, st
 const UNPAD = `DELETE FROM purchase_orders WHERE order_number LIKE 'PO-PAD-%';`;
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['LIVE_CANCEL', LIVE_CANCEL], ['PAD', PAD_UNTAGGED], ['084', MIG084], ['UNPAD', UNPAD], ['085', MIG085], ['088', MIG088], ['POS', POS]]) {
+  for (const [n, sql] of [['BASE', BASE], ['081', MIG081], ['LIVE_CANCEL', LIVE_CANCEL], ['PAD', PAD_UNTAGGED], ['084', MIG084], ['UNPAD', UNPAD], ['085', MIG085], ['088', MIG088], ['092', MIG092], ['POS', POS]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -1338,6 +1340,47 @@ describe('F3 (088): cancelling a received PO reverses its receipts with the rece
     // a second cancel does nothing
     expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: false, error: 'already_cancelled' });
     expect(await mov(pg)).toHaveLength(2);
+  });
+
+  it('a receipt correction is tagged with the PO entity, and cancelling afterwards leaves no phantom balance', async () => {
+    const pg = await db();
+    expect((await as(pg, BUYER_QT, () => deliver(pg, 10)))[0].r).toMatchObject({ success: true });
+    const down = (await as(pg, ADMIN, () => rows(pg, `select adjust_po_receipt('${L_QT}', 8, 'short delivery') r`)))[0].r as Record<string, unknown>;
+    expect(down).toMatchObject({ success: true });
+    expect(Number(down.posted_delta)).toBe(-2);
+    expect(await mov(pg)).toEqual([{ entity_code: 'QT', q: 10, s: L_QT }, { entity_code: 'QT', q: -2, s: L_QT }]);
+    expect(await split(pg)).toEqual([{ entity_code: 'QT', q: 8 }]);
+    expect(await qoh(pg)).toBe(8);
+    expect((await as(pg, ADMIN, () => rows(pg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true });
+    expect(await split(pg)).toEqual([]);
+    expect(await qoh(pg)).toBe(0);
+    expect(await count(pg, `select * from hub_stock_movements where raw_material_id='${RM}' and entity_code is null`)).toBe(0);
+
+    const upPg = await db();
+    expect((await as(upPg, BUYER_QT, () => deliver(upPg, 10)))[0].r).toMatchObject({ success: true });
+    const up = (await as(upPg, ADMIN, () => rows(upPg, `select adjust_po_receipt('${L_QT}', 12, 'extra sack') r`)))[0].r as Record<string, unknown>;
+    expect(up).toMatchObject({ success: true });
+    expect(Number(up.posted_delta)).toBe(2);
+    expect(await mov(upPg)).toEqual([{ entity_code: 'QT', q: 10, s: L_QT }, { entity_code: 'QT', q: 2, s: L_QT }]);
+    expect(await split(upPg)).toEqual([{ entity_code: 'QT', q: 12 }]);
+    expect((await as(upPg, ADMIN, () => rows(upPg, CANCEL(PO_QT))))[0].r).toMatchObject({ success: true });
+    expect(await split(upPg)).toEqual([]);
+    expect(await qoh(upPg)).toBe(0);
+  });
+
+  it('092 rollback restores the untagged correction, and re-applying tags the next one', async () => {
+    const pg = await db();
+    await pg.exec(RB092);
+    expect((await as(pg, BUYER_QT, () => deliver(pg, 10)))[0].r).toMatchObject({ success: true });
+    expect((await as(pg, ADMIN, () => rows(pg, `select adjust_po_receipt('${L_QT}', 8, 'short delivery') r`)))[0].r).toMatchObject({ success: true });
+    expect(await mov(pg)).toEqual([{ entity_code: 'QT', q: 10, s: L_QT }, { entity_code: null, q: -2, s: null }]);
+    await pg.exec(MIG092);
+    expect((await as(pg, ADMIN, () => rows(pg, `select adjust_po_receipt('${L_QT}', 6, 'short again') r`)))[0].r).toMatchObject({ success: true });
+    expect(await mov(pg)).toEqual([
+      { entity_code: 'QT', q: 10, s: L_QT },
+      { entity_code: null, q: -2, s: null },
+      { entity_code: 'QT', q: -2, s: L_QT },
+    ]);
   });
 
   it('part-received PO (two deliveries): both are reversed QT; the other entity\'s stock in the shared hub row is untouched', async () => {
