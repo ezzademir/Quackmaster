@@ -223,6 +223,9 @@ export function lineWrite(input: LineFieldInput): LineWriteResult {
   if (!supplier.ok) return supplier;
   const subRecipe = optionalUuid(input.component_sub_recipe_id, 'Component sub-recipe');
   if (!subRecipe.ok) return subRecipe;
+  if (supplier.value && subRecipe.value) {
+    return { ok: false, error: 'A line can point at a supplier item or a sub-recipe, not both.' };
+  }
   if (input.cost_complete && input.price_basis === 'pending') {
     return { ok: false, error: 'A pending line cannot be marked cost complete.' };
   }

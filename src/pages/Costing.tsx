@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EntityChip } from '../components/EntityChip';
 import { Modal } from '../components/Modal';
+import { BomLinkReadout } from '../components/BomLinkField';
+import { BomCostProvider, useBomLineCost } from '../components/BomCostProvider';
 import { RecipeEditor } from '../components/RecipeEditor';
 import { Button, EmptyState, ListRow, PageHeader, StatCard, Status, Tabs } from '../components/ui';
 import { useAuth } from '../utils/auth';
@@ -45,6 +47,27 @@ function foodCost(row: { cost_complete: boolean; food_cost_rm: number | string |
   if (row.cost_complete) return formatRm(row.food_cost_rm, 4);
   if (row.known_cost_rm == null) return '—';
   return `${formatRm(row.known_cost_rm, 4)} partial`;
+}
+
+function RecipeLineRow({ line }: { line: BomLineRow }) {
+  const cost = useBomLineCost(line);
+  return (
+    <ListRow
+      title={line.component_name}
+      meta={`${formatQty(line.qty)} ${line.unit ?? ''} · ${line.price_basis}`}
+      aside={<span className="tabular-nums">{formatRm(cost.lineTotal, 4)}</span>}
+      body={
+        <div className="space-y-2">
+          <BomLinkReadout line={line} />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+            {costStatus(line.cost_complete)}
+            {line.issues ? <span className="text-amber-800">{line.issues}</span> : null}
+            {line.shared_ingredient ? <span className="text-stone-400">Shared ingredient</span> : null}
+          </div>
+        </div>
+      }
+    />
+  );
 }
 
 function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () => void }) {
@@ -93,6 +116,7 @@ function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () =
   }, [recipe.id, recipe.kind, reloadKey]);
 
   return (
+    <BomCostProvider>
     <div className="space-y-4">
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
@@ -125,19 +149,7 @@ function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () =
       ) : (
         <div className="ios-group">
           {lines.map((line) => (
-            <ListRow
-              key={line.id}
-              title={line.component_name}
-              meta={`${formatQty(line.qty)} ${line.unit ?? ''} · ${line.price_basis}`}
-              aside={<span className="tabular-nums">{line.cost_complete ? formatRm(line.line_cost_rm, 4) : '—'}</span>}
-              body={
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
-                  {costStatus(line.cost_complete)}
-                  {line.issues ? <span className="text-amber-800">{line.issues}</span> : null}
-                  {line.shared_ingredient ? <span className="text-stone-400">Shared ingredient</span> : null}
-                </div>
-              }
-            />
+            <RecipeLineRow key={line.id} line={line} />
           ))}
         </div>
       )}
@@ -151,6 +163,7 @@ function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () =
         }}
       />
     </div>
+    </BomCostProvider>
   );
 }
 

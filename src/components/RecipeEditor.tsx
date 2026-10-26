@@ -10,6 +10,7 @@ import {
   type RecipeFieldInput,
 } from '../utils/recipeEdit';
 import { supabase } from '../utils/supabase';
+import { BomLinkField } from './BomLinkField';
 import { Button } from './ui';
 
 const controlClass = 'min-h-11 w-full rounded-xl border border-stone-200 bg-white px-3 text-sm text-stone-900';
@@ -191,12 +192,14 @@ function RecipeFields({
 function LineFields({
   line,
   entities,
+  excludeSubRecipeId,
   busy,
   onSubmit,
   onCancel,
 }: {
   line: BomLineRow;
   entities: string[];
+  excludeSubRecipeId: string | null;
   busy: boolean;
   onSubmit: (draft: LineFieldInput) => void;
   onCancel: () => void;
@@ -229,11 +232,12 @@ function LineFields({
         <TextInput label="Line cost RM" value={draft.line_cost} inputMode="decimal" onChange={(line_cost) => set({ line_cost })} />
         <TextInput label="Line source sheet" value={draft.source_sheet} onChange={(source_sheet) => set({ source_sheet })} />
         <TextInput label="Source row" value={draft.source_row} inputMode="numeric" onChange={(source_row) => set({ source_row })} />
-        <TextInput label="Supplier item" value={draft.supplier_item_id} onChange={(supplier_item_id) => set({ supplier_item_id })} />
-        <TextInput
-          label="Component sub-recipe"
-          value={draft.component_sub_recipe_id}
-          onChange={(component_sub_recipe_id) => set({ component_sub_recipe_id })}
+        <BomLinkField
+          line={line}
+          supplierItemId={draft.supplier_item_id}
+          componentSubRecipeId={draft.component_sub_recipe_id}
+          excludeSubRecipeId={excludeSubRecipeId}
+          onChange={set}
         />
       </div>
       <AreaInput label="Issues" value={draft.issues} onChange={(issues) => set({ issues })} />
@@ -371,6 +375,7 @@ export function RecipeEditor({
             key={line.id}
             line={{ ...line, entity_code: line.entity_code || recipe.entity_code }}
             entities={entities}
+            excludeSubRecipeId={recipe.kind === 'sub-recipe' ? recipe.id : null}
             busy={busy}
             onSubmit={(input) => void saveLine(line, input)}
             onCancel={() => setEditingLineId(null)}
