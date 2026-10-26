@@ -19,7 +19,8 @@
     max-height: 100dvh;
     overflow: hidden;
     overscroll-behavior: none;
-    @apply bg-stone-50 text-stone-900 antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    @apply bg-[#f2f2f7] text-stone-900 antialiased;
   }
 
   #root {
@@ -73,7 +74,8 @@
   }
 
   .panel {
-    @apply rounded-xl border border-stone-200 bg-white;
+    @apply rounded-[1.25rem] border border-white/70 bg-white/90 shadow-sm backdrop-blur-xl;
+    corner-shape: squircle;
   }
 
   .detail-meta {

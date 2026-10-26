@@ -7,6 +7,7 @@ import MIG085 from '../../supabase/migrations/20261024100100_085_procurement_rol
 import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_admin_scope_row_security.sql?raw';
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import MIG089 from '../../supabase/migrations/20261024100400_089_po_cancel_request.sql?raw';
+import MIG091 from '../../supabase/migrations/20261026091332_091_void_supplier_bill.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
@@ -191,7 +192,7 @@ const UP_TO_088: [string, string][] = [
 ];
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [...UP_TO_088, ['089', MIG089]]) {
+  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -381,6 +382,25 @@ describe('089: request then approve, reject, admin direct, guards, RLS, atomicit
     expect(await as(pg, ADMIN, () => err(pg.exec(`select approve_po_cancel_request('${pending.request_id}')`)))).toMatch(/bills_on_po/);
     expect({ po: await poState(pg), req: await reqs(pg), qoh: await qoh(pg) }).toEqual(beforeApprove);
     expect(MIG089).toMatch(/Handle the bill through accounting first/);
+  });
+
+  it('an admin can void an unpaid bill, which lets the purchase order be cancelled', async () => {
+    const pg = await db();
+    await as(pg, BUYER_QT, () => deliver(pg, 4));
+    const BILL = '00000000-0000-0000-0000-0000000b9902';
+    await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, purchase_order_id, bill_number, bill_date, amount_rm) VALUES ('${BILL}','QT','${SUP}','${PO_QT}','G1-void','2026-10-20',12)`));
+    expect(await as(pg, BUYER_QT, () => err(pg.exec(`select void_supplier_bill('${BILL}', 'wrong bill')`)))).toMatch(/forbidden/);
+    expect(await as(pg, ADMIN, () => err(pg.exec(`UPDATE supplier_bills SET purchase_order_id = NULL WHERE id='${BILL}'`)))).toMatch(/bill_void_via_rpc/);
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('${BILL}', 12, '2026-10-21', 'cash')`));
+    expect(await as(pg, ADMIN, () => err(pg.exec(`select void_supplier_bill('${BILL}', 'paid already')`)))).toMatch(/bill_has_payments/);
+    await as(pg, ADMIN, () => pg.exec(`DELETE FROM supplier_payments WHERE bill_id='${BILL}'`));
+    const voided = await as(pg, ADMIN, () => rpc(pg, `select void_supplier_bill('${BILL}', 'wrong delivery') r`));
+    expect(voided).toMatchObject({ success: true, purchase_order_id: PO_QT });
+    expect(await rows(pg, `select purchase_order_id::text po, voided_purchase_order_id::text kept, void_reason from supplier_bills where id='${BILL}'`)).toEqual([
+      { po: null, kept: PO_QT, void_reason: 'wrong delivery' },
+    ]);
+    expect(await as(pg, ADMIN, () => rpc(pg, `select cancel_purchase_order('${PO_QT}') r`))).toMatchObject({ success: true });
+    expect(await count(pg, `select * from data_ledger where entity_type='supplier_bill' and action='voided'`)).toBe(1);
   });
 
   it('empty / blank reason is refused; a second pending request is refused; double decision is refused; cancelled PO is refused', async () => {

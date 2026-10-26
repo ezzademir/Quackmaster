@@ -7,6 +7,7 @@ import { Layout } from './components/Layout';
 import { isPathAllowedForRole, homePathForRole } from './utils/roleAccess';
 import { Receiving } from './pages/Receiving';
 import { Bills } from './pages/Bills';
+import { SectionHome } from './pages/SectionHome';
 
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
 const Register = lazy(() => import('./pages/Register').then((m) => ({ default: m.Register })));
@@ -223,6 +224,10 @@ function App() {
                 <Route path="/receiving" element={<Receiving />} />
                 <Route path="/bills" element={<Bills />} />
                 <Route path="/costing" element={<CostingGate />} />
+                <Route path="/buy" element={<SectionHome />} />
+                <Route path="/kitchen" element={<SectionHome />} />
+                <Route path="/outlets" element={<SectionHome />} />
+                <Route path="/books" element={<SectionHome />} />
                 <Route path="/suppliers" element={<Navigate to="/procurement?tab=suppliers" replace />} />
                 <Route path="/sales" element={<Sales />} />
                 <Route path="/pos-compare" element={<PosCompareGate />} />
