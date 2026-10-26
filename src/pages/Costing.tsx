@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EntityChip } from '../components/EntityChip';
 import { Modal } from '../components/Modal';
+import { BomLinkReadout } from '../components/BomLinkField';
+import { BomCostProvider, useBomLineCost } from '../components/BomCostProvider';
 import { RecipeEditor } from '../components/RecipeEditor';
-import { Button, EmptyState, PageHeader, StatCard, Status, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard, Status, Tabs } from '../components/ui';
 import { useAuth } from '../utils/auth';
 import {
   costingStats,
@@ -45,6 +47,27 @@ function foodCost(row: { cost_complete: boolean; food_cost_rm: number | string |
   if (row.cost_complete) return formatRm(row.food_cost_rm, 4);
   if (row.known_cost_rm == null) return '—';
   return `${formatRm(row.known_cost_rm, 4)} partial`;
+}
+
+function RecipeLineRow({ line }: { line: BomLineRow }) {
+  const cost = useBomLineCost(line);
+  return (
+    <ListRow
+      title={line.component_name}
+      meta={`${formatQty(line.qty)} ${line.unit ?? ''} · ${line.price_basis}`}
+      aside={<span className="tabular-nums">{formatRm(cost.lineTotal, 4)}</span>}
+      body={
+        <div className="space-y-2">
+          <BomLinkReadout line={line} />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+            {costStatus(line.cost_complete)}
+            {line.issues ? <span className="text-amber-800">{line.issues}</span> : null}
+            {line.shared_ingredient ? <span className="text-stone-400">Shared ingredient</span> : null}
+          </div>
+        </div>
+      }
+    />
+  );
 }
 
 function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () => void }) {
@@ -93,6 +116,7 @@ function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () =
   }, [recipe.id, recipe.kind, reloadKey]);
 
   return (
+    <BomCostProvider>
     <div className="space-y-4">
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
@@ -123,35 +147,10 @@ function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () =
       {lines.length === 0 && !error ? (
         <EmptyState title="No lines" description="This recipe has no bill of materials." />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="data-table min-w-[640px]">
-            <thead>
-              <tr>
-                <th>Component</th>
-                <th>Qty</th>
-                <th>Line cost</th>
-                <th>Basis</th>
-                <th>Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((line) => (
-                <tr key={line.id}>
-                  <td>
-                    <div className="font-medium">{line.component_name}</div>
-                    {line.issues ? <div className="text-xs text-amber-800">{line.issues}</div> : null}
-                    {line.shared_ingredient ? <div className="text-xs text-stone-400">Shared ingredient</div> : null}
-                  </td>
-                  <td className="tabular-nums">
-                    {formatQty(line.qty)} {line.unit ?? ''}
-                  </td>
-                  <td className="tabular-nums">{line.cost_complete ? formatRm(line.line_cost_rm, 4) : '—'}</td>
-                  <td className="capitalize">{line.price_basis}</td>
-                  <td>{costStatus(line.cost_complete)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="ios-group">
+          {lines.map((line) => (
+            <RecipeLineRow key={line.id} line={line} />
+          ))}
         </div>
       )}
       <RecipeEditor
@@ -164,6 +163,7 @@ function RecipeLines({ recipe, onSaved }: { recipe: RecipeCostRow; onSaved: () =
         }}
       />
     </div>
+    </BomCostProvider>
   );
 }
 
@@ -178,7 +178,7 @@ function FlagRow({
 }) {
   const [note, setNote] = useState('');
   return (
-    <div className="space-y-3 border-b border-stone-100 px-4 py-3 last:border-0">
+    <div className="space-y-3 bg-white px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-medium text-stone-900">{flag.item_name}</div>
@@ -387,47 +387,25 @@ export function Costing() {
       ) : null}
 
       {!loading && tab === 'drift' && visibleDrift.length > 0 ? (
-        <div className="panel overflow-x-auto">
-          <table className="data-table min-w-[760px]">
-            <thead>
-              <tr>
-                <th>Recipe</th>
-                <th>Component</th>
-                <th>Entity</th>
-                <th>Saved</th>
-                <th>Current</th>
-                <th>Drift</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleDrift.map((row) => (
-                <tr key={row.bom_line_id}>
-                  <td>
-                    <div className="font-medium">{row.parent_name}</div>
-                    <div className="text-xs capitalize text-stone-400">{row.parent_kind}</div>
-                  </td>
-                  <td>
-                    <div>{row.component_name}</div>
-                    <div className="text-xs text-stone-400">{row.supplier_item}</div>
-                  </td>
-                  <td>
-                    <EntityChip code={row.entity_code} />
-                  </td>
-                  <td className="tabular-nums">{formatRm(row.snapshot_cost_rm, 4)}</td>
-                  <td className="tabular-nums">{formatRm(row.current_cost_rm, 4)}</td>
-                  <td className={`tabular-nums ${Number(row.drift_rm) > 0 ? 'text-red-700' : 'text-stone-700'}`}>
-                    {formatRm(row.drift_rm, 4)}
-                    <div className="text-xs">{formatPct(row.drift_pct)}</div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="ios-group">
+          {visibleDrift.map((row) => (
+            <ListRow
+              key={row.bom_line_id}
+              title={row.component_name}
+              meta={`${row.parent_name} · ${row.parent_kind}${row.supplier_item ? ` · ${row.supplier_item}` : ''}`}
+              aside={<EntityChip code={row.entity_code} />}
+              body={
+                <p className={`text-[13px] tabular-nums ${Number(row.drift_rm) > 0 ? 'text-red-700' : 'text-stone-600'}`}>
+                  Saved {formatRm(row.snapshot_cost_rm, 4)} · current {formatRm(row.current_cost_rm, 4)} · drift {formatRm(row.drift_rm, 4)} ({formatPct(row.drift_pct)})
+                </p>
+              }
+            />
+          ))}
         </div>
       ) : null}
 
       {!loading && tab === 'flags' && visibleFlags.length > 0 ? (
-        <div className="panel">
+        <div className="ios-group">
           {visibleFlags.map((flag) => (
             <FlagRow key={String(flag.id)} flag={flag} busy={busyFlagId !== null} onDecide={(row, decision, note) => void decide(row, decision, note)} />
           ))}
@@ -466,83 +444,34 @@ function RecipeTable({
   onOpen: (row: RecipeCostRow) => void;
 }) {
   return (
-    <>
-      <div className="space-y-2 md:hidden">
-        {rows.map((row) => (
-          <button
-            key={row.id}
-            type="button"
-            onClick={() => onOpen(row)}
-            className="flex w-full flex-col gap-2 rounded-xl border border-stone-200 bg-white p-3.5 text-left"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <span className="min-w-0">
-                <span className="block text-sm font-medium text-stone-900">{row.name}</span>
-                {row.source_sheet ? <span className="mt-0.5 block text-xs font-normal text-stone-400">{row.source_sheet}</span> : null}
-              </span>
+    <div className="ios-group">
+      {rows.map((row) => (
+        <ListRow
+          key={row.id}
+          title={row.name}
+          onClick={() => onOpen(row)}
+          body={
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-stone-500">
               <EntityChip code={row.entity_code} />
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500">
+              {row.source_sheet ? <span>{row.source_sheet}</span> : null}
+              {row.status !== 'active' ? <span>{row.status}</span> : null}
               {costStatus(row.cost_complete)}
               <span className="tabular-nums">{foodCost(row)}</span>
+              <span className="tabular-nums">{formatRm(row.selling_price_ex_sst_rm)}</span>
               {showCogs && 'cogs_dine_in_pct' in row ? (
-                <span className="tabular-nums">Dine-in {formatPct(row.cogs_dine_in_pct)}</span>
-              ) : null}
-            </div>
-          </button>
-        ))}
-      </div>
-      <div className="panel hidden overflow-x-auto md:block">
-        <table className="data-table min-w-[720px]">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Entity</th>
-              <th>Food cost</th>
-              <th>Price ex SST</th>
-              {showCogs ? (
                 <>
-                  <th>Dine-in COGS</th>
-                  <th>Takeaway COGS</th>
+                  <span className="tabular-nums">Dine-in {formatPct(row.cogs_dine_in_pct)}</span>
+                  <span className="tabular-nums">Takeaway {formatPct(row.cogs_takeaway_pct)}</span>
                 </>
               ) : null}
-              <th>Lines</th>
-              <th>Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}>
-                <td>
-                  <button type="button" className="text-left font-medium text-brand-800 hover:underline" onClick={() => onOpen(row)}>
-                    {row.name}
-                  </button>
-                  {row.source_sheet ? <div className="text-xs text-stone-400">{row.source_sheet}</div> : null}
-                  {row.status !== 'active' ? <div className="text-xs text-stone-400">{row.status}</div> : null}
-                </td>
-                <td>
-                  <EntityChip code={row.entity_code} />
-                </td>
-                <td className="tabular-nums">{foodCost(row)}</td>
-                <td className="tabular-nums">{formatRm(row.selling_price_ex_sst_rm)}</td>
-                {showCogs && 'cogs_dine_in_pct' in row ? (
-                  <>
-                    <td className="tabular-nums">{formatPct(row.cogs_dine_in_pct)}</td>
-                    <td className="tabular-nums">{formatPct(row.cogs_takeaway_pct)}</td>
-                  </>
-                ) : null}
-                <td className="tabular-nums">
-                  {formatQty(row.line_count)}
-                  {Number(row.incomplete_lines) > 0 ? (
-                    <div className="text-xs text-amber-800">{formatQty(row.incomplete_lines)} incomplete</div>
-                  ) : null}
-                </td>
-                <td>{costStatus(row.cost_complete)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
+              <span className="tabular-nums">
+                {formatQty(row.line_count)} lines
+                {Number(row.incomplete_lines) > 0 ? ` · ${formatQty(row.incomplete_lines)} incomplete` : ''}
+              </span>
+            </div>
+          }
+        />
+      ))}
+    </div>
   );
 }

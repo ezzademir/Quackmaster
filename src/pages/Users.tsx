@@ -16,7 +16,7 @@ import {
   Search,
   PanelRightClose,
 } from 'lucide-react';
-import { Button, EmptyState, ListRow } from '../components/ui';
+import { Button, EmptyState, ListRow, Tabs } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
 import { parseApproveResult } from '../utils/approveResult';
 import { countDeactivated, filterByActive, isUserActive } from '../utils/userActive';
@@ -729,43 +729,16 @@ export function Users() {
           </div>
         )}
 
-        <div className="mb-6 flex flex-wrap gap-4 border-b border-stone-200">
-          <button
-            type="button"
-            onClick={() => setActiveTab('approved')}
-            className={`px-4 py-3 font-medium transition-colors ${
-              activeTab === 'approved'
-                ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-stone-600 hover:text-stone-900'
-            }`}
-          >
-            Registered ({filteredUsers.length}
-            {q ? ` of ${users.length}` : ''})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('pending')}
-            className={`px-4 py-3 font-medium transition-colors ${
-              activeTab === 'pending'
-                ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-stone-600 hover:text-stone-900'
-            }`}
-          >
-            Pending ({filteredPending.length}
-            {q ? ` of ${pendingUsers.length}` : ''})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('rejected')}
-            className={`px-4 py-3 font-medium transition-colors ${
-              activeTab === 'rejected'
-                ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-stone-600 hover:text-stone-900'
-            }`}
-          >
-            Rejected ({filteredRejected.length}
-            {q ? ` of ${rejectedUsers.length}` : ''})
-          </button>
+        <div className="mb-4">
+          <Tabs
+            value={activeTab}
+            onChange={setActiveTab}
+            items={[
+              { id: 'approved', label: `Registered (${filteredUsers.length}${q ? ` of ${users.length}` : ''})` },
+              { id: 'pending', label: `Pending (${filteredPending.length}${q ? ` of ${pendingUsers.length}` : ''})` },
+              { id: 'rejected', label: `Rejected (${filteredRejected.length}${q ? ` of ${rejectedUsers.length}` : ''})` },
+            ]}
+          />
         </div>
 
         {activeTab === 'approved' && countDeactivated(users) > 0 && (
@@ -786,7 +759,7 @@ export function Users() {
             </div>
           ) : (
             <>
-              <div className="space-y-2 md:hidden">
+              <div className="ios-group">
                 {filteredUsers.map((user) => {
                   const outletLabel =
                     user.role?.toLowerCase()?.trim() === 'supervisor'
@@ -796,7 +769,8 @@ export function Users() {
                     <ListRow
                       key={user.id}
                       title={user.email}
-                      meta={`${user.full_name || 'N/A'} · ${user.role}${String(user.role).toLowerCase().trim() === 'procurement' ? ` (${tagsLabel(user.entity_tags)})` : ''} · ${outletLabel}${isUserActive(user) ? '' : ' · Deactivated'}`}
+                      meta={`${user.full_name || 'N/A'} · ${user.role}${String(user.role).toLowerCase().trim() === 'procurement' ? ` (${tagsLabel(user.entity_tags)})` : ''} · ${outletLabel}${isUserActive(user) ? '' : ' · Deactivated'} · login ${user.last_login ? new Date(user.last_login).toLocaleDateString() : '—'}`}
+                      body={<div className="text-[13px]">{statusCell(user)}</div>}
                       aside={
                         <button
                           type="button"
@@ -816,74 +790,6 @@ export function Users() {
                   );
                 })}
               </div>
-              <div className="panel hidden overflow-x-auto md:block">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Email</th>
-                      <th className="hidden sm:table-cell">Name</th>
-                      <th>Role</th>
-                      <th className="hidden lg:table-cell">Outlet</th>
-                      <th className="hidden md:table-cell">Status</th>
-                      <th className="hidden lg:table-cell">Login</th>
-                      <th className="text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredUsers.map((user) => (
-                      <tr key={user.id}>
-                        <td className="text-xs sm:text-sm">{user.email}</td>
-                        <td className="hidden sm:table-cell text-xs sm:text-sm">
-                          {user.full_name || 'N/A'}
-                        </td>
-                        <td className="text-xs sm:text-sm">
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              String(user.role).toLowerCase().trim() === 'admin'
-                                ? 'bg-purple-100 text-purple-700'
-                                : String(user.role).toLowerCase().trim() === 'supervisor'
-                                  ? 'bg-amber-100 text-amber-900'
-                                  : 'bg-blue-100 text-blue-700'
-                            }`}
-                          >
-                            {user.role}
-                            {String(user.role).toLowerCase().trim() === 'procurement' && ` · ${tagsLabel(user.entity_tags)}`}
-                          </span>
-                          {!isUserActive(user) && (
-                            <span className="ml-1 rounded-full bg-stone-200 px-2 py-1 text-xs font-medium text-stone-700">
-                              Deactivated
-                            </span>
-                          )}
-                        </td>
-                        <td className="hidden lg:table-cell text-xs">
-                          {user.role?.toLowerCase()?.trim() === 'supervisor'
-                            ? outletNameById.get(user.assigned_outlet_id ?? '') ?? '—'
-                            : '—'}
-                        </td>
-                        <td className="hidden md:table-cell text-xs">{statusCell(user)}</td>
-                        <td className="hidden lg:table-cell text-xs text-stone-600">
-                          {user.last_login ? new Date(user.last_login).toLocaleDateString() : 'N/A'}
-                        </td>
-                        <td className="text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNameDraft(user.full_name ?? '');
-                              setRoleDraft(roleDraftFromRole(user.role));
-                            setTagsDraft(tagsDraftFromUser(user.role, user.entity_tags));
-                              setOutletDraft(user.assigned_outlet_id ?? '');
-                              setDrawer({ open: true, tab: 'approved', user });
-                            }}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium"
-                          >
-                            Manage
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </>
           ))}
 
@@ -894,7 +800,7 @@ export function Users() {
             </div>
           ) : (
             <>
-              <div className="space-y-2 md:hidden">
+              <div className="ios-group">
                 {filteredPending.map((user) => (
                   <ListRow
                     key={user.id}
@@ -930,58 +836,6 @@ export function Users() {
                   />
                 ))}
               </div>
-              <div className="panel hidden overflow-x-auto md:block">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Email</th>
-                      <th className="hidden sm:table-cell">Name</th>
-                      <th>Requested</th>
-                      <th className="text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPending.map((user) => (
-                      <tr key={user.id}>
-                        <td className="text-xs sm:text-sm">{user.email}</td>
-                        <td className="hidden sm:table-cell text-xs sm:text-sm">
-                          {user.full_name || 'N/A'}
-                        </td>
-                        <td className="text-xs sm:text-sm text-stone-600">
-                          {new Date(user.requested_at).toLocaleDateString()}
-                        </td>
-                        <td className="text-right">
-                          <div className="flex flex-wrap justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setDrawer({ open: true, tab: 'pending', user })}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-stone-50 text-stone-800 rounded-lg hover:bg-stone-100 transition-colors text-xs font-medium"
-                            >
-                              Details
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleApproveUser(user.id)}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors text-sm font-medium"
-                            >
-                              <Check size={14} />
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRejectUser(user.id)}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium"
-                            >
-                              <X size={14} />
-                              Reject
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </>
           ))}
 
@@ -992,7 +846,7 @@ export function Users() {
             </div>
           ) : (
             <>
-              <div className="space-y-2 md:hidden">
+              <div className="ios-group">
                 {filteredRejected.map((row) => (
                   <ListRow
                     key={`${row.registration_id ?? row.id}-rej`}
@@ -1000,6 +854,7 @@ export function Users() {
                     meta={`${row.full_name || 'N/A'} · ${
                       row.reviewed_at ? new Date(row.reviewed_at).toLocaleDateString() : '—'
                     }`}
+                    body={<p className="text-[13px] text-stone-500">{row.rejection_reason || 'No reason recorded'}</p>}
                     aside={
                       <button
                         type="button"
@@ -1011,47 +866,6 @@ export function Users() {
                     }
                   />
                 ))}
-              </div>
-              <div className="panel hidden overflow-x-auto md:block">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Email</th>
-                      <th className="hidden sm:table-cell">Name</th>
-                      <th className="hidden lg:table-cell">Reason</th>
-                      <th>Reviewed</th>
-                      <th className="text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredRejected.map((row) => (
-                      <tr key={`${row.registration_id ?? row.id}-rej`}>
-                        <td className="text-xs sm:text-sm">{row.email}</td>
-                        <td className="hidden sm:table-cell text-xs sm:text-sm">
-                          {row.full_name || 'N/A'}
-                        </td>
-                        <td
-                          className="hidden lg:table-cell text-xs text-stone-600 max-w-xs truncate"
-                          title={row.rejection_reason ?? ''}
-                        >
-                          {row.rejection_reason || '—'}
-                        </td>
-                        <td className="text-xs text-stone-600">
-                          {row.reviewed_at ? new Date(row.reviewed_at).toLocaleDateString() : '—'}
-                        </td>
-                        <td className="text-right">
-                          <button
-                            type="button"
-                            onClick={() => setDrawer({ open: true, tab: 'rejected', row })}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-stone-50 text-stone-800 rounded-lg hover:bg-stone-100 transition-colors text-xs font-medium"
-                          >
-                            Details
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </>
           ))}

@@ -6,7 +6,6 @@ import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import {
   actorDisplayName,
-  actorSubtitle,
   fetchActorProfilesMap,
   ledgerChangeBullets,
   ledgerPurposeLine,
@@ -31,13 +30,6 @@ interface LedgerEntry {
   metadata: Record<string, unknown> | null;
   created_at: string;
 }
-
-const OP_COLORS: Record<string, string> = {
-  insert: 'bg-emerald-100 text-emerald-700',
-  update: 'bg-blue-100 text-blue-700',
-  delete: 'bg-red-100 text-red-700',
-  event: 'bg-amber-100 text-amber-700',
-};
 
 const MODULE_OPTIONS = ['procurement', 'production', 'distribution', 'inventory', 'auth', 'users', 'settings', 'waste', 'stock_take'];
 
@@ -218,7 +210,7 @@ export function Ledger() {
         </div>
       ) : (
         <>
-          <div className="space-y-2 md:hidden">
+          <div className="ios-group">
             {rows.map((row) => {
               const prof = row.user_id ? profileMap.get(row.user_id) : undefined;
               const name = actorDisplayName(prof, row.user_email);
@@ -228,87 +220,24 @@ export function Ledger() {
                 <ListRow
                   key={row.id}
                   title={purpose}
-                  meta={`${prettyTime(row.created_at)} · ${name} · ${row.operation}`}
+                  meta={`${prettyTime(row.created_at)} · ${name} · ${row.operation} · ${row.module}`}
                   body={
-                    <ul className="list-inside list-disc space-y-0.5 text-xs text-stone-700">
-                      {valueLines.map((line, i) => (
-                        <li key={i}>{line}</li>
-                      ))}
-                    </ul>
+                    <div className="space-y-2 text-[13px] text-stone-700">
+                      <p className="text-stone-500">
+                        {row.entity_type} · {truncateId(row.entity_id, 12)}
+                        {row.reference_id ? ` · ref ${truncateId(row.reference_id, 12)}` : ''}
+                      </p>
+                      <ul className="list-inside list-disc space-y-0.5">
+                        {valueLines.map((line, i) => (
+                          <li key={i}>{line}</li>
+                        ))}
+                      </ul>
+                      <TechnicalPayload row={row} />
+                    </div>
                   }
                 />
               );
             })}
-          </div>
-
-          <div className="panel hidden overflow-x-auto md:block">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="whitespace-nowrap">Time</th>
-                  <th className="min-w-[9rem]">Who</th>
-                  <th>Operation</th>
-                  <th className="hidden md:table-cell">Scope</th>
-                  <th className="min-w-[11rem]">Purpose</th>
-                  <th className="min-w-[14rem]">Values</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => {
-                  const prof = row.user_id ? profileMap.get(row.user_id) : undefined;
-                  const name = actorDisplayName(prof, row.user_email);
-                  const sub = actorSubtitle(prof, row.user_email);
-                  const purpose = ledgerPurposeLine(row);
-                  const valueLines = ledgerChangeBullets(row);
-
-                  return (
-                    <tr key={row.id} className="align-top">
-                      <td className="whitespace-nowrap text-xs text-stone-500">{prettyTime(row.created_at)}</td>
-                      <td>
-                        <div className="font-medium">{name}</div>
-                        {sub ? <div className="text-xs text-stone-500">{sub}</div> : null}
-                        {!row.user_id && !row.user_email?.trim() ? (
-                          <div className="mt-0.5 text-xs text-amber-700">No actor recorded</div>
-                        ) : null}
-                      </td>
-                      <td>
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                            OP_COLORS[row.operation] ?? 'bg-stone-100 text-stone-700'
-                          }`}
-                        >
-                          {row.operation}
-                        </span>
-                        <div className="mt-1 text-xs capitalize text-stone-600">{row.action}</div>
-                      </td>
-                      <td className="hidden md:table-cell text-xs text-stone-700">
-                        <div className="font-medium">{row.module}</div>
-                        <div>{row.entity_type}</div>
-                        <div className="font-mono text-[11px] text-stone-400" title={row.entity_id}>
-                          {truncateId(row.entity_id, 12)}
-                        </div>
-                        {row.reference_id ? (
-                          <div className="mt-0.5 text-[11px] text-stone-500">
-                            Ref: <span className="font-mono">{truncateId(row.reference_id, 12)}</span>
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="max-w-xs text-xs">
-                        <p className="font-medium leading-snug">{purpose}</p>
-                      </td>
-                      <td className="max-w-lg">
-                        <ul className="list-inside list-disc space-y-0.5 text-xs text-stone-700">
-                          {valueLines.map((line, i) => (
-                            <li key={i}>{line}</li>
-                          ))}
-                        </ul>
-                        <TechnicalPayload row={row} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
           </div>
         </>
       )}

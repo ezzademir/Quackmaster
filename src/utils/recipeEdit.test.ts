@@ -107,6 +107,19 @@ describe('lineWrite', () => {
     expect(result).toEqual({ ok: false, error: 'A pending line cannot be marked cost complete.' });
   });
 
+  it('refuses a line that points at both a supplier item and a sub-recipe', () => {
+    const result = lineWrite(
+      line({
+        supplier_item_id: '00000000-0000-4000-8000-000000000001',
+        component_sub_recipe_id: '00000000-0000-4000-8000-000000000002',
+      }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: 'A line can point at a supplier item or a sub-recipe, not both.',
+    });
+  });
+
   it('requires a cost before a line can be complete', () => {
     const result = lineWrite(line({ line_cost: ' ', cost_complete: true }));
     expect(result).toEqual({ ok: false, error: 'Enter a line cost before marking the line complete.' });

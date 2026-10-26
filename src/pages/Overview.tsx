@@ -717,23 +717,15 @@ export function Overview() {
             {expiringLots.length === 0 ? (
               <EmptyState title="No lots with expiry in this window." />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Batch</th>
-                      <th>Expiry</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {expiringLots.map((lot) => (
-                      <tr key={lot.id}>
-                        <td className="font-medium">{lot.product_batch_label}</td>
-                        <td className="tabular-nums">{lot.expiry_date}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="ios-group">
+                {expiringLots.map((lot) => (
+                  <ListRow
+                    key={lot.id}
+                    title={lot.product_batch_label}
+                    meta="Expiry"
+                    aside={<span className="tabular-nums">{lot.expiry_date}</span>}
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -788,7 +780,7 @@ export function Overview() {
             </Link>
             ). Yield is averaged over up to 30 latest completed runs. Cells use each recipe&apos;s batch unit.
           </p>
-          <div className="space-y-2 md:hidden">
+          <div className="ios-group">
             {recipeKpiRows.map((row) => {
               const batch = row.default_product_batch?.trim();
               return (
@@ -797,9 +789,9 @@ export function Overview() {
                   title={row.name}
                   meta={`${batch || 'No SKU'} · ${row.batch_unit?.trim() || '—'}`}
                   body={
-                    <div className="grid grid-cols-2 gap-2 text-xs tabular-nums text-stone-700">
-                      <span>Hub ATP { (row.hubAvail ?? 0).toLocaleString() }</span>
-                      <span>Outlet ATP { (row.outletAvail ?? 0).toLocaleString() }</span>
+                    <div className="grid grid-cols-2 gap-2 text-[13px] tabular-nums text-stone-700">
+                      <span>Hub ATP {(row.hubAvail ?? 0).toLocaleString()}</span>
+                      <span>Outlet ATP {(row.outletAvail ?? 0).toLocaleString()}</span>
                       <span>
                         Avg yield{' '}
                         {row.avgYieldRec != null && Number.isFinite(row.avgYieldRec)
@@ -812,43 +804,6 @@ export function Overview() {
                 />
               );
             })}
-          </div>
-          <div className="hidden overflow-x-auto md:block">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Recipe</th>
-                  <th>SKU</th>
-                  <th className="text-right">Hub ATP</th>
-                  <th className="text-right">Outlet ATP</th>
-                  <th className="text-right">Avg yield</th>
-                  <th className="text-right">Target %</th>
-                  <th>Unit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recipeKpiRows.map((row) => {
-                  const batch = row.default_product_batch?.trim();
-                  return (
-                    <tr key={row.id}>
-                      <td className="font-medium text-stone-900">{row.name}</td>
-                      <td>{batch || '—'}</td>
-                      <td className="text-right tabular-nums">{(row.hubAvail ?? 0).toLocaleString()}</td>
-                      <td className="text-right tabular-nums">{(row.outletAvail ?? 0).toLocaleString()}</td>
-                      <td className="text-right tabular-nums">
-                        {row.avgYieldRec != null && Number.isFinite(row.avgYieldRec)
-                          ? `${row.avgYieldRec.toFixed(1)}%`
-                          : '—'}
-                      </td>
-                      <td className="text-right tabular-nums text-stone-600">
-                        {row.target_yield_percentage.toFixed(0)}%
-                      </td>
-                      <td className="text-stone-600">{row.batch_unit?.trim() || '—'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
           </div>
         </div>
       )}
@@ -873,49 +828,21 @@ export function Overview() {
         {stockLots.length === 0 ? (
           <EmptyState title="No production lots yet." />
         ) : (
-          <>
-            <div className="space-y-2 md:hidden">
-              {stockLots.map((lot) => (
-                <ListRow
-                  key={lot.id}
-                  title={<span className="font-mono text-xs">{lot.product_batch_label}</span>}
-                  meta={`${lot.run_number}${lot.manufactured_at ? ` · ${new Date(lot.manufactured_at).toLocaleDateString()}` : ''}`}
-                  body={
-                    <div className="flex gap-4 text-xs tabular-nums text-stone-700">
-                      <span>Hub {lot.hubQty.toLocaleString()}</span>
-                      <span>Outlets {lot.outletQty.toLocaleString()}</span>
-                    </div>
-                  }
-                />
-              ))}
-            </div>
-            <div className="hidden overflow-x-auto md:block">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Lot</th>
-                    <th>Run</th>
-                    <th className="hidden sm:table-cell">Made</th>
-                    <th className="text-right">Hub</th>
-                    <th className="text-right">Outlets</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stockLots.map((lot) => (
-                    <tr key={lot.id}>
-                      <td className="font-mono text-xs font-semibold">{lot.product_batch_label}</td>
-                      <td>{lot.run_number}</td>
-                      <td className="hidden tabular-nums text-stone-600 sm:table-cell">
-                        {lot.manufactured_at ? new Date(lot.manufactured_at).toLocaleDateString() : '—'}
-                      </td>
-                      <td className="text-right tabular-nums">{lot.hubQty.toLocaleString()}</td>
-                      <td className="text-right tabular-nums">{lot.outletQty.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+          <div className="ios-group">
+            {stockLots.map((lot) => (
+              <ListRow
+                key={lot.id}
+                title={<span className="font-mono text-[15px]">{lot.product_batch_label}</span>}
+                meta={`${lot.run_number}${lot.manufactured_at ? ` · ${new Date(lot.manufactured_at).toLocaleDateString()}` : ''}`}
+                body={
+                  <div className="flex gap-4 text-[13px] tabular-nums text-stone-700">
+                    <span>Hub {lot.hubQty.toLocaleString()}</span>
+                    <span>Outlets {lot.outletQty.toLocaleString()}</span>
+                  </div>
+                }
+              />
+            ))}
+          </div>
         )}
       </div>
 
