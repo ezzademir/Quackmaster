@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -24,19 +24,8 @@ import {
   Receipt,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
+import { crumbForPath, sectionIsActive, visibleSections } from '../utils/workflowNav';
 import { BottomNav } from './ui/BottomNav';
-
-const mainNav = [{ path: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true }];
-
-const hubNav = [
-  { path: '/procurement', label: 'Procurement', icon: ShoppingCart, exact: false },
-  { path: '/receiving', label: 'Receiving', icon: PackageCheck, exact: true },
-  { path: '/bills', label: 'Bills', icon: Receipt, exact: true },
-  { path: '/costing', label: 'Costing', icon: PieChart, exact: true },
-  { path: '/production', label: 'Production', icon: FlaskConical, exact: false },
-  { path: '/inventory', label: 'Inventory', icon: Boxes, exact: false },
-  { path: '/distribution', label: 'Distribution', icon: Truck, exact: false },
-];
 
 const outletNav = [
   { path: '/sales', label: 'Outlet sales', icon: CircleDollarSign, exact: true },
@@ -57,20 +46,35 @@ const procurementNav = [
   { path: '/suppliers', label: 'Suppliers', icon: Truck, exact: true },
 ];
 
-const posCompareNav = [{ path: '/pos-compare', label: 'POS compare', icon: BarChart3, exact: true }];
+const SECTION_ICON = {
+  today: LayoutDashboard,
+  buy: ShoppingCart,
+  kitchen: FlaskConical,
+  outlets: Truck,
+  books: BookOpenText,
+} as const;
 
-const findNav = [{ path: '/genealogy', label: 'Lot trace', icon: GitBranch, exact: true }];
-
-const stockIntegrityNav = [
-  { path: '/audit', label: 'Stock audit', icon: ClipboardCheck, exact: true },
-  { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
-];
-
-const adminNav = [
-  { path: '/users', label: 'Users', icon: Users, exact: false },
-  { path: '/ledger', label: 'Change log', icon: BookOpenText, exact: false },
-  { path: '/settings', label: 'Settings', icon: Settings, exact: false },
-];
+const TASK_ICON: Record<string, React.ElementType> = {
+  '/': LayoutDashboard,
+  '/procurement': ShoppingCart,
+  '/receiving': PackageCheck,
+  '/bills': Receipt,
+  '/suppliers': Truck,
+  '/production': FlaskConical,
+  '/inventory': Boxes,
+  '/genealogy': GitBranch,
+  '/distribution': Truck,
+  '/sales': CircleDollarSign,
+  '/waste': Trash2,
+  '/stock-take': ClipboardList,
+  '/costing': PieChart,
+  '/audit': ClipboardCheck,
+  '/reconciliation': Scale,
+  '/pos-compare': BarChart3,
+  '/users': Users,
+  '/ledger': BookOpenText,
+  '/settings': Settings,
+};
 
 function NavItem({
   path,
@@ -139,15 +143,12 @@ function NavSection({
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const { profile, user, isAdmin, isSupervisor, isProcurement, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [location.pathname]);
+  const sections = visibleSections(isAdmin);
+  const crumb = crumbForPath(location.pathname);
 
   async function handleSignOut() {
     await signOut();
@@ -165,18 +166,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className="flex h-dvh min-h-0 max-h-dvh overflow-hidden bg-stone-50 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]"
-      style={{ ['--outlet-bottom-nav' as string]: isSupervisor ? '3.5rem' : '0px' }}
+      className="flex h-dvh min-h-0 max-h-dvh overflow-hidden bg-[#f2f2f7] pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]"
     >
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-30 bg-stone-900/20 md:hidden" onClick={() => setSidebarOpen(false)} />
-      )}
-
       <aside
-        className={`fixed z-40 flex min-h-0 flex-shrink-0 flex-col border-r border-stone-200 bg-white transition-all duration-300 ease-in-out max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:left-[env(safe-area-inset-left,0px)] max-md:top-[env(safe-area-inset-top,0px)] h-dvh max-h-dvh md:relative md:h-full ${
-          sidebarOpen ? 'w-60' : '-translate-x-full'
-        } md:translate-x-0 md:w-60 ${collapsed ? 'md:w-[72px]' : ''} ${
-          isSupervisor ? 'max-md:hidden' : ''
+        className={`fixed z-40 hidden min-h-0 flex-shrink-0 flex-col border-r border-white/50 bg-white/70 backdrop-blur-2xl md:relative md:flex md:h-full md:w-60 ${
+          collapsed ? 'md:w-[72px]' : ''
         }`}
       >
         <div
@@ -195,14 +189,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <div className="text-xs text-stone-400 leading-tight">ERP</div>
             </div>
           )}
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(false)}
-            aria-label="Close menu"
-            className="inline-flex size-11 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 hover:text-stone-800 md:hidden"
-          >
-            <span className="text-2xl leading-none">&times;</span>
-          </button>
         </div>
 
         <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-y-contain px-2.5 py-4">
@@ -211,23 +197,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ) : isSupervisor ? (
             <NavSection title="Outlet" collapsed={collapsed} items={outletNav} />
           ) : (
-            <>
-              <NavSection title="Overview" collapsed={collapsed} items={mainNav} />
+            sections.map((section) => (
               <NavSection
-                title="Hub"
+                key={section.id}
+                title={section.label}
                 collapsed={collapsed}
-                items={isAdmin ? hubNav : hubNav.filter((item) => item.path !== '/bills' && item.path !== '/costing')}
+                items={section.tasks.map((task) => ({
+                  path: task.path,
+                  label: task.label,
+                  icon: TASK_ICON[task.path] ?? SECTION_ICON[section.id],
+                  exact: task.path === '/' || task.path === '/bills' || task.path === '/receiving',
+                }))}
               />
-              <NavSection title="Outlets" collapsed={collapsed} items={outletNav} />
-              {isAdmin && <NavSection title="POS" collapsed={collapsed} items={posCompareNav} />}
-              <NavSection title="Find" collapsed={collapsed} items={findNav} />
-              {isAdmin && (
-                <>
-                  <NavSection title="Stock integrity" collapsed={collapsed} items={stockIntegrityNav} />
-                  <NavSection title="Admin" collapsed={collapsed} items={adminNav} />
-                </>
-              )}
-            </>
+            ))
           )}
         </nav>
 
@@ -246,28 +228,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 flex-shrink-0 items-center justify-between gap-3 border-b border-stone-200 bg-white px-3 md:justify-end md:px-6">
-          {!isSupervisor && (
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open menu"
-              className="inline-flex size-11 items-center justify-center rounded-lg text-stone-600 hover:bg-stone-100 hover:text-stone-900 md:hidden"
-            >
-              <Menu size={22} className="shrink-0" aria-hidden />
-            </button>
-          )}
-          {isSupervisor && (
-            <div className="flex min-w-0 items-center gap-2 md:hidden">
-              <img
-                src={`${import.meta.env.BASE_URL}Quackmaster_Logo.png`}
-                alt=""
-                className="h-7 w-7 shrink-0"
-              />
-              <span className="truncate text-sm font-semibold text-stone-900">Quackmaster</span>
-            </div>
-          )}
-          <div className="relative ml-auto">
+        <header className="flex h-14 flex-shrink-0 items-center justify-between gap-3 border-b border-white/50 bg-white/70 px-4 backdrop-blur-xl">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-stone-400">{crumb.section}</p>
+            <p className="truncate text-[17px] font-semibold tracking-tight text-stone-900">{crumb.page}</p>
+          </div>
+          <div className="relative">
             <button
               type="button"
               onClick={() => setUserMenuOpen(!userMenuOpen)}
@@ -311,18 +277,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main
-          className={`min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y ${
-            isSupervisor ? 'max-md:pb-16' : ''
-          }`}
-        >
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain pb-24 touch-pan-y md:pb-0">
           <div className="mx-auto w-full min-w-0 max-w-7xl px-4 py-5 sm:px-5 md:px-6 md:py-8">
             {children}
           </div>
         </main>
       </div>
 
-      {isSupervisor && <BottomNav items={supervisorBottomNav} />}
+      <BottomNav
+        items={
+          isProcurement
+            ? procurementNav
+            : isSupervisor
+              ? supervisorBottomNav
+              : sections.map((section) => ({
+                  path: section.home,
+                  label: section.label,
+                  icon: SECTION_ICON[section.id],
+                  match: (path: string) => sectionIsActive(path, section),
+                }))
+        }
+      />
     </div>
   );
 }

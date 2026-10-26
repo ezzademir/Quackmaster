@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, EmptyState, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
@@ -14,7 +14,22 @@ interface BillRow {
   amount_rm: number;
   paid_rm: number;
   balance_rm: number;
-  payment_status: 'paid' | 'overdue' | 'part_paid' | 'unpaid';
+  payment_status: 'paid' | 'overdue' | 'part_paid' | 'unpaid' | 'void';
+}
+
+interface PaymentRow {
+  id: string;
+  bill_id: string;
+  amount_rm: number;
+  paid_on: string;
+}
+
+function voidFailure(message: string): string {
+  if (message.includes('bill_has_payments')) return 'This bill has payments. Remove them first, then void it.';
+  if (message.includes('bill_already_void')) return 'This bill is already void.';
+  if (message.includes('reason_required')) return 'A reason is required.';
+  if (message.includes('forbidden')) return 'Only an admin can void a bill.';
+  return message;
 }
 
 /** Supplier bills. Procurement records bills and sees payment status read-only; only admins record (part) payments into supplier_payments (DB-enforced). */
@@ -27,17 +42,23 @@ export function Bills() {
   const [msg, setMsg] = useState<string | null>(null);
   const emptyPay = { bill_id: '', amount_rm: '', paid_on: '', method: 'bank_transfer', reference: '', document_path: '', notes: '' };
   const [pay, setPay] = useState(emptyPay);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [voidReason, setVoidReason] = useState<Record<string, string>>({});
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  const voidingRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    const [b, s, e] = await Promise.all([
+    const [b, s, e, p] = await Promise.all([
       supabase.from('v_supplier_bill_status').select('*').order('bill_date', { ascending: false }),
       // only approved suppliers can be billed (085 _supplier_is_active)
       supabase.from('suppliers').select('id, name').eq('status', 'active').order('name'),
       // procurement cannot read business_entities; this view returns only the caller's own entities
       supabase.from('v_my_entities').select('code, name, procurement_tag').order('code'),
+      supabase.from('supplier_payments').select('id, bill_id, amount_rm, paid_on').order('paid_on', { ascending: false }),
     ]);
     if (b.error) setMsg(b.error.message);
     setRows((b.data ?? []) as BillRow[]);
+    setPayments((p.data ?? []) as PaymentRow[]);
     setSuppliers((s.data ?? []) as Array<{ id: string; name: string }>);
     const ents = (e.data ?? []) as MyEntity[];
     setEntities(ents);
@@ -85,6 +106,37 @@ export function Bills() {
     void load();
   }
 
+  async function voidBill(bill: BillRow) {
+    if (voidingRef.current) return;
+    const reason = (voidReason[bill.id] ?? '').trim();
+    if (!reason) {
+      setMsg('A reason is required.');
+      return;
+    }
+    voidingRef.current = bill.id;
+    setVoidingId(bill.id);
+    const { error } = await supabase.rpc('void_supplier_bill', { p_bill_id: bill.id, p_reason: reason });
+    voidingRef.current = null;
+    setVoidingId(null);
+    if (error) {
+      setMsg(voidFailure(error.message));
+      return;
+    }
+    setMsg(`${bill.bill_number} voided. The purchase order can now be cancelled.`);
+    void load();
+  }
+
+  async function removePayment(payment: PaymentRow) {
+    if (!confirm(`Remove the RM ${Number(payment.amount_rm).toFixed(2)} payment from ${payment.paid_on}?`)) return;
+    const { error } = await supabase.from('supplier_payments').delete().eq('id', payment.id);
+    if (error) {
+      setMsg(error.message);
+      return;
+    }
+    setMsg('Payment removed.');
+    void load();
+  }
+
   const payValid = pay.bill_id && Number(pay.amount_rm) > 0 && pay.paid_on;
   const valid = form.supplier_id && form.entity_code && form.bill_number.trim() && form.bill_date && Number(form.amount_rm) >= 0 && form.amount_rm !== '';
 
@@ -115,7 +167,7 @@ export function Bills() {
         <div className="grid gap-2 rounded-xl border border-stone-200 bg-white p-3 text-sm sm:grid-cols-4">
           <select aria-label="Bill to pay" className="rounded border px-2 py-1" value={pay.bill_id} onChange={(e) => setPay({ ...pay, bill_id: e.target.value })}>
             <option value="">Bill…</option>
-            {rows.filter((r) => Number(r.balance_rm) > 0).map((r) => (
+            {rows.filter((r) => r.payment_status !== 'void' && Number(r.balance_rm) > 0).map((r) => (
               <option key={r.id} value={r.id}>{r.supplier_name} {r.bill_number} (bal {Number(r.balance_rm).toFixed(2)})</option>
             ))}
           </select>
@@ -134,13 +186,47 @@ export function Bills() {
         <EmptyState title="No bills" description="Bills you record appear here with their payment status." />
       ) : (
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-stone-500"><th>Supplier</th><th>Bill</th><th>Entity</th><th>Due</th><th className="text-right">Amount</th><th className="text-right">Paid</th><th className="text-right">Balance</th><th>Status</th></tr></thead>
+          <thead><tr className="text-left text-stone-500"><th>Supplier</th><th>Bill</th><th>Entity</th><th>Due</th><th className="text-right">Amount</th><th className="text-right">Paid</th><th className="text-right">Balance</th><th>Status</th>{isAdmin ? <th>Void</th> : null}</tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} className="border-t border-stone-100">
                 <td>{r.supplier_name}</td><td>{r.bill_number}</td><td>{r.entity_code}</td><td>{r.due_date ?? '-'}</td>
                 <td className="text-right">{Number(r.amount_rm).toFixed(2)}</td><td className="text-right">{Number(r.paid_rm).toFixed(2)}</td><td className="text-right">{Number(r.balance_rm).toFixed(2)}</td>
                 <td>{r.payment_status.replace('_', ' ')}</td>
+                {isAdmin && (
+                  <td className="min-w-40">
+                    {r.payment_status === 'void' ? (
+                      <span className="text-xs text-stone-400">Void</span>
+                    ) : Number(r.paid_rm) > 0 ? (
+                      <div className="space-y-1">
+                        <p className="text-xs text-stone-500">Remove payments before voiding.</p>
+                        {payments.filter((payment) => payment.bill_id === r.id).map((payment) => (
+                          <button
+                            key={payment.id}
+                            type="button"
+                            className="text-xs font-medium text-red-700"
+                            onClick={() => void removePayment(payment)}
+                          >
+                            Remove {Number(payment.amount_rm).toFixed(2)} ({payment.paid_on})
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        <input
+                          aria-label={`Void reason for ${r.bill_number}`}
+                          className="rounded border px-2 py-1 text-xs"
+                          placeholder="Reason"
+                          value={voidReason[r.id] ?? ''}
+                          onChange={(event) => setVoidReason((current) => ({ ...current, [r.id]: event.target.value }))}
+                        />
+                        <Button variant="danger" disabled={voidingId !== null} onClick={() => void voidBill(r)}>
+                          Void
+                        </Button>
+                      </div>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
