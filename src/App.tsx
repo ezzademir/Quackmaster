@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-
 
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
+import { PageRefreshProvider } from './utils/pageRefresh';
 import { Layout } from './components/Layout';
 import { isPathAllowedForRole, homePathForRole } from './utils/roleAccess';
 import { Receiving } from './pages/Receiving';
@@ -111,9 +112,11 @@ function GenealogyGate() {
 
 function LayoutShell() {
   return (
-    <Layout>
-      <Outlet />
-    </Layout>
+    <PageRefreshProvider>
+      <Layout>
+        <Outlet />
+      </Layout>
+    </PageRefreshProvider>
   );
 }
 

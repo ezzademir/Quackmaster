@@ -34,7 +34,7 @@ export function LotsTab({
           />
         ) : (
           <>
-            <div className="space-y-2 md:hidden">
+            <div className="ios-group">
               {hubReady.map((l) => (
                 <ListRow
                   key={l.id}
@@ -44,7 +44,7 @@ export function LotsTab({
                 />
               ))}
             </div>
-            <div className="hidden overflow-x-auto md:block">
+            <div className="hidden">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -83,7 +83,7 @@ export function LotsTab({
           />
         ) : (
           <>
-            <div className="space-y-2 md:hidden">
+            <div className="ios-group">
               {outletReady.map((row) => (
                 <ListRow
                   key={row.key}
@@ -98,7 +98,7 @@ export function LotsTab({
                 />
               ))}
             </div>
-            <div className="hidden overflow-x-auto md:block">
+            <div className="hidden">
               <table className="data-table">
                 <thead>
                   <tr>

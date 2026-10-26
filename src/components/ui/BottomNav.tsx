@@ -13,7 +13,7 @@ export function BottomNav({ items }: { items: BottomNavItem[] }) {
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-white/50 bg-white/75 backdrop-blur-xl md:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-white/50 bg-white/75 backdrop-blur-xl"
       style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       aria-label="Primary"
     >
@@ -25,7 +25,7 @@ export function BottomNav({ items }: { items: BottomNavItem[] }) {
               <Link
                 to={path}
                 className={`flex min-h-14 flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium tracking-tight ${
-                  active ? 'text-stone-900' : 'text-stone-400'
+                  active ? 'text-brand-800' : 'text-stone-400'
                 }`}
               >
                 <Icon size={24} strokeWidth={active ? 2.25 : 1.75} className="shrink-0" aria-hidden />

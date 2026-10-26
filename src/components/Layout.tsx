@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -25,7 +25,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 import { crumbForPath, sectionIsActive, visibleSections } from '../utils/workflowNav';
-import { BottomNav } from './ui/BottomNav';
+import { useRunRefresh } from '../utils/pageRefresh';
+import { BottomNav, type BottomNavItem } from './ui/BottomNav';
 
 const outletNav = [
   { path: '/sales', label: 'Outlet sales', icon: CircleDollarSign, exact: true },
@@ -75,6 +76,12 @@ const TASK_ICON: Record<string, React.ElementType> = {
   '/ledger': BookOpenText,
   '/settings': Settings,
 };
+
+function itemIsActive(pathname: string, item: BottomNavItem) {
+  if (item.match) return item.match(pathname);
+  if (item.exact === false) return pathname === item.path || pathname.startsWith(`${item.path}/`);
+  return pathname === item.path;
+}
 
 function NavItem({
   path,
@@ -149,6 +156,67 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const sections = visibleSections(isAdmin);
   const crumb = crumbForPath(location.pathname);
+  const runRefresh = useRunRefresh();
+  const mainRef = useRef<HTMLElement>(null);
+  const gesture = useRef<{ x: number; y: number; edge: boolean; scrollTop: number } | null>(null);
+  const [pull, setPull] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const bottomItems: BottomNavItem[] = isProcurement
+    ? procurementNav
+    : isSupervisor
+      ? supervisorBottomNav
+      : sections.map((section) => ({
+          path: section.home,
+          label: section.label,
+          icon: SECTION_ICON[section.id],
+          match: (path: string) => sectionIsActive(path, section),
+        }));
+
+  function onPointerDown(event: React.PointerEvent) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('input, textarea, select, [data-no-swipe]')) {
+      gesture.current = null;
+      return;
+    }
+    gesture.current = {
+      x: event.clientX,
+      y: event.clientY,
+      edge: event.clientX < 28,
+      scrollTop: mainRef.current?.scrollTop ?? 0,
+    };
+  }
+
+  function onPointerMove(event: React.PointerEvent) {
+    const start = gesture.current;
+    if (!start || start.scrollTop > 0) return;
+    const dy = event.clientY - start.y;
+    const dx = event.clientX - start.x;
+    if (dy > 12 && dy > Math.abs(dx)) setPull(Math.min(dy, 88));
+  }
+
+  function onPointerUp(event: React.PointerEvent) {
+    const start = gesture.current;
+    gesture.current = null;
+    setPull(0);
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (start.scrollTop <= 0 && dy > 72 && dy > Math.abs(dx)) {
+      setRefreshing(true);
+      void runRefresh().finally(() => setRefreshing(false));
+      return;
+    }
+    if (start.edge && dx > 80 && Math.abs(dy) < 64 && location.key !== 'default') {
+      navigate(-1);
+      return;
+    }
+    if (Math.abs(dx) > 88 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+      const index = bottomItems.findIndex((item) => itemIsActive(location.pathname, item));
+      if (index < 0) return;
+      const next = bottomItems[dx < 0 ? index + 1 : index - 1];
+      if (next) navigate(next.path);
+    }
+  }
 
   async function handleSignOut() {
     await signOut();
@@ -169,9 +237,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       className="flex h-dvh min-h-0 max-h-dvh overflow-hidden bg-[#f2f2f7] pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]"
     >
       <aside
-        className={`fixed z-40 hidden min-h-0 flex-shrink-0 flex-col border-r border-white/50 bg-white/70 backdrop-blur-2xl md:relative md:flex md:h-full md:w-60 ${
-          collapsed ? 'md:w-[72px]' : ''
-        }`}
+        className="hidden"
       >
         <div
           className={`flex h-14 items-center justify-between border-b border-stone-100 px-4 md:justify-start ${
@@ -277,27 +343,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain pb-24 touch-pan-y md:pb-0">
-          <div className="mx-auto w-full min-w-0 max-w-7xl px-4 py-5 sm:px-5 md:px-6 md:py-8">
+        <main
+          ref={mainRef}
+          className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain pb-24 touch-pan-y"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => {
+            gesture.current = null;
+            setPull(0);
+          }}
+        >
+          {(pull > 16 || refreshing) && (
+            <div className="pointer-events-none sticky top-0 z-10 flex justify-center pt-2 text-[13px] font-medium text-brand-800">
+              {refreshing ? 'Refreshing…' : 'Release to refresh'}
+            </div>
+          )}
+          <div className="mx-auto w-full min-w-0 max-w-3xl px-4 py-5 sm:px-5">
             {children}
           </div>
         </main>
       </div>
 
-      <BottomNav
-        items={
-          isProcurement
-            ? procurementNav
-            : isSupervisor
-              ? supervisorBottomNav
-              : sections.map((section) => ({
-                  path: section.home,
-                  label: section.label,
-                  icon: SECTION_ICON[section.id],
-                  match: (path: string) => sectionIsActive(path, section),
-                }))
-        }
-      />
+      <BottomNav items={bottomItems} />
     </div>
   );
 }

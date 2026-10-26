@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, EmptyState, PageHeader } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
 import { defaultEntityCode, type MyEntity } from '../utils/procurementPayloads';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 
 interface BillRow {
   id: string;
@@ -68,6 +69,7 @@ export function Bills() {
   useEffect(() => {
     void load();
   }, [load]);
+  useRegisterRefresh(() => load());
 
   async function addBill() {
     const { error } = await supabase.from('supplier_bills').insert({
@@ -149,88 +151,89 @@ export function Bills() {
       <PageHeader title="Bills" description={isAdmin ? 'Supplier bills and payment status.' : 'Record supplier bills. Payment status is read-only.'} />
       {msg && <div className="rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700">{msg}</div>}
       <div className="grid gap-2 rounded-xl border border-stone-200 bg-white p-3 text-sm sm:grid-cols-3">
-        <select aria-label="Supplier" className="rounded border px-2 py-1" value={form.supplier_id} onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}>
+        <select aria-label="Supplier" className="min-h-11 rounded-xl border border-stone-200 px-3" value={form.supplier_id} onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}>
           <option value="">Supplier…</option>
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <select aria-label="Entity" className="rounded border px-2 py-1" value={form.entity_code} onChange={(e) => setForm({ ...form, entity_code: e.target.value })}>
+        <select aria-label="Entity" className="min-h-11 rounded-xl border border-stone-200 px-3" value={form.entity_code} onChange={(e) => setForm({ ...form, entity_code: e.target.value })}>
           <option value="">Entity…</option>
           {entities.map((x) => <option key={x.code} value={x.code}>{x.name}</option>)}
         </select>
-        <input aria-label="Bill number" className="rounded border px-2 py-1" placeholder="Bill number" value={form.bill_number} onChange={(e) => setForm({ ...form, bill_number: e.target.value })} />
-        <input aria-label="Bill date" type="date" className="rounded border px-2 py-1" value={form.bill_date} onChange={(e) => setForm({ ...form, bill_date: e.target.value })} />
-        <input aria-label="Due date" type="date" className="rounded border px-2 py-1" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
-        <input aria-label="Amount RM" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Amount RM" value={form.amount_rm} onChange={(e) => setForm({ ...form, amount_rm: e.target.value })} />
+        <input aria-label="Bill number" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Bill number" value={form.bill_number} onChange={(e) => setForm({ ...form, bill_number: e.target.value })} />
+        <input aria-label="Bill date" type="date" className="min-h-11 rounded-xl border border-stone-200 px-3" value={form.bill_date} onChange={(e) => setForm({ ...form, bill_date: e.target.value })} />
+        <input aria-label="Due date" type="date" className="min-h-11 rounded-xl border border-stone-200 px-3" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
+        <input aria-label="Amount RM" inputMode="decimal" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Amount RM" value={form.amount_rm} onChange={(e) => setForm({ ...form, amount_rm: e.target.value })} />
         <Button disabled={!valid} onClick={() => void addBill()}>Record bill</Button>
       </div>
       {isAdmin && (
         <div className="grid gap-2 rounded-xl border border-stone-200 bg-white p-3 text-sm sm:grid-cols-4">
-          <select aria-label="Bill to pay" className="rounded border px-2 py-1" value={pay.bill_id} onChange={(e) => setPay({ ...pay, bill_id: e.target.value })}>
+          <select aria-label="Bill to pay" className="min-h-11 rounded-xl border border-stone-200 px-3" value={pay.bill_id} onChange={(e) => setPay({ ...pay, bill_id: e.target.value })}>
             <option value="">Bill…</option>
             {rows.filter((r) => r.payment_status !== 'void' && Number(r.balance_rm) > 0).map((r) => (
               <option key={r.id} value={r.id}>{r.supplier_name} {r.bill_number} (bal {Number(r.balance_rm).toFixed(2)})</option>
             ))}
           </select>
-          <input aria-label="Payment amount RM" inputMode="decimal" className="rounded border px-2 py-1" placeholder="Amount RM" value={pay.amount_rm} onChange={(e) => setPay({ ...pay, amount_rm: e.target.value })} />
-          <input aria-label="Paid on" type="date" className="rounded border px-2 py-1" value={pay.paid_on} onChange={(e) => setPay({ ...pay, paid_on: e.target.value })} />
-          <select aria-label="Method" className="rounded border px-2 py-1" value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })}>
+          <input aria-label="Payment amount RM" inputMode="decimal" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Amount RM" value={pay.amount_rm} onChange={(e) => setPay({ ...pay, amount_rm: e.target.value })} />
+          <input aria-label="Paid on" type="date" className="min-h-11 rounded-xl border border-stone-200 px-3" value={pay.paid_on} onChange={(e) => setPay({ ...pay, paid_on: e.target.value })} />
+          <select aria-label="Method" className="min-h-11 rounded-xl border border-stone-200 px-3" value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })}>
             {['bank_transfer', 'cash', 'cheque', 'card', 'duitnow', 'other'].map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
           </select>
-          <input aria-label="Reference" className="rounded border px-2 py-1" placeholder="Reference" value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} />
-          <input aria-label="Attachment path" className="rounded border px-2 py-1" placeholder="Attachment (storage path)" value={pay.document_path} onChange={(e) => setPay({ ...pay, document_path: e.target.value })} />
-          <input aria-label="Notes" className="rounded border px-2 py-1" placeholder="Notes" value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} />
+          <input aria-label="Reference" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Reference" value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} />
+          <input aria-label="Attachment path" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Attachment (storage path)" value={pay.document_path} onChange={(e) => setPay({ ...pay, document_path: e.target.value })} />
+          <input aria-label="Notes" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Notes" value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} />
           <Button disabled={!payValid} onClick={() => void recordPayment()}>Record payment</Button>
         </div>
       )}
       {rows.length === 0 ? (
         <EmptyState title="No bills" description="Bills you record appear here with their payment status." />
       ) : (
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-stone-500"><th>Supplier</th><th>Bill</th><th>Entity</th><th>Due</th><th className="text-right">Amount</th><th className="text-right">Paid</th><th className="text-right">Balance</th><th>Status</th>{isAdmin ? <th>Void</th> : null}</tr></thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-stone-100">
-                <td>{r.supplier_name}</td><td>{r.bill_number}</td><td>{r.entity_code}</td><td>{r.due_date ?? '-'}</td>
-                <td className="text-right">{Number(r.amount_rm).toFixed(2)}</td><td className="text-right">{Number(r.paid_rm).toFixed(2)}</td><td className="text-right">{Number(r.balance_rm).toFixed(2)}</td>
-                <td>{r.payment_status.replace('_', ' ')}</td>
-                {isAdmin && (
-                  <td className="min-w-40">
-                    {r.payment_status === 'void' ? (
-                      <span className="text-xs text-stone-400">Void</span>
-                    ) : Number(r.paid_rm) > 0 ? (
-                      <div className="space-y-1">
-                        <p className="text-xs text-stone-500">Remove payments before voiding.</p>
-                        {payments.filter((payment) => payment.bill_id === r.id).map((payment) => (
-                          <button
-                            key={payment.id}
-                            type="button"
-                            className="text-xs font-medium text-red-700"
-                            onClick={() => void removePayment(payment)}
-                          >
-                            Remove {Number(payment.amount_rm).toFixed(2)} ({payment.paid_on})
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-1">
-                        <input
-                          aria-label={`Void reason for ${r.bill_number}`}
-                          className="rounded border px-2 py-1 text-xs"
-                          placeholder="Reason"
-                          value={voidReason[r.id] ?? ''}
-                          onChange={(event) => setVoidReason((current) => ({ ...current, [r.id]: event.target.value }))}
-                        />
-                        <Button variant="danger" disabled={voidingId !== null} onClick={() => void voidBill(r)}>
-                          Void
-                        </Button>
-                      </div>
-                    )}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="ios-group">
+          {rows.map((r) => (
+            <ListRow
+              key={r.id}
+              title={`${r.supplier_name} · ${r.bill_number}`}
+              meta={`${r.entity_code} · due ${r.due_date ?? '—'} · ${r.payment_status.replace('_', ' ')}`}
+              aside={<span className="font-medium tabular-nums">{Number(r.balance_rm).toFixed(2)}</span>}
+              body={
+                <div className="space-y-2">
+                  <p className="text-[13px] text-stone-500">
+                    Amount {Number(r.amount_rm).toFixed(2)} · paid {Number(r.paid_rm).toFixed(2)}
+                  </p>
+                  {isAdmin && r.payment_status === 'void' ? <p className="text-[13px] text-stone-400">Void</p> : null}
+                  {isAdmin && r.payment_status !== 'void' && Number(r.paid_rm) > 0 ? (
+                    <div className="space-y-1">
+                      <p className="text-[13px] text-stone-500">Remove payments before voiding.</p>
+                      {payments.filter((payment) => payment.bill_id === r.id).map((payment) => (
+                        <button
+                          key={payment.id}
+                          type="button"
+                          className="inline-flex min-h-11 items-center text-[15px] font-medium text-red-700"
+                          onClick={() => void removePayment(payment)}
+                        >
+                          Remove {Number(payment.amount_rm).toFixed(2)} ({payment.paid_on})
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {isAdmin && r.payment_status !== 'void' && Number(r.paid_rm) <= 0 ? (
+                    <div className="flex flex-col gap-2" data-no-swipe>
+                      <input
+                        aria-label={`Void reason for ${r.bill_number}`}
+                        className="min-h-11 rounded-xl border border-stone-200 px-3 text-[15px]"
+                        placeholder="Reason"
+                        value={voidReason[r.id] ?? ''}
+                        onChange={(event) => setVoidReason((current) => ({ ...current, [r.id]: event.target.value }))}
+                      />
+                      <Button variant="danger" disabled={voidingId !== null} onClick={() => void voidBill(r)}>
+                        Void
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              }
+            />
+          ))}
+        </div>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, PackagePlus, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
+import { Plus, Search, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
 import { EntityChip } from '../components/EntityChip';
@@ -13,6 +13,7 @@ import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validateP
 import { retryWithBackoff } from '../utils/errorHandling';
 import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 import { DEFAULT_OVER_RECEIPT_TOLERANCE_PCT, planReceipt, rpcLines } from '../utils/poReceipt';
 import { extractAtomicRpcErrorCode } from '../utils/atomicRpcErrors';
 import { defaultEntityCode, poSelectableSuppliers, purchaseOrderInsertPayload, supplierInsertPayload, type MyEntity } from '../utils/procurementPayloads';
@@ -1211,6 +1212,7 @@ function PODetailModal({
 // ---- Main Procurement Page ----
 export function Procurement() {
   const { isAdmin, isProcurement, user } = useAuth();
+  useRegisterRefresh(() => loadAll());
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const initialTab: Tab =
@@ -1477,7 +1479,7 @@ export function Procurement() {
                 </div>
               ) : (
                 <>
-                  <div className="space-y-2 md:hidden">
+                  <div className="ios-group">
                     {filteredOrders.map((order) => (
                       <ListRow
                         key={order.id}
@@ -1513,7 +1515,7 @@ export function Procurement() {
                       />
                     ))}
                   </div>
-                  <div className="panel hidden overflow-x-auto md:block">
+                  <div className="hidden">
                     <table className="data-table">
                       <thead>
                         <tr>
@@ -1631,98 +1633,64 @@ export function Procurement() {
                   </div>
                 </div>
               )}
-            <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
-              <table className="w-full text-sm">
-                <thead className="border-b border-stone-200 bg-stone-50">
-                  <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Name</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Contact</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Email</th>
-                    <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Phone</th>
-                    <th className="hidden xl:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Payment Terms</th>
-                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {suppliers.length === 0 ? (
-                    <tr><td colSpan={6} className="px-6 py-12 text-center text-stone-400">No suppliers yet</td></tr>
-                  ) : (
-                    suppliers.map((s) => (
-                      <tr key={s.id} className="hover:bg-stone-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-stone-900 text-sm">{s.name}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.contact_person ?? '—'}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.email ?? '—'}</td>
-                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.phone ?? '—'}</td>
-                        <td className="hidden xl:table-cell px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{s.payment_terms ?? '—'}</td>
-                        <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditSupplier(s);
-                              setShowSupplierModal(true);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                          >
-                            Manage <ChevronRight size={14} aria-hidden />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="ios-group">
+              {suppliers.length === 0 ? (
+                <EmptyState title="No suppliers yet" />
+              ) : (
+                suppliers.map((s) => (
+                  <ListRow
+                    key={s.id}
+                    title={s.name}
+                    meta={[s.contact_person, s.email, s.phone, s.payment_terms].filter(Boolean).join(' · ') || 'No contact details'}
+                    body={
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditSupplier(s);
+                          setShowSupplierModal(true);
+                        }}
+                        className="inline-flex min-h-11 items-center gap-1 text-[15px] font-medium text-brand-800"
+                      >
+                        Manage <ChevronRight size={16} aria-hidden />
+                      </button>
+                    }
+                  />
+                ))
+              )}
             </div>
             </div>
           )}
 
           {/* Raw Materials Tab */}
           {tab === 'materials' && (
-            <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
-              <table className="w-full text-sm">
-                <thead className="border-b border-stone-200 bg-stone-50">
-                  <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Name</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Unit</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Cost Price</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Reorder</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-stone-700">Description</th>
-                    <th className="whitespace-nowrap px-4 md:px-6 py-3 text-right font-semibold text-stone-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {materials.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-4 md:px-6 py-12 text-center">
-                        <PackagePlus className="mx-auto mb-3 text-stone-300" size={40} />
-                        <p className="text-stone-400">No raw materials yet</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    materials.map((m) => (
-                      <tr key={m.id} className="hover:bg-stone-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-stone-900 text-sm">{m.name}</td>
-                        <td className="px-4 md:px-6 py-4 text-stone-600 text-xs sm:text-sm">{m.unit_of_measure}</td>
-                        <td className="px-4 md:px-6 py-4 text-right text-stone-900 text-xs sm:text-sm">MYR {m.cost_price != null ? m.cost_price.toFixed(2) : '—'}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-stone-600 text-xs sm:text-sm">{m.reorder_level ?? 10}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-stone-500 text-xs sm:text-sm max-w-xs truncate">{m.description ?? '—'}</td>
-                        <td className="whitespace-nowrap px-4 md:px-6 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditMaterial(m);
-                              setShowMaterialModal(true);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                          >
-                            Manage <ChevronRight size={14} aria-hidden />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+            materials.length === 0 ? (
+              <div className="panel py-2">
+                <EmptyState title="No raw materials yet" />
+              </div>
+            ) : (
+              <div className="ios-group">
+                {materials.map((m) => (
+                  <ListRow
+                    key={m.id}
+                    title={m.name}
+                    meta={`${m.unit_of_measure} · reorder ${m.reorder_level ?? 10}${m.description ? ` · ${m.description}` : ''}`}
+                    aside={<span className="font-medium tabular-nums">MYR {m.cost_price != null ? m.cost_price.toFixed(2) : '—'}</span>}
+                    body={
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditMaterial(m);
+                          setShowMaterialModal(true);
+                        }}
+                        className="inline-flex min-h-11 items-center gap-1 text-[15px] font-medium text-brand-800"
+                      >
+                        Manage <ChevronRight size={16} aria-hidden />
+                      </button>
+                    }
+                  />
+                ))}
+              </div>
+            )
           )}
         </>
       )}

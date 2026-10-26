@@ -259,7 +259,7 @@ export function PoCancelRequestsTab({
           </div>
         ) : (
           <>
-            <div className="space-y-2 md:hidden">
+            <div className="ios-group">
               {pending.map((row) => {
                 const po = oneRelation(row.purchase_order);
                 return (
@@ -282,7 +282,7 @@ export function PoCancelRequestsTab({
                 );
               })}
             </div>
-            <div className="panel hidden overflow-x-auto md:block">
+            <div className="hidden">
               <table className="data-table">
                 <thead>
                   <tr>
