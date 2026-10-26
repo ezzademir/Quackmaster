@@ -30,6 +30,7 @@ const AuditDashboard = lazy(() => import('./pages/AuditDashboard').then((m) => (
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const StockTake = lazy(() => import('./pages/StockTake').then((m) => ({ default: m.StockTake })));
 const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
+const Costing = lazy(() => import('./pages/Costing').then((m) => ({ default: m.Costing })));
 
 function LoadingScreen({ subtitle }: { subtitle?: string }) {
   return (
@@ -94,6 +95,11 @@ function ReconciliationGate() {
 function AuditGate() {
   const { isAdmin } = useAuth();
   return isAdmin ? <AuditDashboard /> : <Navigate to="/" replace />;
+}
+
+function CostingGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Costing /> : <Navigate to="/" replace />;
 }
 
 function GenealogyGate() {
@@ -216,6 +222,7 @@ function App() {
                 <Route path="/distribution/*" element={<Distribution />} />
                 <Route path="/receiving" element={<Receiving />} />
                 <Route path="/bills" element={<Bills />} />
+                <Route path="/costing" element={<CostingGate />} />
                 <Route path="/suppliers" element={<Navigate to="/procurement?tab=suppliers" replace />} />
                 <Route path="/sales" element={<Sales />} />
                 <Route path="/pos-compare" element={<PosCompareGate />} />
