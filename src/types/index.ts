@@ -29,6 +29,15 @@ export type {
   SourcingComparison,
 } from './sourcing';
 
+export type {
+  MenuItem,
+  BomLine,
+  PriceHistoryRecord,
+  SourcingSuggestion,
+  DishCogs,
+  SubRecipeCost,
+} from './costing';
+
 /** Raw materials linked to a supplier (procurement catalog junction). */
 export interface SupplierRawMaterial {
   id: string;

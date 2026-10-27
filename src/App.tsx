@@ -25,6 +25,7 @@ const Ledger = lazy(() => import('./pages/Ledger').then((m) => ({ default: m.Led
 const Reconciliation = lazy(() => import('./pages/Reconciliation').then((m) => ({ default: m.Reconciliation })));
 const AuditDashboard = lazy(() => import('./pages/AuditDashboard').then((m) => ({ default: m.AuditDashboard })));
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
+const Costing = lazy(() => import('./pages/Costing').then((m) => ({ default: m.Costing })));
 const StockTake = lazy(() => import('./pages/StockTake').then((m) => ({ default: m.StockTake })));
 const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
 
@@ -189,6 +190,7 @@ function App() {
                 <Route index element={<Overview />} />
                 <Route path="/stock-take" element={<StockTake />} />
                 <Route path="/procurement/*" element={<Procurement />} />
+                <Route path="/costing" element={<Costing />} />
                 <Route path="/production/*" element={<Production />} />
                 <Route path="/inventory/*" element={<Inventory />} />
                 <Route path="/distribution/*" element={<Distribution />} />

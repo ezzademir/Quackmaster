@@ -20,6 +20,7 @@ import {
   ClipboardCheck,
   GitBranch,
   BarChart3,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { useAuth } from '../utils/auth';
 
@@ -27,6 +28,7 @@ const mainNav = [{ path: '/', label: 'Dashboard', icon: LayoutDashboard, exact: 
 
 const hubNav = [
   { path: '/procurement', label: 'Procurement', icon: ShoppingCart, exact: false },
+  { path: '/costing', label: 'Recipe book', icon: UtensilsCrossed, exact: true },
   { path: '/production', label: 'Production', icon: FlaskConical, exact: false },
   { path: '/inventory', label: 'Inventory', icon: Boxes, exact: false },
   { path: '/distribution', label: 'Distribution', icon: Truck, exact: false },
