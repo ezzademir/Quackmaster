@@ -9,9 +9,25 @@ export interface Supplier {
   city?: string;
   country?: string;
   payment_terms?: string;
+  status?: string | null;
+  delivery_day?: string | null;
+  created_by?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type {
+  Ingredient,
+  IngredientBaseUnit,
+  IngredientStatus,
+  SupplierItem,
+  SupplierItemStatus,
+  PriceBasis,
+  PriceSource,
+  SourcingComparison,
+} from './sourcing';
 
 /** Raw materials linked to a supplier (procurement catalog junction). */
 export interface SupplierRawMaterial {
