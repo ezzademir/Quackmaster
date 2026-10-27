@@ -95,7 +95,6 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
   return parsed.map(({ row, batch, lot }) => {
     const lotLabel = nestedLotLabel(lot as never);
     const recipeSku = nestedRecipeSku(lot);
-    const displayBatch = displayLotFirst(lotLabel, batch) || batch;
     const qoh = Number(row.quantity_on_hand ?? 0);
     const res = Number(row.reserved_quantity ?? 0);
     const avail = outletRowAvailableQuantity(qoh, res, row.available_quantity);
@@ -207,7 +206,7 @@ function linesByJournalFromDb(
 }
 
 export function Sales() {
-  const { isAdmin, isSupervisor, profile } = useAuth();
+  const { isAdmin, isSupervisor, profile, canFeature } = useAuth();
   const [pageTab, setPageTab] = useState<'overview' | 'record'>('overview');
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [outletId, setOutletId] = useState('');
@@ -1334,9 +1333,9 @@ export function Sales() {
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-4">
               {!modalEditMode ? (
                 <>
-                  {isAdmin && !isVoidedSalesStatus(modalStatus) && (
+                  {!isVoidedSalesStatus(modalStatus) && (
                     <>
-                      {modalSource !== 'storehub' ? (
+                      {modalSource !== 'storehub' && canFeature('sales.replace') && (
                         <button
                           type="button"
                           onClick={() => setModalEditMode(true)}
@@ -1345,19 +1344,22 @@ export function Sales() {
                         >
                           Edit
                         </button>
-                      ) : (
+                      )}
+                      {modalSource === 'storehub' && (
                         <span className="mr-auto text-xs text-stone-500">
-                          Historical StoreHub sales: void only (admin). Edit/replace is disabled.
+                          Historical StoreHub sales can only be voided by an admin.
                         </span>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => void handleModalDelete()}
-                        disabled={recentJournalBusy}
-                        className="btn-danger"
-                      >
-                        {modalDeleting ? 'Voiding…' : 'Void sale'}
-                      </button>
+                      {(modalSource === 'storehub' ? isAdmin : canFeature('sales.void')) && (
+                        <button
+                          type="button"
+                          onClick={() => void handleModalDelete()}
+                          disabled={recentJournalBusy}
+                          className="btn-danger"
+                        >
+                          {modalDeleting ? 'Voiding…' : 'Void sale'}
+                        </button>
+                      )}
                     </>
                   )}
                   <button
@@ -1378,7 +1380,7 @@ export function Sales() {
                   >
                     Cancel
                   </button>
-                  {isAdmin && (
+                  {canFeature('sales.replace') && (
                     <button
                       type="button"
                       onClick={() => void handleModalSave()}

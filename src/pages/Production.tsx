@@ -327,7 +327,7 @@ function NewRunModal({
   recipes,
   onClose,
   onSave,
-  profile,
+  canOverrideQc,
   initialRecipeId,
   initialPlannedOutput,
   plannedBatchId,
@@ -335,7 +335,7 @@ function NewRunModal({
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
-  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
+  canOverrideQc: boolean;
   initialRecipeId?: string;
   initialPlannedOutput?: number;
   plannedBatchId?: string | null;
@@ -537,7 +537,7 @@ function NewRunModal({
         actualOutput: actualOutputQty,
         targetYield,
         productBatch: selectedRecipe?.default_product_batch?.trim() || undefined,
-        isAdmin: profile?.role === 'admin',
+        isAdmin: canOverrideQc,
       });
 
       if (!result.success) {
@@ -774,14 +774,14 @@ function firstFgLot(run: RunWithDetails): FgLotEmbed | null {
 
 function RunDetailModal({
   run,
-  isAdmin,
+  canManageRuns,
   onClose,
   onVoid,
   onRestore,
   onDelete,
 }: {
   run: RunWithDetails;
-  isAdmin: boolean;
+  canManageRuns: boolean;
   onClose: () => void;
   onVoid: () => void;
   onRestore: () => void;
@@ -867,7 +867,7 @@ function RunDetailModal({
       </div>
       )}
       <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
-        {isAdmin && run.status === 'completed' && (
+        {canManageRuns && run.status === 'completed' && (
           <button
             type="button"
             onClick={onVoid}
@@ -876,7 +876,7 @@ function RunDetailModal({
             <Ban size={15} /> Void run
           </button>
         )}
-        {isAdmin && run.status === 'voided' && (
+        {canManageRuns && run.status === 'voided' && (
           <button
             type="button"
             onClick={onRestore}
@@ -885,7 +885,7 @@ function RunDetailModal({
             <RotateCcw size={15} /> Restore run
           </button>
         )}
-        {isAdmin && (run.status === 'in_progress' || run.status === 'cancelled') && (
+        {canManageRuns && (run.status === 'in_progress' || run.status === 'cancelled') && (
           <button
             type="button"
             onClick={onDelete}
@@ -911,7 +911,9 @@ function RunDetailModal({
 
 // ---- Main Production Page ----
 export function Production() {
-  const { profile, isAdmin } = useAuth();
+  const { isAdmin, canFeature } = useAuth();
+  const canManageRuns = canFeature('production.void_run');
+  const canOverrideQc = canFeature('production.qc_override');
   const [tab, setTab] = useState<Tab>('runs');
   const [runs, setRuns] = useState<RunWithDetails[]>([]);
   const [recipes, setRecipes] = useState<RecipeWithIngredients[]>([]);
@@ -975,14 +977,14 @@ export function Production() {
   }
 
   function openRunAction(kind: 'void' | 'restore' | 'delete', run: RunWithDetails) {
-    if (!isAdmin) return;
+    if (!canManageRuns) return;
     setRunAction({ kind, run });
     setConfirmText('');
     setActionError(null);
   }
 
   async function submitRunAction() {
-    if (!isAdmin || !runAction) return;
+    if (!canManageRuns || !runAction) return;
     const expected = runAction.run.run_number.trim();
     const lotCode = firstFgLot(runAction.run)?.product_batch_label?.trim() ?? '';
     const typed = confirmText.trim();
@@ -1214,7 +1216,7 @@ export function Production() {
             setPlanPrefill(null);
             loadAll();
           }}
-          profile={profile}
+          canOverrideQc={canOverrideQc}
           initialRecipeId={planPrefill?.recipeId}
           initialPlannedOutput={planPrefill?.quantity}
           plannedBatchId={planPrefill?.plannedBatchId}
@@ -1223,7 +1225,7 @@ export function Production() {
       {viewRun && (
         <RunDetailModal
           run={viewRun}
-          isAdmin={isAdmin}
+          canManageRuns={canManageRuns}
           onClose={() => setViewRun(null)}
           onVoid={() => openRunAction('void', viewRun)}
           onRestore={() => openRunAction('restore', viewRun)}

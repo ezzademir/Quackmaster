@@ -21,36 +21,39 @@ import {
   GitBranch,
   BarChart3,
 } from 'lucide-react';
+import type { GrantablePageKey } from '../utils/accessCatalog';
 import { useAuth } from '../utils/auth';
 
-const mainNav = [{ path: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true }];
+type NavPage = GrantablePageKey | 'users' | 'ledger' | 'settings';
+
+const mainNav = [{ path: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true, page: 'overview' as const }];
 
 const hubNav = [
-  { path: '/procurement', label: 'Procurement', icon: ShoppingCart, exact: false },
-  { path: '/production', label: 'Production', icon: FlaskConical, exact: false },
-  { path: '/inventory', label: 'Inventory', icon: Boxes, exact: false },
-  { path: '/distribution', label: 'Distribution', icon: Truck, exact: false },
+  { path: '/procurement', label: 'Procurement', icon: ShoppingCart, exact: false, page: 'procurement' as const },
+  { path: '/production', label: 'Production', icon: FlaskConical, exact: false, page: 'production' as const },
+  { path: '/inventory', label: 'Inventory', icon: Boxes, exact: false, page: 'inventory' as const },
+  { path: '/distribution', label: 'Distribution', icon: Truck, exact: false, page: 'distribution' as const },
 ];
 
 const outletNav = [
-  { path: '/sales', label: 'Outlet sales', icon: CircleDollarSign, exact: true },
-  { path: '/waste', label: 'Waste', icon: Trash2, exact: true },
-  { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true },
+  { path: '/sales', label: 'Outlet sales', icon: CircleDollarSign, exact: true, page: 'sales' as const },
+  { path: '/waste', label: 'Waste', icon: Trash2, exact: true, page: 'waste' as const },
+  { path: '/stock-take', label: 'Stock take', icon: ClipboardList, exact: true, page: 'stock-take' as const },
 ];
 
-const posCompareNav = [{ path: '/pos-compare', label: 'SHPOS vs QMERP', icon: BarChart3, exact: true }];
+const posCompareNav = [{ path: '/pos-compare', label: 'SHPOS vs QMERP', icon: BarChart3, exact: true, page: 'pos-compare' as const }];
 
-const findNav = [{ path: '/genealogy', label: 'Lot trace', icon: GitBranch, exact: true }];
+const findNav = [{ path: '/genealogy', label: 'Lot trace', icon: GitBranch, exact: true, page: 'genealogy' as const }];
 
 const stockIntegrityNav = [
-  { path: '/audit', label: 'Stock audit', icon: ClipboardCheck, exact: true },
-  { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true },
+  { path: '/audit', label: 'Stock audit', icon: ClipboardCheck, exact: true, page: 'audit' as const },
+  { path: '/reconciliation', label: 'Reconciliation', icon: Scale, exact: true, page: 'reconciliation' as const },
 ];
 
 const adminNav = [
-  { path: '/users', label: 'Users', icon: Users, exact: false },
-  { path: '/ledger', label: 'Change log', icon: BookOpenText, exact: false },
-  { path: '/settings', label: 'Settings', icon: Settings, exact: false },
+  { path: '/users', label: 'Users', icon: Users, exact: false, page: 'users' as const },
+  { path: '/ledger', label: 'Change log', icon: BookOpenText, exact: false, page: 'ledger' as const },
+  { path: '/settings', label: 'Settings', icon: Settings, exact: false, page: 'settings' as const },
 ];
 
 function NavItem({
@@ -92,7 +95,7 @@ function NavSection({
 }: {
   title: string;
   collapsed: boolean;
-  items: { path: string; label: string; icon: React.ElementType; exact: boolean }[];
+  items: { path: string; label: string; icon: React.ElementType; exact: boolean; page: NavPage }[];
 }) {
   if (items.length === 0) return null;
   return (
@@ -103,7 +106,13 @@ function NavSection({
       <ul className="space-y-0.5">
         {items.map((item) => (
           <li key={item.path}>
-            <NavItem {...item} collapsed={collapsed} />
+            <NavItem
+              path={item.path}
+              label={item.label}
+              icon={item.icon}
+              exact={item.exact}
+              collapsed={collapsed}
+            />
           </li>
         ))}
       </ul>
@@ -115,7 +124,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const { profile, user, isAdmin, isSupervisor, signOut } = useAuth();
+  const { profile, user, isAdmin, canPage, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -123,9 +132,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
     setSidebarOpen(false);
   }, [location.pathname]);
 
+  function showNav(page: NavPage): boolean {
+    if (page === 'users' || page === 'ledger' || page === 'settings') return isAdmin;
+    return canPage(page);
+  }
+
   async function handleSignOut() {
+    setUserMenuOpen(false);
     await signOut();
-    navigate('/login');
+    navigate('/login', { replace: true });
   }
 
   const initials = profile?.full_name
@@ -175,23 +190,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-4 space-y-5">
-          {isSupervisor ? (
-            <NavSection title="Outlet" collapsed={collapsed} items={outletNav} />
-          ) : (
-            <>
-              <NavSection title="Overview" collapsed={collapsed} items={mainNav} />
-              <NavSection title="Hub" collapsed={collapsed} items={hubNav} />
-              <NavSection title="Outlets" collapsed={collapsed} items={outletNav} />
-              {isAdmin && <NavSection title="POS" collapsed={collapsed} items={posCompareNav} />}
-              <NavSection title="Find" collapsed={collapsed} items={findNav} />
-              {isAdmin && (
-                <>
-                  <NavSection title="Stock integrity" collapsed={collapsed} items={stockIntegrityNav} />
-                  <NavSection title="Admin" collapsed={collapsed} items={adminNav} />
-                </>
-              )}
-            </>
-          )}
+          <NavSection title="Overview" collapsed={collapsed} items={mainNav.filter((item) => showNav(item.page))} />
+          <NavSection title="Hub" collapsed={collapsed} items={hubNav.filter((item) => showNav(item.page))} />
+          <NavSection title="Outlets" collapsed={collapsed} items={outletNav.filter((item) => showNav(item.page))} />
+          <NavSection title="POS" collapsed={collapsed} items={posCompareNav.filter((item) => showNav(item.page))} />
+          <NavSection title="Find" collapsed={collapsed} items={findNav.filter((item) => showNav(item.page))} />
+          <NavSection
+            title="Stock integrity"
+            collapsed={collapsed}
+            items={stockIntegrityNav.filter((item) => showNav(item.page))}
+          />
+          <NavSection title="Admin" collapsed={collapsed} items={adminNav.filter((item) => showNav(item.page))} />
         </nav>
 
         <div className="hidden border-t border-stone-800 p-3 md:block">
@@ -209,7 +218,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-16 flex-shrink-0 items-center justify-between gap-4 border-b border-stone-200 bg-white px-3 md:justify-end md:px-6">
+        <header className="relative z-30 flex h-16 flex-shrink-0 items-center justify-between gap-4 border-b border-stone-200 bg-white px-3 md:justify-end md:px-6">
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
@@ -254,7 +263,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </span>
                   </div>
                   <button
-                    onClick={handleSignOut}
+                    type="button"
+                    onClick={() => void handleSignOut()}
                     className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
                   >
                     <LogOut size={15} />

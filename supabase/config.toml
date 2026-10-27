@@ -12,5 +12,8 @@ verify_jwt = false
 [functions.admin_set_user_password]
 verify_jwt = false
 
+[functions.admin_create_user]
+verify_jwt = false
+
 [functions.sync_storehub_sales]
 verify_jwt = false

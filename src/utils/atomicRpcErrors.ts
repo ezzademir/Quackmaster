@@ -83,6 +83,8 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
       return 'Cannot cancel: hub inventory row is missing for a received material.';
     case 'po_not_found':
       return 'This purchase order no longer exists.';
+    case 'feature_required':
+      return 'You do not have permission to cancel this purchase order.';
     default:
       return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
   }
@@ -105,6 +107,8 @@ export function salesJournalErrorMessage(code: string | undefined): string {
       return 'Cannot void: outlet stock row for reversal is missing.';
     case 'admin_required':
       return 'Only an admin can void this sales journal.';
+    case 'feature_required':
+      return 'You do not have permission to change this sale.';
     default:
       return code ? `Could not complete sales journal (${code}).` : 'Could not complete sales journal.';
   }

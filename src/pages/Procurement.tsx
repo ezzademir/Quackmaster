@@ -1061,7 +1061,8 @@ function PODetailModal({
 
 // ---- Main Procurement Page ----
 export function Procurement() {
-  const { isAdmin } = useAuth();
+  const { canFeature } = useAuth();
+  const canCancelPo = canFeature('procurement.cancel_po');
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const initialTab: Tab =
@@ -1184,6 +1185,7 @@ export function Procurement() {
   }
 
   async function deletePurchaseOrder(po: POWithDetails) {
+    if (!canCancelPo) return;
     if (!purchaseOrderCanRemove(po)) {
       alert('This purchase order cannot be removed in its current state.');
       return;
@@ -1379,7 +1381,7 @@ export function Procurement() {
                               >
                                 Manage <ChevronRight size={14} aria-hidden />
                               </button>
-                              {isAdmin && purchaseOrderCanRemove(order) && (
+                              {canCancelPo && purchaseOrderCanRemove(order) && (
                                 <button
                                   type="button"
                                   onClick={() => deletePurchaseOrder(order)}

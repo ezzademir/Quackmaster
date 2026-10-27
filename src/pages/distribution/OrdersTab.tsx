@@ -5,12 +5,12 @@ import type { SOWithOutlet } from './types';
 
 export function OrdersTab({
   orders,
-  isAdmin,
+  canDelete,
   onManage,
   onDelete,
 }: {
   orders: SOWithOutlet[];
-  isAdmin: boolean;
+  canDelete: boolean;
   onManage: (so: SOWithOutlet) => void;
   onDelete: (so: SOWithOutlet) => void;
 }) {
@@ -60,7 +60,7 @@ export function OrdersTab({
                     >
                       Manage <ChevronRight size={14} />
                     </button>
-                    {isAdmin && supplyOrderAllowsAdminHardDelete(so.status) && (
+                    {canDelete && supplyOrderAllowsAdminHardDelete(so.status) && (
                       <button
                         type="button"
                         onClick={() => void onDelete(so)}

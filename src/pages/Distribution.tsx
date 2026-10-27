@@ -567,19 +567,19 @@ function SODetailModal({
   so,
   onClose,
   onStatusChange,
-  isAdmin,
+  canDelete,
   executeAdminDelete,
 }: {
   so: SOWithOutlet;
   onClose: () => void;
   onStatusChange: () => void | Promise<void>;
-  isAdmin: boolean;
+  canDelete: boolean;
   executeAdminDelete: (order: SOWithOutlet) => Promise<boolean>;
 }) {
   const [saving, setSaving] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [lines, setLines] = useState<Array<{ id: string; quantity: number; product_batch: string | null; lot_label: string | null }>>([]);
-  const canHardDelete = isAdmin && supplyOrderAllowsAdminHardDelete(so.status);
+  const canHardDelete = canDelete && supplyOrderAllowsAdminHardDelete(so.status);
 
   useEffect(() => {
     let cancelled = false;
@@ -1311,7 +1311,8 @@ interface StockMetrics {
 type CompletedProdRun = { actual_output: number | null; production_date: string };
 
 export function Distribution() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canFeature } = useAuth();
+  const canDeleteSupplyOrder = canFeature('distribution.hard_delete');
   const [tab, setTab] = useState<DistributionTab>('orders');
   const [orders, setOrders] = useState<SOWithOutlet[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
@@ -1707,7 +1708,7 @@ export function Distribution() {
   }
 
   async function handleDeleteSupplyOrderRow(so: SOWithOutlet) {
-    if (!isAdmin || !supplyOrderAllowsAdminHardDelete(so.status)) return;
+    if (!canDeleteSupplyOrder || !supplyOrderAllowsAdminHardDelete(so.status)) return;
     const detail = supplyOrderAdminDeleteConfirmDetail(so.status);
     if (
       !confirm(`Permanently delete supply order ${so.supply_order_number}?\n\n${detail}\n\nThis cannot be undone.`)
@@ -1968,7 +1969,7 @@ export function Distribution() {
           {tab === 'orders' && (
             <OrdersTab
               orders={filteredOrders}
-              isAdmin={isAdmin}
+              canDelete={canDeleteSupplyOrder}
               onManage={setViewSO}
               onDelete={(so) => void handleDeleteSupplyOrderRow(so)}
             />
@@ -2022,7 +2023,7 @@ export function Distribution() {
             await loadAll({ silent: true });
             setViewSO(null);
           }}
-          isAdmin={isAdmin}
+          canDelete={canDeleteSupplyOrder}
           executeAdminDelete={executeAdminDeleteSupplyOrder}
         />
       )}

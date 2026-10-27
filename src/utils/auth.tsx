@@ -1,5 +1,16 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
+import {
+  canAccessPage,
+  canUseFeature,
+  defaultAccessForRole,
+  emptyAccess,
+  parseAccessPayload,
+  resolveHomePath,
+  type FeatureKey,
+  type GrantablePageKey,
+  type ProfileAccess,
+} from './accessCatalog';
 import { supabase } from './supabase';
 
 function normalizeRole(r: string | undefined | null): Profile['role'] {
@@ -27,6 +38,11 @@ interface AuthContextValue {
   loading: boolean;
   /** Profile row fetch after session exists — does not block login screen when logged out */
   profileLoading: boolean;
+  access: ProfileAccess;
+  canPage: (page: GrantablePageKey) => boolean;
+  canFeature: (feature: FeatureKey) => boolean;
+  /** First screen for this user. Null when no page is assigned. */
+  homePath: string | null;
   signOut: () => Promise<void>;
   refetchProfile: () => Promise<void>;
   /** Call after sign-in/sign-up so context matches Supabase before navigating to protected routes */
@@ -41,12 +57,26 @@ const AuthContext = createContext<AuthContextValue>({
   isSupervisor: false,
   loading: true,
   profileLoading: false,
+  access: emptyAccess(),
+  canPage: () => false,
+  canFeature: () => false,
+  homePath: null,
   signOut: async () => {},
   refetchProfile: async () => {},
   syncAuth: async () => {},
 });
 
 const SESSION_INIT_TIMEOUT_MS = 30000;
+const SIGNOUT_TIMEOUT_MS = 4000;
+
+function clearSupabaseAuthStorage() {
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('sb-') && key.includes('auth-token')) keys.push(key);
+  }
+  for (const key of keys) localStorage.removeItem(key);
+}
 
 /** Yield so Supabase Auth can finish _recoverAndRefresh / locks before REST runs (avoids stale stalls). */
 function defer(ms = 100): Promise<void> {
@@ -58,8 +88,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [access, setAccess] = useState<ProfileAccess>(emptyAccess);
+  const signingOutRef = useRef(false);
 
   const PROFILE_FETCH_MS = 20000;
+
+  function clearIdentity() {
+    setProfile(null);
+    setAccess(emptyAccess());
+  }
+
+  async function loadAccess(role: Profile['role'] | null): Promise<ProfileAccess> {
+    const { data, error } = await supabase.rpc('get_my_access');
+    if (error) {
+      const missing =
+        error.code === 'PGRST202' ||
+        error.code === '42883' ||
+        /get_my_access/i.test(error.message) ||
+        /schema cache/i.test(error.message);
+      if (missing) {
+        console.warn('[Quackmaster] get_my_access is not deployed yet; using role defaults.');
+        return defaultAccessForRole(role);
+      }
+      console.error('Access fetch error:', error);
+      return emptyAccess();
+    }
+    return parseAccessPayload(data);
+  }
 
   async function fetchProfile(userId: string): Promise<void> {
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -80,19 +135,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const { data, error } = outcome.r;
         if (error) {
           console.error('Profile fetch error:', error);
-          setProfile(null);
+          clearIdentity();
         } else {
           const row = data as Profile | null;
-          setProfile(
-            row
-              ? {
-                  ...row,
-                  role: normalizeRole(row.role),
-                  assigned_outlet_id: row.assigned_outlet_id ?? null,
-                  password_reset_required: Boolean(row.password_reset_required),
-                }
-              : null
-          );
+          const nextProfile = row
+            ? {
+                ...row,
+                role: normalizeRole(row.role),
+                assigned_outlet_id: row.assigned_outlet_id ?? null,
+                password_reset_required: Boolean(row.password_reset_required),
+              }
+            : null;
+          setProfile(nextProfile);
+          setAccess(await loadAccess(nextProfile?.role ?? null));
         }
         return;
       }
@@ -106,7 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error(
         'Profile fetch timed out — check Supabase URL, RLS on `profiles`, extensions blocking REST, or network.'
       );
-      setProfile(null);
+      clearIdentity();
     }
   }
 
@@ -128,12 +183,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await fetchProfile(next.user.id);
       } catch (e) {
         console.error('Profile load failed:', e);
-        setProfile(null);
+        clearIdentity();
       } finally {
         setProfileLoading(false);
       }
     } else {
-      setProfile(null);
+      clearIdentity();
       setProfileLoading(false);
     }
   }
@@ -157,7 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await fetchProfile(userId);
       } catch (e) {
         console.error('Profile load failed:', e);
-        setProfile(null);
+        clearIdentity();
       } finally {
         if (mounted) setProfileLoading(false);
       }
@@ -177,7 +232,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (session?.user) {
           await loadProfileForUser(session.user.id);
         } else {
-          setProfile(null);
+          clearIdentity();
           setProfileLoading(false);
         }
       } catch (e) {
@@ -185,7 +240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Auth init failed:', e);
         if (mounted) {
           setSession(null);
-          setProfile(null);
+          clearIdentity();
           setProfileLoading(false);
           setLoading(false);
         }
@@ -198,11 +253,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       window.clearTimeout(timer);
+      if (signingOutRef.current) {
+        setSession(null);
+        clearIdentity();
+        setLoading(false);
+        setProfileLoading(false);
+        if (nextSession) clearSupabaseAuthStorage();
+        return;
+      }
       setSession(nextSession);
       setLoading(false);
 
       if (!nextSession?.user) {
-        setProfile(null);
+        clearIdentity();
         setProfileLoading(false);
         return;
       }
@@ -217,7 +280,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await fetchProfile(uid);
         } catch (e) {
           console.error('Profile load failed:', e);
-          setProfile(null);
+          clearIdentity();
         } finally {
           if (mounted) setProfileLoading(false);
         }
@@ -232,7 +295,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function signOut() {
-    await supabase.auth.signOut();
+    signingOutRef.current = true;
+    setSession(null);
+    clearIdentity();
+    setProfileLoading(false);
+    setLoading(false);
+    try {
+      await Promise.race([
+        supabase.auth.signOut({ scope: 'local' }),
+        new Promise<void>((resolve) => {
+          window.setTimeout(resolve, SIGNOUT_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (e) {
+      console.error('signOut failed:', e);
+    } finally {
+      clearSupabaseAuthStorage();
+      setSession(null);
+      clearIdentity();
+      window.setTimeout(() => {
+        signingOutRef.current = false;
+      }, 1500);
+    }
   }
 
   async function refetchProfile() {
@@ -251,6 +335,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isSupervisor: profile?.role?.toLowerCase?.()?.trim() === 'supervisor',
       loading,
       profileLoading,
+      access,
+      canPage: (page) => canAccessPage(profile?.role, access.pages, page),
+      canFeature: (feature) => canUseFeature(profile?.role, access.features, feature),
+      homePath: resolveHomePath(profile?.role, access.pages),
       signOut,
       refetchProfile,
       syncAuth,

@@ -10,12 +10,16 @@ import {
   RotateCw,
   CheckCircle,
   Shield,
+  UserPlus,
   Mail,
   KeyRound,
   Copy,
   Search,
   PanelRightClose,
 } from 'lucide-react';
+import { AddUserModal } from '../components/AddUserModal';
+import { AccessEditor } from '../components/AccessEditor';
+import { featuresForPages, parseAccessPayload, type FeatureKey, type GrantablePageKey } from '../utils/accessCatalog';
 import { writeLedgerEntry } from '../utils/ledger';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
@@ -82,6 +86,13 @@ export function Users() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor'>('staff');
   const [outletDraft, setOutletDraft] = useState('');
+  const [addUserOpen, setAddUserOpen] = useState(false);
+  const [accessPages, setAccessPages] = useState<GrantablePageKey[]>([]);
+  const [accessFeatures, setAccessFeatures] = useState<FeatureKey[]>([]);
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [accessSaving, setAccessSaving] = useState(false);
+
+  const drawerUserId = drawer.open && drawer.tab === 'approved' ? drawer.user.id : null;
 
   const q = searchQuery.trim().toLowerCase();
   const filteredUsers = useMemo(
@@ -131,6 +142,38 @@ export function Users() {
     loadUsers();
     void loadOutlets();
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!drawerUserId) return;
+    let cancelled = false;
+    setAccessLoading(true);
+    void (async () => {
+      const { data, error } = await supabase.rpc('admin_get_profile_access', {
+        p_target_user_id: drawerUserId,
+      });
+      if (cancelled) return;
+      if (error) {
+        setRoleNotice({ tone: 'err', text: error.message });
+        setAccessPages([]);
+        setAccessFeatures([]);
+        setAccessLoading(false);
+        return;
+      }
+      const payload = data as { success?: boolean; message?: string; pages?: unknown; features?: unknown } | null;
+      if (payload && payload.success === false) {
+        setRoleNotice({ tone: 'err', text: payload.message ?? 'Could not load page access' });
+        setAccessLoading(false);
+        return;
+      }
+      const parsed = parseAccessPayload(payload);
+      setAccessPages(parsed.pages);
+      setAccessFeatures(parsed.features);
+      setAccessLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [drawerUserId]);
 
   async function loadOutlets() {
     const { data, error } = await supabase.from('outlets').select('id, name').order('name');
@@ -424,6 +467,45 @@ export function Users() {
     }
   }
 
+  async function handleSaveAccess(target: UserRecord) {
+    setAccessSaving(true);
+    setRoleNotice(null);
+    try {
+      const granted = featuresForPages(accessFeatures, accessPages);
+      const { data, error } = await supabase.rpc('admin_set_profile_access', {
+        p_target_user_id: target.id,
+        p_pages: accessPages,
+        p_features: granted,
+      });
+      if (error) throw error;
+      const payload = data as { success?: boolean; message?: string; error?: string } | null;
+      if (!payload?.success) {
+        setRoleNotice({ tone: 'err', text: payload?.message ?? payload?.error ?? 'Could not save access' });
+        return;
+      }
+      const saved = parseAccessPayload(payload);
+      setAccessPages(saved.pages);
+      setAccessFeatures(saved.features);
+      await writeLedgerEntry({
+        action: 'updated',
+        entityType: 'profile',
+        entityId: target.id,
+        module: 'users',
+        operation: 'event',
+        metadata: { source: 'admin_set_profile_access', pages: saved.pages, features: saved.features },
+      });
+      setRoleNotice({ tone: 'ok', text: 'Page access saved.' });
+    } catch (error: unknown) {
+      const msg =
+        error && typeof error === 'object' && 'message' in error
+          ? String((error as { message: string }).message)
+          : 'Failed to save access';
+      setRoleNotice({ tone: 'err', text: msg });
+    } finally {
+      setAccessSaving(false);
+    }
+  }
+
   async function handleRejectUser(userId: string) {
     try {
       const { error } = await supabase
@@ -621,10 +703,17 @@ export function Users() {
           <div>
             <h1 className="text-2xl font-bold text-stone-900 sm:text-3xl">User Management</h1>
             <p className="mt-2 text-sm text-stone-600 sm:text-base">
-              Approve registrations, roles, and passwords. See{' '}
-              <span className="font-medium text-gray-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
+              Approve registrations, create accounts, and choose which pages and features each person can use.
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => setAddUserOpen(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
+          >
+            <UserPlus size={16} />
+            Add user
+          </button>
           <div className="relative max-w-md w-full">
             <Search
               size={18}
@@ -1064,6 +1153,35 @@ export function Users() {
                       <p className="text-xs text-gray-500">You cannot change your own role here.</p>
                     )}
                   </div>
+                  <div className="space-y-3 border-t border-gray-100 pt-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Pages and features</p>
+                    {String(drawerApproved.role).toLowerCase().trim() === 'admin' && (
+                      <p className="text-xs text-gray-500">
+                        Admins keep every page and feature. These grants apply if this account is no longer an admin.
+                      </p>
+                    )}
+                    {accessLoading ? (
+                      <p className="text-sm text-gray-500">Loading access…</p>
+                    ) : (
+                      <AccessEditor
+                        pages={accessPages}
+                        features={accessFeatures}
+                        onChange={(next) => {
+                          setAccessPages(next.pages);
+                          setAccessFeatures(next.features);
+                        }}
+                        disabled={accessSaving}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      disabled={accessSaving || accessLoading}
+                      onClick={() => void handleSaveAccess(drawerApproved)}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {accessSaving ? 'Saving…' : 'Save pages and features'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1134,6 +1252,16 @@ export function Users() {
           </aside>
         </>
       )}
+
+      <AddUserModal
+        isOpen={addUserOpen}
+        outlets={outlets}
+        onClose={() => setAddUserOpen(false)}
+        onCreated={() => {
+          setRoleNotice({ tone: 'ok', text: 'User created. They must change the temporary password on first sign-in.' });
+          void loadUsers();
+        }}
+      />
 
       <Modal
         title="Require password change"

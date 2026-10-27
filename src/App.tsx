@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
+import type { GrantablePageKey } from './utils/accessCatalog';
 import { AuthProvider, useAuth } from './utils/auth';
 import { Layout } from './components/Layout';
 
@@ -64,39 +65,48 @@ function ResetPasswordRoute() {
 }
 
 function UsersGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <Users /> : <Navigate to="/" replace />;
+  const { isAdmin, homePath } = useAuth();
+  return isAdmin ? <Users /> : <Navigate to={homePath ?? '/'} replace />;
 }
 
 function LedgerGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <Ledger /> : <Navigate to="/" replace />;
-}
-
-function PosCompareGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <PosCompare /> : <Navigate to="/" replace />;
+  const { isAdmin, homePath } = useAuth();
+  return isAdmin ? <Ledger /> : <Navigate to={homePath ?? '/'} replace />;
 }
 
 function SettingsGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <Settings /> : <Navigate to="/" replace />;
+  const { isAdmin, homePath } = useAuth();
+  return isAdmin ? <Settings /> : <Navigate to={homePath ?? '/'} replace />;
 }
 
-function ReconciliationGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <Reconciliation /> : <Navigate to="/" replace />;
+function NoAssignedPage() {
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-sm">
+      <h1 className="text-lg font-bold text-stone-900">No pages assigned</h1>
+      <p className="mt-2 text-sm text-stone-600">
+        An administrator has not given this account any pages yet.
+      </p>
+    </div>
+  );
 }
 
-function AuditGate() {
-  const { isAdmin } = useAuth();
-  return isAdmin ? <AuditDashboard /> : <Navigate to="/" replace />;
+function PageGate({ page, children }: { page: GrantablePageKey; children: React.ReactNode }) {
+  const { canPage } = useAuth();
+  if (!canPage(page)) return <NoAssignedPage />;
+  return children;
 }
 
-function GenealogyGate() {
-  const { isAdmin, profile } = useAuth();
-  const canView = isAdmin || profile?.role === 'staff';
-  return canView ? <Genealogy /> : <Navigate to="/" replace />;
+function HomeRoute() {
+  const { canPage, homePath } = useAuth();
+  if (canPage('overview')) return <Overview />;
+  if (homePath && homePath !== '/') return <Navigate to={homePath} replace />;
+  return <NoAssignedPage />;
+}
+
+function FallbackRoute() {
+  const { homePath } = useAuth();
+  if (homePath) return <Navigate to={homePath} replace />;
+  return <NoAssignedPage />;
 }
 
 function LayoutShell() {
@@ -162,15 +172,6 @@ function ProtectedShell() {
     return <Navigate to="/required-password-reset" replace />;
   }
 
-  if (role === 'supervisor') {
-    const path = location.pathname;
-    const allowed =
-      path === '/stock-take' || path === '/sales' || path === '/waste' || path === '/required-password-reset';
-    if (!allowed) {
-      return <Navigate to="/stock-take" replace />;
-    }
-  }
-
   return <Outlet />;
 }
 
@@ -186,22 +187,22 @@ function App() {
             <Route element={<ProtectedShell />}>
               <Route path="/required-password-reset" element={<RequiredPasswordReset />} />
               <Route element={<LayoutShell />}>
-                <Route index element={<Overview />} />
-                <Route path="/stock-take" element={<StockTake />} />
-                <Route path="/procurement/*" element={<Procurement />} />
-                <Route path="/production/*" element={<Production />} />
-                <Route path="/inventory/*" element={<Inventory />} />
-                <Route path="/distribution/*" element={<Distribution />} />
-                <Route path="/sales" element={<Sales />} />
-                <Route path="/pos-compare" element={<PosCompareGate />} />
-                <Route path="/waste" element={<Waste />} />
+                <Route index element={<HomeRoute />} />
+                <Route path="/stock-take" element={<PageGate page="stock-take"><StockTake /></PageGate>} />
+                <Route path="/procurement/*" element={<PageGate page="procurement"><Procurement /></PageGate>} />
+                <Route path="/production/*" element={<PageGate page="production"><Production /></PageGate>} />
+                <Route path="/inventory/*" element={<PageGate page="inventory"><Inventory /></PageGate>} />
+                <Route path="/distribution/*" element={<PageGate page="distribution"><Distribution /></PageGate>} />
+                <Route path="/sales" element={<PageGate page="sales"><Sales /></PageGate>} />
+                <Route path="/pos-compare" element={<PageGate page="pos-compare"><PosCompare /></PageGate>} />
+                <Route path="/waste" element={<PageGate page="waste"><Waste /></PageGate>} />
                 <Route path="/users" element={<UsersGate />} />
                 <Route path="/ledger" element={<LedgerGate />} />
-                <Route path="/reconciliation" element={<ReconciliationGate />} />
-                <Route path="/audit" element={<AuditGate />} />
-                <Route path="/genealogy" element={<GenealogyGate />} />
+                <Route path="/reconciliation" element={<PageGate page="reconciliation"><Reconciliation /></PageGate>} />
+                <Route path="/audit" element={<PageGate page="audit"><AuditDashboard /></PageGate>} />
+                <Route path="/genealogy" element={<PageGate page="genealogy"><Genealogy /></PageGate>} />
                 <Route path="/settings" element={<SettingsGate />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<FallbackRoute />} />
               </Route>
             </Route>
           </Routes>

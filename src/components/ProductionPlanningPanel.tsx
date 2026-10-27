@@ -31,7 +31,8 @@ interface Props {
 }
 
 export function ProductionPlanningPanel({ onStartRun }: Props) {
-  const { isAdmin } = useAuth();
+  const { canFeature } = useAuth();
+  const canPlan = canFeature('production.plan');
   const [resources, setResources] = useState<Resource[]>([]);
   const [batches, setBatches] = useState<PlannedBatch[]>([]);
   const [recipes, setRecipes] = useState<RecipeOpt[]>([]);
@@ -66,7 +67,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
   }, [load]);
 
   async function addResource() {
-    if (!isAdmin) return;
+    if (!canPlan) return;
     const cap = parseFloat(resCap);
     if (!resName.trim() || !Number.isFinite(cap) || cap <= 0) {
       setMessage('Enter resource name and positive daily capacity.');
@@ -85,7 +86,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
   }
 
   async function addBatch() {
-    if (!isAdmin) return;
+    if (!canPlan) return;
     const qty = parseFloat(pbQty);
     if (!pbRecipe || !Number.isFinite(qty) || qty <= 0) {
       setMessage('Select a recipe and positive quantity.');
@@ -106,7 +107,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
   }
 
   async function setStatus(id: string, status: string) {
-    if (!isAdmin) return;
+    if (!canPlan) return;
     const { error } = await supabase.from('planned_batches').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
     if (error) setMessage(error.message);
     else void load();
@@ -133,7 +134,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
               ))
             )}
           </ul>
-          {isAdmin && (
+          {canPlan && (
             <div className="mt-4 flex flex-wrap gap-2">
               <input
                 value={resName}
@@ -159,7 +160,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
 
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-900">Schedule planned batch</h3>
-          {isAdmin ? (
+          {canPlan ? (
             <div className="mt-3 grid gap-2">
               <select value={pbRecipe} onChange={(e) => setPbRecipe(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm">
                 <option value="">Recipe…</option>
@@ -184,7 +185,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
               </button>
             </div>
           ) : (
-            <p className="mt-2 text-sm text-gray-500">Admin can create plans; staff can view and start released batches.</p>
+            <p className="mt-2 text-sm text-gray-500">Planning access is required to create or change plans. You can still view them and start released batches.</p>
           )}
         </div>
       </div>
@@ -218,12 +219,12 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                   <td className="px-4 py-2 capitalize text-gray-700">{b.status}</td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap gap-1">
-                      {isAdmin && b.status === 'draft' && (
+                      {canPlan && b.status === 'draft' && (
                         <button type="button" onClick={() => void setStatus(b.id, 'scheduled')} className="rounded border px-2 py-1 text-xs">
                           Schedule
                         </button>
                       )}
-                      {isAdmin && b.status === 'scheduled' && (
+                      {canPlan && b.status === 'scheduled' && (
                         <button type="button" onClick={() => void setStatus(b.id, 'released')} className="rounded border px-2 py-1 text-xs">
                           Release
                         </button>
@@ -243,7 +244,7 @@ export function ProductionPlanningPanel({ onStartRun }: Props) {
                           Start run
                         </button>
                       )}
-                      {isAdmin && b.status !== 'cancelled' && (
+                      {canPlan && b.status !== 'cancelled' && (
                         <button type="button" onClick={() => void setStatus(b.id, 'cancelled')} className="rounded border px-2 py-1 text-xs text-red-700">
                           Cancel
                         </button>
