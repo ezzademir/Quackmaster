@@ -51,6 +51,12 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'cannot_fulfill_reserved',
   'outlet_inventory_not_found',
   'inventory_wrong_outlet',
+  'missing_purchase_ratio',
+  'base_quantity_rounds_to_zero',
+  'invalid_purchase_ratio',
+  'insufficient_hub_available',
+  'insufficient_outlet_available',
+  'counted_below_reserved',
 ] as const;
 
 export type AtomicRpcErrorCode = (typeof KNOWN_ATOMIC_RPC_CODES)[number];
@@ -103,8 +109,42 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
       return 'You cannot approve or reject your own cancel request.';
     case 'request_already_decided':
       return 'This cancel request has already been decided.';
+    case 'missing_purchase_ratio':
+      return 'This line has a purchase unit with no conversion ratio. Add the unit ratio, or clear the purchase unit.';
+    case 'base_quantity_rounds_to_zero':
+      return 'That quantity converts to zero stock units. Enter a larger quantity.';
     default:
       return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
+  }
+}
+
+export function receiveShipmentErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'missing_purchase_ratio':
+      return 'This line has a purchase unit with no conversion ratio. Add the unit ratio, or clear the purchase unit.';
+    case 'base_quantity_rounds_to_zero':
+      return 'That quantity converts to zero stock units. Enter a larger quantity.';
+    case 'hub_below_reserved':
+      return 'Reducing this receipt would drop hub stock below the reserved quantity.';
+    case 'cannot_reduce_missing_hub_row':
+      return 'Cannot reduce this receipt: the hub stock row is missing.';
+    case 'over_tolerance_needs_admin_reason':
+      return 'That quantity is over the receipt tolerance. An admin must enter a reason.';
+    default:
+      return code ? `Could not receive this shipment (${code}).` : 'Could not receive this shipment.';
+  }
+}
+
+export function wasteEventErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'insufficient_hub_available':
+    case 'insufficient_outlet_available':
+      return 'Not enough unreserved stock for these waste lines together.';
+    case 'hub_inventory_not_found':
+    case 'outlet_inventory_row_not_found':
+      return 'A stock row on this waste ticket no longer exists. Refresh and try again.';
+    default:
+      return code ? `Could not post waste (${code}).` : 'Could not post waste.';
   }
 }
 

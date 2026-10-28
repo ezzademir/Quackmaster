@@ -71,6 +71,9 @@ export function Genealogy() {
   const [q, setQ] = useState(() => searchParams.get('q') ?? '');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [lotInputs, setLotInputs] = useState<
+    { id: string; quantity: number; source_lot_id: string | null; raw_material: { name: string; unit_of_measure: string } | null }[]
+  >([]);
   const [stockView, setStockView] = useState<StockView>('in_stock');
   const [suggestOpen, setSuggestOpen] = useState(false);
   const lotsRef = useRef<TraceLot[]>([]);
@@ -270,6 +273,38 @@ export function Genealogy() {
     );
   }
 
+  useEffect(() => {
+    if (!selectedId) {
+      setLotInputs([]);
+      return;
+    }
+    let cancelled = false;
+    void supabase
+      .from('inventory_lot_inputs')
+      .select('id, quantity, source_lot_id, raw_material:raw_material_id(name, unit_of_measure)')
+      .eq('lot_id', selectedId)
+      .order('created_at', { ascending: true })
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = (data ?? []).map((row) => {
+          const embedded = row.raw_material;
+          const material = Array.isArray(embedded) ? embedded[0] : embedded;
+          return {
+            id: String(row.id),
+            quantity: Number(row.quantity),
+            source_lot_id: row.source_lot_id ? String(row.source_lot_id) : null,
+            raw_material: material
+              ? { name: String(material.name ?? 'Ingredient'), unit_of_measure: String(material.unit_of_measure ?? '') }
+              : null,
+          };
+        });
+        setLotInputs(rows);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   if (loading) {
     return <div className="text-sm text-stone-500">Loading lots…</div>;
   }
@@ -392,6 +427,29 @@ export function Genealogy() {
                     {parent?.product_batch_label ?? (selected.parent_lot_id ? selected.parent_lot_id.slice(0, 8) : '—')}
                   </dd>
                 </div>
+                {lotInputs.length > 0 ? (
+                  <div className="border-t pt-2">
+                    <dt className="text-stone-500">Ingredients used</dt>
+                    <dd className="mt-1 space-y-1">
+                      {lotInputs.map((input) => {
+                        const source = input.source_lot_id ? lots.find((lot) => lot.id === input.source_lot_id) : null;
+                        const name = input.raw_material?.name ?? 'Ingredient';
+                        const unit = input.raw_material?.unit_of_measure ?? '';
+                        return (
+                          <div key={input.id} className="flex justify-between gap-3 text-xs">
+                            <span>
+                              {name}
+                              {source ? ` · ${source.product_batch_label}` : ''}
+                            </span>
+                            <span className="tabular-nums">
+                              {input.quantity} {unit}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between gap-4">
                   <dt className="text-stone-500">Production run</dt>
                   <dd>{selected.runNumber ?? selected.production_run_id?.slice(0, 8) ?? '—'}</dd>

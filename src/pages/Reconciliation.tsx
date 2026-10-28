@@ -208,7 +208,7 @@ export function Reconciliation() {
               <div>
                 <p className="font-semibold">Unexplained variance: {fmt(variance)} units</p>
                 <p className="mt-1 text-amber-800">
-                  Live on-hand differs from opening + movements. Run a stock take or review the movement ledger.
+                  Live on-hand differs from the period closing plus movements dated after the period. In-transit stock is listed separately and is not part of this variance.
                 </p>
               </div>
             </div>
@@ -232,6 +232,7 @@ export function Reconciliation() {
               <MovementRow label="Stock take adjustments" value={Number(result.stock_take_adjustments ?? 0)} to={stockTakeHref} />
               <MovementRow label="Reversals" value={Number(result.reversals ?? 0)} />
               <MovementRow label="Computed closing" value={Number(result.computed_closing ?? 0)} emphasize />
+              <MovementRow label="Movements after period" value={Number(result.movements_after ?? 0)} />
               <MovementRow label="Live on-hand now" value={Number(result.live_on_hand ?? 0)} emphasize />
               </div>
             </div>
@@ -291,7 +292,7 @@ export function Reconciliation() {
             <div className="panel p-5">
               <h2 className="text-sm font-semibold text-stone-900">By SKU / material</h2>
               <p className="mt-1 text-xs text-stone-500">
-                Per-product equation — click a row to focus. Unexplained variance uses that SKU only (same units).
+                Per-product equation — click a row to focus. Unexplained variance is live on-hand minus the period closing and later movements. In transit is separate.
               </p>
               <div className="ios-group mt-3">
                 {skuRows.map((row) => {
@@ -314,6 +315,9 @@ export function Reconciliation() {
                           <span>Open {fmt(row.opening_qoh)}</span>
                           <span>Computed {fmt(row.computed_closing)}</span>
                           <span>Live {fmt(row.live_on_hand)}</span>
+                          <span>
+                            In transit {fmt(Number(row.in_transit_supply ?? 0) + Number(row.in_transit_transfer ?? 0))}
+                          </span>
                           <span className={bad ? 'font-semibold text-amber-800' : ''}>
                             Unexplained {fmt(row.unexplained_variance)}
                           </span>
@@ -333,6 +337,9 @@ export function Reconciliation() {
                   <MovementRow label="Waste" value={Number(selectedSku.waste)} />
                   <MovementRow label="Stock take" value={Number(selectedSku.stock_take_adjustments)} />
                   <MovementRow label="Reversals" value={Number(selectedSku.reversals)} />
+                  <MovementRow label="Movements after period" value={Number(selectedSku.movements_after ?? 0)} />
+                  <MovementRow label="Supply in transit" value={Number(selectedSku.in_transit_supply ?? 0)} />
+                  <MovementRow label="Transfer in transit" value={Number(selectedSku.in_transit_transfer ?? 0)} />
                   <MovementRow label="Unexplained" value={Number(selectedSku.unexplained_variance)} emphasize />
                 </div>
               )}

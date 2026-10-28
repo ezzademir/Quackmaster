@@ -52,6 +52,8 @@ function describeError(code: string | undefined): string {
       return 'A line no longer belongs to this outlet — reload the count sheet.';
     case 'duplicate_outlet_inventory_id':
       return 'Duplicate line in the submission — reload the count sheet.';
+    case 'counted_below_reserved':
+      return 'A counted quantity is below the quantity already reserved. Release that reservation or count at least the reserved amount.';
     case 'session_not_open':
       return 'This count is no longer open (it was submitted or cancelled elsewhere).';
     case 'session_not_found':

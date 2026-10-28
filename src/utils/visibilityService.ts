@@ -1,4 +1,4 @@
-import { extractAtomicRpcErrorCode, salesJournalErrorMessage } from './atomicRpcErrors';
+import { extractAtomicRpcErrorCode, salesJournalErrorMessage, wasteEventErrorMessage } from './atomicRpcErrors';
 import { supabase } from './supabase';
 
 export interface SalesJournalLineInput {
@@ -229,7 +229,7 @@ export async function postWasteEvent(params: {
   });
 
   if (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: wasteEventErrorMessage(extractAtomicRpcErrorCode(undefined, error.message)) };
   }
 
   const payload = data as {
@@ -242,7 +242,7 @@ export async function postWasteEvent(params: {
   if (!payload?.success) {
     return {
       success: false,
-      error: payload?.error ?? 'post_waste_event failed',
+      error: wasteEventErrorMessage(extractAtomicRpcErrorCode(payload?.error)),
     };
   }
 

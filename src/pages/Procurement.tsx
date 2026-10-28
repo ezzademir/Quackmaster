@@ -15,7 +15,8 @@ import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { useAuth } from '../utils/auth';
 import { useRegisterRefresh } from '../utils/pageRefresh';
 import { DEFAULT_OVER_RECEIPT_TOLERANCE_PCT, planReceipt, rpcLines } from '../utils/poReceipt';
-import { extractAtomicRpcErrorCode } from '../utils/atomicRpcErrors';
+import { extractAtomicRpcErrorCode, receiveShipmentErrorMessage } from '../utils/atomicRpcErrors';
+import { baseQuantity, roundHalfAway } from '../utils/stockMath';
 import { defaultEntityCode, poSelectableSuppliers, purchaseOrderInsertPayload, supplierInsertPayload, type MyEntity } from '../utils/procurementPayloads';
 import type { Supplier, RawMaterial, PurchaseOrder, PurchaseOrderItem } from '../types';
 
@@ -422,6 +423,14 @@ interface POLine {
   raw_material_id: string;
   quantity_ordered: string;
   unit_price: string;
+  purchase_uom: string;
+}
+
+interface MaterialUnitRow {
+  raw_material_id: string;
+  uom_code: string;
+  label: string | null;
+  ratio_to_base: number | null;
 }
 
 type POWithDetails = PurchaseOrder & {
@@ -453,6 +462,7 @@ function NewPOModal({
   suppliers,
   entities,
   materials,
+  materialUnits,
   materialsForSupplier,
   existingNumbers,
   existingOrder,
@@ -463,6 +473,7 @@ function NewPOModal({
   /** entities the user may post to (v_my_entities); a PO must carry one */
   entities: MyEntity[];
   materials: RawMaterial[];
+  materialUnits: MaterialUnitRow[];
   materialsForSupplier: (supplierId: string) => RawMaterial[];
   existingNumbers: string[];
   /** When set, form updates this draft PO (header + replaced line items). */
@@ -477,8 +488,9 @@ function NewPOModal({
         raw_material_id: i.raw_material_id,
         quantity_ordered: String(i.quantity_ordered),
         unit_price: String(i.unit_price),
+        purchase_uom: i.purchase_uom ?? '',
       }))
-    : [{ raw_material_id: '', quantity_ordered: '', unit_price: '' }];
+    : [{ raw_material_id: '', quantity_ordered: '', unit_price: '', purchase_uom: '' }];
 
   const [supplier_id, setSupplierId] = useState(existingOrder?.supplier_id ?? '');
   const [entity_code, setEntityCode] = useState(() => defaultEntityCode(entities, existingOrder?.entity_code));
@@ -496,12 +508,15 @@ function NewPOModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const total = lines.reduce((acc, l) => acc + (parseFloat(l.quantity_ordered) || 0) * (parseFloat(l.unit_price) || 0), 0);
+  const total = lines.reduce(
+    (acc, l) => acc + roundHalfAway((parseFloat(l.quantity_ordered) || 0) * (parseFloat(l.unit_price) || 0), 2),
+    0
+  );
 
   const catalogMaterials = supplier_id ? materialsForSupplier(supplier_id) : [];
   const catalogBlocked = Boolean(supplier_id && catalogMaterials.length === 0);
 
-  function addLine() { setLines([...lines, { raw_material_id: '', quantity_ordered: '', unit_price: '' }]); }
+  function addLine() { setLines([...lines, { raw_material_id: '', quantity_ordered: '', unit_price: '', purchase_uom: '' }]); }
   function removeLine(i: number) { setLines(lines.filter((_, idx) => idx !== i)); }
   function updateLine(i: number, key: keyof POLine, val: string) {
     const next = [...lines];
@@ -509,6 +524,7 @@ function NewPOModal({
     // Auto-fill unit price from material cost_price
     if (key === 'raw_material_id') {
       const mat = materials.find((m) => m.id === val);
+      next[i].purchase_uom = '';
       if (mat?.cost_price) next[i].unit_price = mat.cost_price.toString();
     }
     setLines(next);
@@ -555,6 +571,18 @@ function NewPOModal({
       }
     }
 
+    for (const line of validLines) {
+      const code = line.purchase_uom.trim();
+      if (!code) continue;
+      const unit = materialUnits.find(
+        (row) => row.raw_material_id === line.raw_material_id && row.uom_code === code && Number(row.ratio_to_base) > 0
+      );
+      if (!unit) {
+        setError(`Purchase unit ${code} has no conversion ratio. Choose another unit or leave it as the stock unit.`);
+        return;
+      }
+    }
+
     const allowedIds = new Set(catalogMaterials.map((m) => m.id));
     const catalogValidation = validatePoLinesAgainstSupplierCatalog(
       validLines.map((l) => ({ raw_material_id: l.raw_material_id })),
@@ -572,14 +600,20 @@ function NewPOModal({
         validLines.map((l) => {
           const qty = parseFloat(l.quantity_ordered);
           const price = parseFloat(l.unit_price);
+          const code = l.purchase_uom.trim();
+          const unit = code
+            ? materialUnits.find((row) => row.raw_material_id === l.raw_material_id && row.uom_code === code)
+            : undefined;
+          const ratio = unit && Number(unit.ratio_to_base) > 0 ? Number(unit.ratio_to_base) : 1;
           return {
             purchase_order_id: purchaseOrderId,
             raw_material_id: l.raw_material_id,
             quantity_ordered: qty,
-            quantity_ordered_base: qty,
+            quantity_ordered_base: baseQuantity(qty, ratio),
+            purchase_uom: code || null,
             quantity_received: 0,
             unit_price: price,
-            line_total: qty * price,
+            line_total: roundHalfAway(qty * price, 2),
           };
         });
 
@@ -724,10 +758,10 @@ function NewPOModal({
                 setSupplierId(next);
                 setLines((prev) =>
                   prev.map((line) => {
-                    if (!next) return { ...line, raw_material_id: '', unit_price: '' };
+                    if (!next) return { ...line, raw_material_id: '', unit_price: '', purchase_uom: '' };
                     const allowed = new Set(materialsForSupplier(next).map((m) => m.id));
                     if (line.raw_material_id && !allowed.has(line.raw_material_id))
-                      return { ...line, raw_material_id: '', unit_price: '' };
+                      return { ...line, raw_material_id: '', unit_price: '', purchase_uom: '' };
                     return line;
                   }),
                 );
@@ -796,6 +830,7 @@ function NewPOModal({
               <thead className="border-b border-stone-200 bg-stone-50">
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold text-stone-700">Material</th>
+                  <th className="px-3 py-2 text-left font-semibold text-stone-700">Unit</th>
                   <th className="px-3 py-2 text-right font-semibold text-stone-700">Qty</th>
                   <th className="px-3 py-2 text-right font-semibold text-stone-700">Unit Price (MYR)</th>
                   <th className="px-3 py-2 text-right font-semibold text-stone-700">Total</th>
@@ -823,6 +858,25 @@ function NewPOModal({
                       </select>
                     </td>
                     <td className="px-3 py-2">
+                      <select
+                        value={line.purchase_uom}
+                        onChange={(e) => updateLine(i, 'purchase_uom', e.target.value)}
+                        disabled={!line.raw_material_id}
+                        className="w-full rounded border border-stone-300 px-2 py-1.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 disabled:bg-stone-100"
+                      >
+                        <option value="">
+                          {materials.find((m) => m.id === line.raw_material_id)?.unit_of_measure || 'Stock unit'}
+                        </option>
+                        {materialUnits
+                          .filter((row) => row.raw_material_id === line.raw_material_id)
+                          .map((row) => (
+                            <option key={row.uom_code} value={row.uom_code}>
+                              {row.label || row.uom_code} (×{row.ratio_to_base})
+                            </option>
+                          ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2">
                       <input type="number" min="0" step="0.0001" value={line.quantity_ordered} onChange={(e) => updateLine(i, 'quantity_ordered', e.target.value)}
                         className="w-24 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
@@ -831,7 +885,7 @@ function NewPOModal({
                         className="w-28 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
                     <td className="px-3 py-2 text-right font-medium text-stone-900">
-                      {((parseFloat(line.quantity_ordered) || 0) * (parseFloat(line.unit_price) || 0)).toFixed(2)}
+                      {roundHalfAway((parseFloat(line.quantity_ordered) || 0) * (parseFloat(line.unit_price) || 0), 2).toFixed(2)}
                     </td>
                     <td className="px-2 py-2">
                       <button onClick={() => removeLine(i)} className="text-stone-300 hover:text-red-500 transition-colors">
@@ -843,7 +897,7 @@ function NewPOModal({
               </tbody>
               <tfoot className="border-t border-stone-200 bg-stone-50">
                 <tr>
-                  <td colSpan={3} className="px-3 py-2 text-right text-sm font-semibold text-stone-900">Total</td>
+                  <td colSpan={4} className="px-3 py-2 text-right text-sm font-semibold text-stone-900">Total</td>
                   <td className="px-3 py-2 text-right text-sm font-bold text-stone-900">MYR {total.toFixed(2)}</td>
                   <td />
                 </tr>
@@ -947,7 +1001,7 @@ function PODetailModal({
       );
       const fail = rpcFailure(rpcData, rpcErr, 'Receive shipment failed');
       if (fail) {
-        setError(fail);
+        setError(receiveShipmentErrorMessage(fail));
         setSaving(false);
         return;
       }
@@ -1072,13 +1126,14 @@ function PODetailModal({
                 <th className="text-right">Ordered</th>
                 <th className="text-right">Received</th>
                 <th className="text-right">Unit Price</th>
-                <th className="text-right">Total</th>
+                <th className="text-right">Order value</th>
+                <th className="text-right">Received value</th>
               </tr>
             </thead>
             <tbody>
               {(po.items ?? []).map((item) => (
                 <tr key={item.id}>
-                  <td className="font-medium">{item.material?.name ?? '—'}<span className="ml-1 text-xs text-stone-400">({item.material?.unit_of_measure})</span></td>
+                  <td className="font-medium">{item.material?.name ?? '—'}<span className="ml-1 text-xs text-stone-400">({item.purchase_uom || item.material?.unit_of_measure})</span></td>
                   <td className="text-right">{item.quantity_ordered}</td>
                   <td className="text-right">
                     {po.status === 'ordered' || po.status === 'partial' ? (
@@ -1108,6 +1163,7 @@ function PODetailModal({
                   </td>
                   <td className="text-right">MYR {item.unit_price.toFixed(2)}</td>
                   <td className="text-right font-medium">MYR {(item.line_total ?? item.quantity_ordered * item.unit_price).toFixed(2)}</td>
+                  <td className="text-right">MYR {((Number(receivedQtys[item.id] ?? item.quantity_received) || 0) * item.unit_price).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
@@ -1225,6 +1281,7 @@ export function Procurement() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierScores, setSupplierScores] = useState<SupplierScoreRow[]>([]);
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
+  const [materialUnits, setMaterialUnits] = useState<MaterialUnitRow[]>([]);
   const [supplierMaterialLinks, setSupplierMaterialLinks] = useState<Array<{ supplier_id: string; raw_material_id: string }>>(
     []
   );
@@ -1281,7 +1338,7 @@ export function Procurement() {
 
   async function loadAll() {
     setLoading(true);
-    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }, { data: scores }, { data: ents }] = await Promise.all([
+    const [{ data: sups }, { data: mats }, { data: pos }, { data: links }, { data: scores }, { data: ents }, { data: units }] = await Promise.all([
       supabase.from('suppliers').select('*').order('name'),
       // procurement cannot read raw_materials (cost columns); it gets the cost-free catalogue view
       isProcurement
@@ -1295,11 +1352,13 @@ export function Procurement() {
       supabase.from('supplier_scorecard_metrics').select('*').order('supplier_name'),
       // procurement cannot read business_entities; this view returns only the caller's own entities
       supabase.from('v_my_entities').select('code, name, procurement_tag').order('code'),
+      supabase.from('material_units').select('raw_material_id, uom_code, label, ratio_to_base'),
     ]);
     setEntities((ents ?? []) as MyEntity[]);
     setSuppliers(sups ?? []);
     setSupplierScores((scores ?? []) as SupplierScoreRow[]);
     setMaterials((mats ?? []) as typeof materials);
+    setMaterialUnits((units ?? []) as MaterialUnitRow[]);
     setSupplierMaterialLinks(links ?? []);
     const matById = new Map((mats ?? []).map((m: { id: string }) => [m.id, m]));
     // embedded material is null for procurement (raw_materials denied); fill it from the catalogue
@@ -1702,6 +1761,7 @@ export function Procurement() {
           suppliers={suppliers}
           entities={entities}
           materials={materials}
+          materialUnits={materialUnits}
           materialsForSupplier={materialsForSupplierCatalog}
           existingNumbers={orders.map((o) => o.order_number)}
           onClose={() => setShowNewPO(false)}
@@ -1714,6 +1774,7 @@ export function Procurement() {
           suppliers={suppliers}
           entities={entities}
           materials={materials}
+          materialUnits={materialUnits}
           materialsForSupplier={materialsForSupplierCatalog}
           existingNumbers={orders.map((o) => o.order_number)}
           existingOrder={editPO}

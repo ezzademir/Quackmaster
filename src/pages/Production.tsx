@@ -18,6 +18,7 @@ import {
   voidProductionRun,
 } from '../utils/productionService';
 import { voidConfirmMatches } from '../utils/lotLabel';
+import { roundHalfAway } from '../utils/stockMath';
 import { useAuth } from '../utils/auth';
 import { useRegisterRefresh } from '../utils/pageRefresh';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
@@ -377,7 +378,7 @@ function NewRunModal({
     const materialIds = (recipe.ingredients ?? []).map((ing) => ing.raw_material_id);
     const { data: inventoryData, error: invError } = await supabase
       .from('hub_inventory')
-      .select('raw_material_id, quantity_on_hand')
+      .select('raw_material_id, quantity_on_hand, reserved_quantity')
       .in('raw_material_id', materialIds);
 
     if (invError) {
@@ -386,14 +387,17 @@ function NewRunModal({
       return;
     }
 
-    const availableQuantities = new Map(
-      (inventoryData ?? []).map((item) => [item.raw_material_id, item.quantity_on_hand])
-    );
+    const availableQuantities = new Map<string, number>();
+    for (const item of inventoryData ?? []) {
+      const id = String(item.raw_material_id);
+      const available = Math.max(0, Number(item.quantity_on_hand ?? 0) - Number(item.reserved_quantity ?? 0));
+      availableQuantities.set(id, (availableQuantities.get(id) ?? 0) + available);
+    }
 
     setRunMaterials(
       (recipe.ingredients ?? []).map((ing) => ({
         raw_material_id: ing.raw_material_id,
-        quantity_consumed: ing.quantity_required.toString(),
+        quantity_consumed: roundHalfAway(ing.quantity_required, 4).toFixed(4),
         required: ing.quantity_required, // Base requirement for 1 batch
         material_name: ing.material?.name ?? '—',
         unit: ing.material?.unit_of_measure ?? '',
@@ -416,7 +420,7 @@ function NewRunModal({
         return {
           ...m,
           required: scaledReq,
-          quantity_consumed: scaledReq.toFixed(3),
+          quantity_consumed: roundHalfAway(scaledReq, 4).toFixed(4),
         };
       });
       setRunMaterials(next);
@@ -525,7 +529,7 @@ function NewRunModal({
         runMaterials.map((m) => ({
           production_run_id: run.id,
           raw_material_id: m.raw_material_id,
-          quantity_consumed: parseFloat(m.quantity_consumed) || 0,
+          quantity_consumed: roundHalfAway(parseFloat(m.quantity_consumed) || 0, 4),
         }))
       );
       if (!saved.ok) {

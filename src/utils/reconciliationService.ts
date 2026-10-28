@@ -22,6 +22,7 @@ export interface ReconcileOutletStockResult {
   stock_take_adjustments?: number;
   reversals?: number;
   computed_closing?: number;
+  movements_after?: number;
   live_on_hand?: number;
   unexplained_variance?: number;
   in_transit_supply?: number;
@@ -154,7 +155,10 @@ export interface SkuReconcileRow {
   stock_take_adjustments: number;
   reversals: number;
   computed_closing: number;
+  movements_after: number;
   live_on_hand: number;
+  in_transit_supply: number;
+  in_transit_transfer: number;
   unexplained_variance: number;
 }
 
