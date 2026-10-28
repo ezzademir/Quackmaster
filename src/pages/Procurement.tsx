@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, AlertCircle, ChevronRight, Trash2 } from 'lucide-react';
+import { Plus, Search, AlertCircle, ChevronRight, Trash2, Download, Upload } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
+import { CatalogImportModal } from '../components/procurement/CatalogImportModal';
 import { EntityChip } from '../components/EntityChip';
 import { PoCancelPanel } from '../components/PoCancelPanel';
 import { PoCancelRequestsTab, usePoCancelPendingCount } from '../components/PoCancelRequestsTab';
 import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui';
+import { downloadCsv } from '../utils/exportCsv';
+import {
+  MATERIAL_CSV_HEADERS,
+  SUPPLIER_CSV_HEADERS,
+  materialExportRows,
+  supplierExportRows,
+} from '../utils/procurementCatalogCsv';
 import { supabase } from '../utils/supabase';
 import { writeLedgerEntry } from '../utils/ledger';
 import { validateSupplier, validateRawMaterial, validatePurchaseOrder, validatePurchaseOrderItem, validatePoLinesAgainstSupplierCatalog, formatValidationErrors } from '../utils/validation';
@@ -1242,6 +1250,7 @@ export function Procurement() {
   const [showSupplierModal, setShowSupplierModal] = useState(false);
   const [editMaterial, setEditMaterial] = useState<RawMaterial | null | 'new'>('new' as never);
   const [showMaterialModal, setShowMaterialModal] = useState(false);
+  const [catalogImport, setCatalogImport] = useState<'suppliers' | 'materials' | null>(null);
 
   const materialsForSupplierCatalog = useMemo(() => {
     const map = new Map<string, RawMaterial[]>();
@@ -1276,6 +1285,7 @@ export function Procurement() {
 
   function selectTab(next: Tab) {
     setTab(next);
+    setCatalogImport(null);
     setSearchParams(next === 'orders' ? {} : { tab: next }, { replace: true });
   }
 
@@ -1413,24 +1423,72 @@ export function Procurement() {
               </Button>
             )}
             {tab === 'suppliers' && (
-              <Button
-                onClick={() => {
-                  setEditSupplier(null);
-                  setShowSupplierModal(true);
-                }}
-              >
-                <Plus size={16} /> Add Supplier
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => downloadCsv('suppliers-template', [...SUPPLIER_CSV_HEADERS], [])}
+                >
+                  <Download size={16} /> Template
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={loading}
+                  onClick={() =>
+                    downloadCsv(
+                      'suppliers',
+                      [...SUPPLIER_CSV_HEADERS],
+                      supplierExportRows(suppliers, supplierMaterialLinks, materials)
+                    )
+                  }
+                >
+                  <Download size={16} /> Export
+                </Button>
+                {isAdmin && (
+                  <Button variant="secondary" disabled={loading} onClick={() => setCatalogImport('suppliers')}>
+                    <Upload size={16} /> Import
+                  </Button>
+                )}
+                <Button
+                  onClick={() => {
+                    setEditSupplier(null);
+                    setShowSupplierModal(true);
+                  }}
+                >
+                  <Plus size={16} /> Add Supplier
+                </Button>
+              </>
             )}
             {tab === 'materials' && (
-              <Button
-                onClick={() => {
-                  setEditMaterial(null);
-                  setShowMaterialModal(true);
-                }}
-              >
-                <Plus size={16} /> Add Material
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => downloadCsv('raw-materials-template', [...MATERIAL_CSV_HEADERS], [])}
+                >
+                  <Download size={16} /> Template
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={loading}
+                  onClick={() =>
+                    downloadCsv('raw-materials', [...MATERIAL_CSV_HEADERS], materialExportRows(materials))
+                  }
+                >
+                  <Download size={16} /> Export
+                </Button>
+                {isAdmin && (
+                  <Button variant="secondary" disabled={loading} onClick={() => setCatalogImport('materials')}>
+                    <Upload size={16} /> Import
+                  </Button>
+                )}
+                <Button
+                  onClick={() => {
+                    setEditMaterial(null);
+                    setShowMaterialModal(true);
+                  }}
+                >
+                  <Plus size={16} /> Add Material
+                </Button>
+              </>
             )}
           </>
         }
@@ -1752,6 +1810,21 @@ export function Procurement() {
               ? async () => deleteSupplier(editSupplier.id)
               : undefined
           }
+        />
+      )}
+      {catalogImport && (
+        <CatalogImportModal
+          kind={catalogImport}
+          suppliers={suppliers}
+          materials={materials}
+          onClose={() => setCatalogImport(null)}
+          onDataChanged={() => {
+            void loadAll();
+          }}
+          onApplied={() => {
+            setCatalogImport(null);
+            void loadAll();
+          }}
         />
       )}
       {showMaterialModal && (
