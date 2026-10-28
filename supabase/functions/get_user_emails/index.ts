@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { isActiveAdmin } from "../_shared/activeAdmin.ts";
 
 /** Reflect Origin / requested headers so browser CORS checks pass from gh-pages etc. */
 function corsHeaders(req: Request): Record<string, string> {
@@ -91,7 +92,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: profile, error: profileErr } = await adminClient
       .from("profiles")
-      .select("role")
+      .select("role, is_active")
       .eq("id", jwtUser.id ?? "")
       .maybeSingle();
 
@@ -100,7 +101,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Failed to verify admin" }, req, 500);
     }
 
-    if (profile?.role !== "admin") {
+    if (!isActiveAdmin(profile)) {
       return jsonResponse(
         { error: "Only admins can fetch user emails" },
         req,

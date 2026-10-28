@@ -21,6 +21,7 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'hub_below_reserved',
   'insufficient_hub_quantity',
   'cannot_cancel_missing_hub_row',
+  'bills_on_po',
   'missing_raw_material',
   'raw_material_hub_row_missing',
   'insufficient_raw_material',
@@ -42,6 +43,11 @@ const KNOWN_ATOMIC_RPC_CODES = [
   'invalid_status',
   'cannot_cancel_received',
   'already_cancelled',
+  'pending_request_exists',
+  'reason_required',
+  'cannot_decide_own_request',
+  'request_already_decided',
+  'request_not_found',
   'cannot_fulfill_reserved',
   'outlet_inventory_not_found',
   'inventory_wrong_outlet',
@@ -83,6 +89,20 @@ export function cancelPurchaseOrderErrorMessage(code: string | undefined): strin
       return 'Cannot cancel: hub inventory row is missing for a received material.';
     case 'po_not_found':
       return 'This purchase order no longer exists.';
+    case 'forbidden':
+      return 'Only an admin can cancel a purchase order.';
+    case 'bills_on_po':
+      return 'Cannot cancel: this purchase order has a supplier bill. Handle the bill through accounting first (void or reverse it, payments through the payments record), then cancel.';
+    case 'already_cancelled':
+      return 'This purchase order is already cancelled.';
+    case 'pending_request_exists':
+      return 'A cancel request is already pending for this purchase order. Approve or reject it first.';
+    case 'reason_required':
+      return 'A reason is required to request or reject a purchase-order cancel.';
+    case 'cannot_decide_own_request':
+      return 'You cannot approve or reject your own cancel request.';
+    case 'request_already_decided':
+      return 'This cancel request has already been decided.';
     default:
       return code ? `Could not cancel purchase order (${code}).` : 'Could not cancel purchase order.';
   }

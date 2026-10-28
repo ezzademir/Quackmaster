@@ -194,12 +194,36 @@ export async function createSupplyOrder(
  * Dispatch supply order — atomic server RPC fulfills all hub reservations and sets status.
  * Outlet on-hand is credited on receipt (separate RPC).
  */
-export async function dispatchSupplyOrder(supplyOrderId: string): Promise<{ success: boolean; error?: string }> {
+export interface DispatchedLine {
+  lot_label?: string | null;
+  expiry_date?: string | null;
+  quantity?: number;
+  expired?: boolean;
+}
+
+/** Warning text when dispatch shipped expired batches (dispatch is never blocked for expiry). */
+export function expiredDispatchWarning(data: unknown): string | undefined {
+  const payload = data as { expired_lines?: number; expired_qty?: number; lines?: DispatchedLine[] } | null;
+  const n = Number(payload?.expired_lines ?? 0);
+  if (!payload || !Number.isFinite(n) || n <= 0) return undefined;
+  const which = (payload.lines ?? [])
+    .filter((l) => l.expired)
+    .map((l) => `${l.lot_label ?? 'batch'} ×${l.quantity ?? '?'} (expired ${l.expiry_date ?? '?'})`)
+    .join(', ');
+  return `Dispatched, but ${payload.expired_qty ?? '?'} units came from expired batches: ${which}. These lines are flagged on the order.`;
+}
+
+export async function dispatchSupplyOrder(
+  supplyOrderId: string
+): Promise<{ success: boolean; error?: string; expiredWarning?: string }> {
   try {
     const { data, error } = await supabase.rpc('dispatch_supply_order', {
       p_supply_order_id: supplyOrderId,
     });
-    return parseSupplyMutationRpc(data, error, 'dispatch_supply_order failed');
+    const parsed = parseSupplyMutationRpc(data, error, 'dispatch_supply_order failed');
+    if (!parsed.success) return parsed;
+    const expiredWarning = expiredDispatchWarning(data);
+    return expiredWarning ? { success: true, expiredWarning } : { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to dispatch' };
   }

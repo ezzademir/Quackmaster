@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard, StickyActions, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { postWasteEvent, type WasteLineHubInput, type WasteLineOutletInput } from '../utils/visibilityService';
 import type { Outlet } from '../types';
-import { getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
+import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { formatLotWithSku, nestedLotLabel, nestedRecipeSku } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
+import { getOutletSaleBatches } from '../utils/outletStockTakeService';
 
 const HISTORY_PAGE_SIZE = 25;
 
@@ -164,8 +166,14 @@ export function Waste() {
         .eq('outlet_id', outletId)
         .is('raw_material_id', null)
         .gt('quantity_on_hand', 0);
+      let rows: unknown[] = data ?? [];
+      if (rows.length === 0) {
+        // Blind stock take open: outlet stock is hidden from non-admins; waste still posts server-side.
+        const alt = await getOutletSaleBatches(outletId);
+        if (alt.success && alt.hidden) rows = alt.rows ?? [];
+      }
       if (cancelled) return;
-      const picks: OutletPickRow[] = (data ?? []).map((row) => {
+      const picks: OutletPickRow[] = rows.map((row) => {
         const r = row as {
           id: string;
           product_batch: string | null;
@@ -207,8 +215,8 @@ export function Waste() {
         }
 
         if (historyRange) {
-          const from = historyRange.start.toISOString().slice(0, 10);
-          const to = historyRange.end.toISOString().slice(0, 10);
+          const from = formatDateForInput(historyRange.start);
+          const to = formatDateForInput(historyRange.end);
           query = query.gte('waste_date', from).lte('waste_date', to);
         }
 
@@ -317,8 +325,8 @@ export function Waste() {
         q = q.eq('location_kind', 'outlet').eq('outlet_id', profile.assigned_outlet_id);
       }
       if (historyRange) {
-        const from = historyRange.start.toISOString().slice(0, 10);
-        const to = historyRange.end.toISOString().slice(0, 10);
+        const from = formatDateForInput(historyRange.start);
+        const to = formatDateForInput(historyRange.end);
         q = q.gte('waste_date', from).lte('waste_date', to);
       }
       const { data: events, error } = await q;
@@ -350,6 +358,12 @@ export function Waste() {
       if (gen === overviewGenRef.current) setOverviewLoading(false);
     }
   }, [historyRange, isSupervisor, profile?.assigned_outlet_id]);
+
+  useRegisterRefresh(() => {
+    void load();
+    void loadHistory(0, false);
+    void loadOverview();
+  });
 
   useEffect(() => {
     setHistoryPage(0);
@@ -530,38 +544,63 @@ export function Waste() {
             ) : history.length === 0 ? (
               <EmptyState title="No posted waste events in this period" />
             ) : (
-              <div className="overflow-x-auto rounded-lg border border-stone-100">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Location</th>
-                      <th className="text-right">Lines</th>
-                      <th className="text-right">Total qty</th>
-                      <th>Lots</th>
-                      <th>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {history.map((row) => {
-                      const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
-                      const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
-                      return (
-                        <tr key={row.id} className="hover:bg-stone-50/80">
-                          <td>{row.waste_date}</td>
-                          <td className="capitalize">{loc}</td>
-                          <td className="text-right tabular-nums">{row.line_count}</td>
-                          <td className="text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
-                          <td className="max-w-[220px] truncate font-mono text-xs" title={row.lot_summary}>
-                            {row.lot_summary}
-                          </td>
-                          <td className="max-w-[200px] truncate text-stone-500">{row.notes?.trim() || '—'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="ios-group">
+                  {history.map((row) => {
+                    const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
+                    const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
+                    return (
+                      <ListRow
+                        key={row.id}
+                        title={<span className="tabular-nums">{row.waste_date}</span>}
+                        meta={`${loc} · ${row.line_count} line${row.line_count === 1 ? '' : 's'} · ${row.total_qty.toLocaleString()} qty`}
+                        body={
+                          <div className="space-y-1">
+                            <p className="truncate font-mono text-xs text-stone-700" title={row.lot_summary}>
+                              {row.lot_summary || '—'}
+                            </p>
+                            {row.notes?.trim() ? (
+                              <p className="truncate text-xs text-stone-500">{row.notes}</p>
+                            ) : null}
+                          </div>
+                        }
+                      />
+                    );
+                  })}
+                </div>
+                <div className="hidden">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Location</th>
+                        <th className="text-right">Lines</th>
+                        <th className="text-right">Total qty</th>
+                        <th>Lots</th>
+                        <th>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((row) => {
+                        const outlet = Array.isArray(row.outlet) ? row.outlet[0] : row.outlet;
+                        const loc = row.location_kind === 'hub' ? 'Hub' : outlet?.name ?? 'Outlet';
+                        return (
+                          <tr key={row.id}>
+                            <td>{row.waste_date}</td>
+                            <td className="capitalize">{loc}</td>
+                            <td className="text-right tabular-nums">{row.line_count}</td>
+                            <td className="text-right tabular-nums">{row.total_qty.toLocaleString()}</td>
+                            <td className="max-w-[220px] truncate font-mono text-xs" title={row.lot_summary}>
+                              {row.lot_summary}
+                            </td>
+                            <td className="max-w-[200px] truncate text-stone-500">{row.notes?.trim() || '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
             {historyHasMore && (
               <Button variant="secondary" disabled={historyLoading} onClick={() => setHistoryPage((p) => p + 1)}>
@@ -655,7 +694,7 @@ export function Waste() {
               </button>
             </div>
             {linesHub.map((line, idx) => (
-              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-stone-100 bg-stone-50 p-3">
                 <select
                   value={line.hub_inventory_id}
                   onChange={(e) => syncHubBatch(idx, e.target.value)}
@@ -671,7 +710,7 @@ export function Waste() {
                 <input
                   type="number"
                   min={0}
-                  step="0.01"
+                  step="0.0001"
                   placeholder="Qty"
                   value={line.quantity || ''}
                   onChange={(e) => {
@@ -724,7 +763,7 @@ export function Waste() {
               </button>
             </div>
             {linesOutlet.map((line, idx) => (
-              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <div key={line.key} className="flex flex-wrap items-end gap-2 rounded-lg border border-stone-100 bg-stone-50 p-3">
                 <select
                   value={line.outlet_inventory_id}
                   onChange={(e) => {
@@ -754,7 +793,7 @@ export function Waste() {
                 <input
                   type="number"
                   min={0}
-                  step="0.01"
+                  step="0.0001"
                   placeholder="Qty"
                   value={line.quantity || ''}
                   onChange={(e) => {
@@ -803,9 +842,11 @@ export function Waste() {
           />
         </div>
 
-        <Button type="submit" disabled={submitting}>
-          {submitting ? 'Posting…' : 'Post waste event'}
-        </Button>
+        <StickyActions>
+          <Button type="submit" disabled={submitting} className="w-full sm:w-auto">
+            {submitting ? 'Posting…' : 'Post waste event'}
+          </Button>
+        </StickyActions>
       </form>
       )}
     </div>

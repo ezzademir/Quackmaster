@@ -4,6 +4,7 @@
 
 import { supabase } from './supabase';
 import { isLegacyBatchCode, skuForDisplay } from './lotLabel';
+import { compareHubBatches } from './hubBatchPick';
 import type { Outlet } from '../types';
 
 export interface OutletStockTakeLineInput {
@@ -29,6 +30,122 @@ export type PostOutletStockTakeResult =
     }
   | { success: false; error: string; [k: string]: unknown };
 
+/** One line of a blind count sheet: batch identity only (the server never sends quantities). */
+export interface BlindCountSheetLine {
+  outlet_inventory_id: string;
+  raw_material_id: string | null;
+  product_batch: string | null;
+  lot_id: string | null;
+  lot_label: string | null;
+  recipe_sku: string | null;
+  expiry_date: string | null;
+  run_number: string | null;
+  item_name: string | null;
+  unit_of_measure: string | null;
+}
+
+export type BlindCountSheetResult =
+  | { success: true; session_id: string; count_date: string; resumed?: boolean; lines: BlindCountSheetLine[] }
+  | { success: false; error: string };
+
+export type SubmitBlindCountResult =
+  | {
+      success: true;
+      session_id: string;
+      lines_counted?: number;
+      idempotent_replay?: boolean;
+      /** Present for admins only: system quantity and variance per line. */
+      lines?: Array<{
+        outlet_inventory_id: string;
+        system_qoh_before: number;
+        counted_qty: number;
+        variance: number;
+        /** System qty when the count opened (audit; 0 = batch arrived during the count). */
+        system_qoh_at_open?: number;
+        /** Net sales/receipts/waste posted while the count was open (system_qoh_before − system_qoh_at_open). */
+        qty_moved_during_count?: number;
+      }>;
+    }
+  | { success: false; error: string };
+
+async function callJsonRpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) return { success: false, error: error.message } as T;
+  if (!data || typeof data !== 'object') return { success: false, error: 'empty_response' } as T;
+  return data as T;
+}
+
+/** FG batch on hand at an outlet, identity only (no quantities): shape matches the outlet_inventory select. */
+export interface OutletSaleBatchRow {
+  id: string;
+  product_batch: string;
+  created_at: string | null;
+  lot: {
+    expiry_date: string | null;
+    manufactured_at: string | null;
+    product_batch_label: string | null;
+    production_run: { run_number: string | null; recipe: { default_product_batch: string | null } } | null;
+  } | null;
+}
+
+export interface OutletSaleBatchesResult {
+  success: boolean;
+  error?: string;
+  /** true while a blind count is open and the caller (non-admin) cannot read this outlet's stock. */
+  hidden?: boolean;
+  rows?: OutletSaleBatchRow[];
+}
+
+/**
+ * Batches on hand for the Sales / Waste screens. Used when a blind count hides outlet_inventory
+ * from the user (RLS): posting still works server-side, the screen just gets no quantities.
+ */
+export function getOutletSaleBatches(outletId: string) {
+  return callJsonRpc<OutletSaleBatchesResult>('get_outlet_sale_batches', { p_outlet_id: outletId });
+}
+
+/** Open (or resume) the outlet's blind count and get its count sheet. */
+export function startBlindStockTake(outletId: string, countDate?: string | null, notes?: string | null) {
+  return callJsonRpc<BlindCountSheetResult>('start_outlet_stock_take', {
+    p_outlet_id: outletId,
+    p_count_date: countDate ?? null,
+    p_notes: notes?.trim() || null,
+  });
+}
+
+export function getBlindStockTakeSheet(sessionId: string) {
+  return callJsonRpc<BlindCountSheetResult>('get_outlet_stock_take_sheet', { p_session_id: sessionId });
+}
+
+export function submitBlindStockTake(params: {
+  sessionId: string;
+  lines: OutletStockTakeLineInput[];
+  notes?: string | null;
+  idempotencyKey?: string | null;
+}) {
+  return callJsonRpc<SubmitBlindCountResult>('submit_outlet_stock_take', {
+    p_session_id: params.sessionId,
+    p_lines: params.lines.map((l) => ({
+      outlet_inventory_id: l.outlet_inventory_id,
+      counted_qty: l.counted_qty,
+      line_remark: l.line_remark ?? null,
+    })),
+    p_notes: params.notes?.trim() || null,
+    p_idempotency_key: params.idempotencyKey ?? null,
+  });
+}
+
+export function cancelBlindStockTake(sessionId: string, reason?: string | null) {
+  return callJsonRpc<{ success: boolean; error?: string }>('cancel_outlet_stock_take', {
+    p_session_id: sessionId,
+    p_reason: reason?.trim() || null,
+  });
+}
+
+/**
+ * Legacy direct post. Since 080 the server only accepts this into the outlet's open blind session
+ * (error blind_count_session_required otherwise); kept for compatibility.
+ */
 export async function postOutletStockTake(params: PostOutletStockTakeParams): Promise<PostOutletStockTakeResult> {
   const { data, error } = await supabase.rpc('post_outlet_stock_take', {
     p_outlet_id: params.outletId,
@@ -57,6 +174,10 @@ export interface OutletStockTakeSessionRow {
   id: string;
   outlet_id: string;
   count_date: string;
+  /** NULL = legacy posted session; open = blind count in progress (080). */
+  status?: 'open' | 'posted' | 'cancelled' | null;
+  opened_at?: string | null;
+  opened_by?: string | null;
   notes: string | null;
   idempotency_key: string | null;
   created_by: string | null;
@@ -89,6 +210,9 @@ export interface OutletStockTakeLineRow {
   counted_qty: number;
   variance: number;
   line_remark: string | null;
+  /** Blind counts (080): system qty at open and net movement while open. NULL on older sessions. */
+  system_qoh_at_open?: number | null;
+  qty_moved_during_count?: number | null;
   outlet_inventory?: {
     product_batch?: string | null;
     raw_material_id?: string | null;
@@ -117,7 +241,7 @@ const OUTLET_INV_SELECT_WITH_RM = `
   lot:inventory_lots (
     product_batch_label,
     expiry_date,
-    production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+    production_run:production_run_id ( run_number, recipe:recipe_id ( default_product_batch ) )
   ),
   raw_materials ( name, unit_of_measure )
 `;
@@ -134,7 +258,7 @@ const OUTLET_INV_SELECT_LEGACY = `
   lot:inventory_lots (
     product_batch_label,
     expiry_date,
-    production_run:production_run_id ( recipe:recipe_id ( default_product_batch ) )
+    production_run:production_run_id ( run_number, recipe:recipe_id ( default_product_batch ) )
   )
 `;
 
@@ -279,6 +403,8 @@ export function buildOutletStockTakeCsv(
     counted_qty: number;
     variance: number;
     line_remark?: string | null;
+    system_qoh_at_open?: number | null;
+    qty_moved_during_count?: number | null;
   }>
 ): string {
   const outletName = session.outlet?.name ?? '';
@@ -295,6 +421,8 @@ export function buildOutletStockTakeCsv(
     'counted_qty',
     'variance',
     'line_remark',
+    'system_qoh_at_open',
+    'qty_moved_during_count',
   ];
   const rows = lines.map((l) =>
     [
@@ -310,6 +438,8 @@ export function buildOutletStockTakeCsv(
       l.counted_qty,
       l.variance,
       l.line_remark ?? '',
+      l.system_qoh_at_open ?? '',
+      l.qty_moved_during_count ?? '',
     ].map(csvCell)
   );
 
@@ -325,6 +455,7 @@ export interface SkuCountLotRow {
   reserved_quantity: number;
   expiry_date?: string | null;
   created_at?: string | null;
+  run_number?: string | null;
   item_label?: string;
 }
 
@@ -369,38 +500,39 @@ export function groupRowsForSkuCount(rows: SkuCountLotRow[]): SkuCountGroup[] {
 }
 
 /**
- * Allocate a SKU counted total onto lot rows FIFO by expiry then created_at.
- * Shortfall zeros earlier lots then applies remainder (may go below reserved — caller validates).
- * Surplus lands on the last lot.
+ * Allocate a SKU counted total onto lot rows.
+ * Sales and waste consume the OLDEST batch first (FEFO, ties by run number), so stock still on the
+ * shelf is the NEWEST. The count therefore fills the newest batches first, up to each batch's system
+ * on-hand; any surplus over the system total lands on the newest batch. A shortfall falls on the
+ * oldest batches (the ones FIFO would already have sold). Output order is FEFO (oldest first).
  */
 export function allocateSkuCountToLots(
   lots: SkuCountLotRow[],
   countedTotal: number
 ): Array<{ outlet_inventory_id: string; counted_qty: number }> {
-  const sorted = [...lots].sort((a, b) => {
-    const ae = a.expiry_date ? Date.parse(a.expiry_date) : Number.POSITIVE_INFINITY;
-    const be = b.expiry_date ? Date.parse(b.expiry_date) : Number.POSITIVE_INFINITY;
-    if (ae !== be) return ae - be;
+  const fefo = [...lots].sort((a, b) => {
+    const byBatch = compareHubBatches(
+      { expiry_date: a.expiry_date, run_number: a.run_number },
+      { expiry_date: b.expiry_date, run_number: b.run_number }
+    );
+    if (byBatch !== 0) return byBatch;
     const ac = a.created_at ? Date.parse(a.created_at) : 0;
     const bc = b.created_at ? Date.parse(b.created_at) : 0;
     return ac - bc;
   });
 
   let remaining = Math.max(0, countedTotal);
-  const out: Array<{ outlet_inventory_id: string; counted_qty: number }> = [];
-
-  for (let i = 0; i < sorted.length; i++) {
-    const lot = sorted[i];
-    const isLast = i === sorted.length - 1;
-    if (isLast) {
-      out.push({ outlet_inventory_id: lot.id, counted_qty: remaining });
-      remaining = 0;
-    } else {
-      const take = Math.min(remaining, Math.max(0, Number(lot.quantity_on_hand ?? 0)));
-      out.push({ outlet_inventory_id: lot.id, counted_qty: take });
-      remaining -= take;
-    }
+  const counted = new Map<string, number>();
+  for (let i = fefo.length - 1; i >= 0; i--) {
+    const lot = fefo[i];
+    const take = Math.min(remaining, Math.max(0, Number(lot.quantity_on_hand ?? 0)));
+    counted.set(lot.id, take);
+    remaining -= take;
+  }
+  if (remaining > 0 && fefo.length > 0) {
+    const newest = fefo[fefo.length - 1].id;
+    counted.set(newest, (counted.get(newest) ?? 0) + remaining);
   }
 
-  return out;
+  return fefo.map((lot) => ({ outlet_inventory_id: lot.id, counted_qty: counted.get(lot.id) ?? 0 }));
 }

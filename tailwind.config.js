@@ -17,6 +17,10 @@ export default {
           900: '#78350f',
         },
       },
+      boxShadow: {
+        // Prefer borders over elevation for a flat look
+        soft: '0 1px 2px 0 rgb(28 25 23 / 0.04)',
+      },
     },
   },
   plugins: [],

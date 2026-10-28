@@ -19,13 +19,17 @@ export function parseIsoDateLocal(iso: string): Date {
   return new Date(y, m - 1, d, 12, 0, 0, 0);
 }
 
-function rangeFromIso(fromIso: string, toIso: string): DateRange {
-  const start = parseIsoDateLocal(fromIso);
-  start.setHours(0, 0, 0, 0);
-  const end = parseIsoDateLocal(toIso);
-  end.setHours(23, 59, 59, 999);
+/**
+ * Malaysia (UTC+8, no DST) calendar-day bounds as absolute instants,
+ * independent of the device time zone (audit A-03).
+ */
+export function mytRangeFromIso(fromIso: string, toIso: string): DateRange {
+  const start = new Date(`${fromIso.slice(0, 10)}T00:00:00.000+08:00`);
+  const end = new Date(`${toIso.slice(0, 10)}T23:59:59.999+08:00`);
   return { start, end };
 }
+
+const rangeFromIso = mytRangeFromIso;
 
 /** Monday (ISO) of the Malaysia calendar week containing isoDate. */
 export function mondayOfIso(isoDate: string): string {
@@ -100,11 +104,11 @@ export function isDateInRange(date: Date | string, range: DateRange): boolean {
   return d >= range.start && d <= range.end;
 }
 
-/** Calendar `date` / ISO date string compared at local noon to avoid UTC midnight drift */
+/** Calendar `date` / ISO date string compared at Malaysia noon to avoid midnight drift */
 function calendarDateAtNoon(value: string | undefined | null): string {
   if (value == null || value === '') return '';
   const t = String(value).trim();
-  return t.includes('T') ? t : `${t}T12:00:00`;
+  return t.includes('T') ? t : `${t.slice(0, 10)}T12:00:00+08:00`;
 }
 
 export function isCalendarDateInRange(value: string | undefined | null, range: DateRange): boolean {
@@ -113,11 +117,9 @@ export function isCalendarDateInRange(value: string | undefined | null, range: D
   return isDateInRange(d, range);
 }
 
+/** YYYY-MM-DD of an instant in Malaysia time (range bounds, input defaults). */
 export function formatDateForInput(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return malaysiaCalendarDate(date);
 }
 
 /**
