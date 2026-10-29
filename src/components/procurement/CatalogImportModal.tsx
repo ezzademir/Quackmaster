@@ -8,6 +8,7 @@ import { retryWithBackoff } from '../../utils/errorHandling';
 import {
   planMaterialImport,
   planSupplierImport,
+  syncSupplierMaterialLinks,
   type CatalogNameRef,
   type MaterialImportPlanRow,
   type SupplierImportPlanRow,
@@ -97,21 +98,40 @@ async function applySupplierRows(
         }
       }
 
-      const { error: deleteError } = await retryWithBackoff(
-        async () => await supabase.from('supplier_raw_materials').delete().eq('supplier_id', supplierId)
+      await syncSupplierMaterialLinks(
+        {
+          async list(id) {
+            const { data, error } = await retryWithBackoff(
+              async () => await supabase.from('supplier_raw_materials').select('raw_material_id').eq('supplier_id', id)
+            );
+            if (error) throw new ImportWriteError(error.message, true);
+            return (data ?? []).map((link) => link.raw_material_id);
+          },
+          async insert(id, materialIds) {
+            const linkRows = materialIds.map((raw_material_id) => ({
+              supplier_id: id,
+              raw_material_id,
+            }));
+            const { error } = await retryWithBackoff(
+              async () => await supabase.from('supplier_raw_materials').insert(linkRows)
+            );
+            if (error) throw new ImportWriteError(error.message, true);
+          },
+          async remove(id, materialIds) {
+            const { error } = await retryWithBackoff(
+              async () =>
+                await supabase
+                  .from('supplier_raw_materials')
+                  .delete()
+                  .eq('supplier_id', id)
+                  .in('raw_material_id', [...materialIds])
+            );
+            if (error) throw new ImportWriteError(error.message, true);
+          },
+        },
+        supplierId,
+        row.materialIds
       );
-      if (deleteError) throw new ImportWriteError(deleteError.message, true);
-
-      if (row.materialIds.length > 0) {
-        const linkRows = row.materialIds.map((raw_material_id) => ({
-          supplier_id: supplierId,
-          raw_material_id,
-        }));
-        const { error: insertError } = await retryWithBackoff(
-          async () => await supabase.from('supplier_raw_materials').insert(linkRows)
-        );
-        if (insertError) throw new ImportWriteError(insertError.message, true);
-      }
     } catch (error) {
       if (error instanceof ImportWriteError) throw error;
       const message = error instanceof Error ? error.message : 'Import failed';
