@@ -6,7 +6,9 @@ import {
   materialExportRows,
   planMaterialImport,
   planSupplierImport,
+  planSupplierLinkChanges,
   supplierExportRows,
+  syncSupplierMaterialLinks,
 } from './procurementCatalogCsv';
 
 function sheet(headers: readonly string[], rows: (string | number | null | undefined)[][]): string {
@@ -225,5 +227,73 @@ describe('planMaterialImport', () => {
     expect(planMaterialImport(MATERIAL_CSV_HEADERS.join(','), []).fileError).toBe(
       'The file has no data rows.'
     );
+  });
+
+  it('rejects a thousands separator instead of blanking the cost or resetting reorder to 10', () => {
+    const csv = sheet(MATERIAL_CSV_HEADERS, [
+      ['m-salt', 'Salt', 'Coarse', 'kg', '1,250.00', '2,500'],
+    ]);
+    const plan = planMaterialImport(csv, [{ id: 'm-salt', name: 'Salt' }]);
+    expect(plan.canApply).toBe(false);
+    expect(plan.rows[0].action).toBe('error');
+    expect(plan.rows[0].errors).toEqual([
+      'Cost price must use digits and an optional decimal point',
+      'Reorder level must use digits and an optional decimal point',
+    ]);
+  });
+
+  it('rejects a cost with a unit suffix instead of saving a blank price', () => {
+    const csv = sheet(MATERIAL_CSV_HEADERS, [['m-salt', 'Salt', '', 'kg', '12.50 MYR', '5']]);
+    const plan = planMaterialImport(csv, [{ id: 'm-salt', name: 'Salt' }]);
+    expect(plan.canApply).toBe(false);
+    expect(plan.rows[0].action).toBe('error');
+    expect(plan.rows[0].payload.cost_price).toBeNull();
+    expect(plan.rows[0].payload.reorder_level).toBe(5);
+  });
+});
+
+describe('supplier catalog link sync', () => {
+  it('adds links that are missing and removes only the ones the file dropped', () => {
+    expect(planSupplierLinkChanges(['salt', 'duck'], ['salt', 'pepper'])).toEqual({
+      add: ['pepper'],
+      remove: ['duck'],
+    });
+    expect(planSupplierLinkChanges(['salt'], [])).toEqual({ add: [], remove: ['salt'] });
+    expect(planSupplierLinkChanges(['salt'], ['salt'])).toEqual({ add: [], remove: [] });
+  });
+
+  it('does not remove the existing catalog when the insert fails', async () => {
+    const removed: string[][] = [];
+    const store = {
+      list: async () => ['salt', 'duck'],
+      insert: async () => {
+        throw new Error('raw_material_id violates foreign key constraint');
+      },
+      remove: async (_supplierId: string, materialIds: readonly string[]) => {
+        removed.push([...materialIds]);
+      },
+    };
+    await expect(syncSupplierMaterialLinks(store, 's1', ['salt', 'pepper'])).rejects.toThrow(
+      /foreign key constraint/
+    );
+    expect(removed).toEqual([]);
+  });
+
+  it('inserts new links before deleting the ones the file removed', async () => {
+    const ops: string[] = [];
+    await syncSupplierMaterialLinks(
+      {
+        list: async () => ['salt', 'duck'],
+        insert: async () => {
+          ops.push('insert');
+        },
+        remove: async () => {
+          ops.push('remove');
+        },
+      },
+      's1',
+      ['salt', 'pepper']
+    );
+    expect(ops).toEqual(['insert', 'remove']);
   });
 });

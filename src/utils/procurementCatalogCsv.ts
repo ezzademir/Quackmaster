@@ -253,6 +253,50 @@ function cellAt(cells: string[], index: number): string {
   return (cells[index] ?? '').trim();
 }
 
+/**
+ * A catalog number is digits with an optional decimal point.
+ * `parseFloat` accepts `1,250.00` as 1, and `Number` then rejects it, so the importer used to
+ * store that cost as blank and a thousands-separated reorder level as the default 10.
+ */
+function parsePlainCatalogNumber(raw: string): number | null {
+  if (!/^\d+(?:\.\d+)?$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+const COST_PRICE_ERROR = 'Cost price must use digits and an optional decimal point';
+const REORDER_LEVEL_ERROR = 'Reorder level must use digits and an optional decimal point';
+
+export function planSupplierLinkChanges(
+  currentIds: readonly string[],
+  desiredIds: readonly string[]
+): { add: string[]; remove: string[] } {
+  const current = new Set(currentIds);
+  const desired = new Set(desiredIds);
+  return {
+    add: desiredIds.filter((id) => !current.has(id)),
+    remove: currentIds.filter((id) => !desired.has(id)),
+  };
+}
+
+export interface SupplierLinkStore {
+  list(supplierId: string): Promise<readonly string[]>;
+  insert(supplierId: string, materialIds: readonly string[]): Promise<void>;
+  remove(supplierId: string, materialIds: readonly string[]): Promise<void>;
+}
+
+/** Add links first. A failed insert leaves the previous catalog in place. */
+export async function syncSupplierMaterialLinks(
+  store: SupplierLinkStore,
+  supplierId: string,
+  desiredIds: readonly string[]
+): Promise<void> {
+  const currentIds = await store.list(supplierId);
+  const { add, remove } = planSupplierLinkChanges(currentIds, desiredIds);
+  if (add.length > 0) await store.insert(supplierId, add);
+  if (remove.length > 0) await store.remove(supplierId, remove);
+}
+
 function columnCountError(cellCount: number, expected: number): string | null {
   if (cellCount < expected) return MISSING_COLUMNS;
   if (cellCount > expected) return EXTRA_COLUMNS;
@@ -420,20 +464,24 @@ export function planMaterialImport(
     const unit = cellAt(record.cells, 3);
     const costRaw = cellAt(record.cells, 4);
     const reorderRaw = cellAt(record.cells, 5);
+    const parsedCost = costRaw === '' ? null : parsePlainCatalogNumber(costRaw);
+    const parsedReorder = reorderRaw === '' ? null : parsePlainCatalogNumber(reorderRaw);
+    if (costRaw !== '' && parsedCost == null) errors.push(COST_PRICE_ERROR);
+    if (reorderRaw !== '' && parsedReorder == null) errors.push(REORDER_LEVEL_ERROR);
     const materialInput: Record<string, unknown> = {
       name,
       unit_of_measure: unit,
     };
-    if (costRaw !== '') materialInput.cost_price = costRaw;
-    if (reorderRaw !== '') materialInput.reorder_level = reorderRaw;
+    if (parsedCost != null) materialInput.cost_price = parsedCost;
+    if (parsedReorder != null) materialInput.reorder_level = parsedReorder;
     const validation = validateRawMaterial(materialInput);
     for (const issue of validation.errors) errors.push(issue.message);
 
     const match = matchRecord(cellAt(record.cells, 0), name, existingById, existingByName);
     errors.push(...match.errors);
 
-    const cost_price = costRaw === '' ? null : Number(costRaw);
-    const reorder_level = reorderRaw === '' ? 10 : Number(reorderRaw);
+    const cost_price = parsedCost;
+    const reorder_level = reorderRaw === '' ? 10 : parsedReorder;
 
     return {
       line: record.line,
@@ -445,8 +493,8 @@ export function planMaterialImport(
         name,
         description: blankToNull(cellAt(record.cells, 2)),
         unit_of_measure: unit,
-        cost_price: Number.isFinite(cost_price) ? cost_price : null,
-        reorder_level: Number.isFinite(reorder_level) ? reorder_level : 10,
+        cost_price,
+        reorder_level: reorder_level ?? 10,
       },
     };
   });
