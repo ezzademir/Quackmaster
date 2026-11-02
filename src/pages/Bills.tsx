@@ -145,12 +145,16 @@ export function Bills() {
     const orderNo = bill.purchase_order_id ? orderNumbers[bill.purchase_order_id] : null;
     const invoices = bill.purchase_order_id ? (invoiceNumbers[bill.purchase_order_id] ?? []) : [];
     const status = billStatus(bill.payment_status);
-    const haystack = [bill.supplier_name, bill.bill_number, bill.entity_code, orderNo, status.label, bill.due_date, ...invoices];
+    const haystack = [
+      bill.supplier_name, bill.bill_number, bill.entity_code, orderNo, status.label, bill.due_date,
+      Number(bill.amount_rm).toFixed(2), Number(bill.balance_rm).toFixed(2), Number(bill.paid_rm).toFixed(2),
+      ...invoices,
+    ];
     return haystack.some((part) => (part ?? '').toLowerCase().includes(needle));
   }), [rows, orderNumbers, invoiceNumbers, needle]);
   const visiblePrices = useMemo(() => prices.filter((price) => {
     if (!needle) return true;
-    const haystack = [price.supplier_name, price.item_name, price.order_number, price.unit_of_measure, price.price_source];
+    const haystack = [price.supplier_name, price.item_name, price.order_number, price.unit_of_measure, price.price_source, Number(price.unit_price_rm).toFixed(2)];
     return haystack.some((part) => (part ?? '').toLowerCase().includes(needle));
   }), [prices, needle]);
 
@@ -216,7 +220,7 @@ export function Bills() {
           aria-label="Search bills"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search supplier, invoice, or PO"
+          placeholder="Search supplier, invoice, PO, or amount"
           className="min-h-11 w-full rounded-xl border border-stone-200 bg-white py-2 pl-9 pr-3 text-sm"
         />
       </div>
@@ -245,7 +249,7 @@ export function Bills() {
       ) : rows.length === 0 ? (
         <EmptyState title="No bills" description="Accept a purchase order, or record a supplier invoice that is not an order." />
       ) : visibleBills.length === 0 ? (
-        <EmptyState title="No matches" description="Try a supplier, invoice number, or purchase order number." />
+        <EmptyState title="No matches" description="Try a supplier, invoice number, purchase order number, or amount." />
       ) : (
         <div className="ios-group">
           {visibleBills.map((r) => {
