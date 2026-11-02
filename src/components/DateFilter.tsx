@@ -10,6 +10,7 @@ import {
   getThisMonth,
   getLastMonth,
   formatDateForInput,
+  mytRangeFromIso,
 } from '../utils/dateRange';
 
 export type DateFilterType =
@@ -115,10 +116,7 @@ export function DateFilter({
   }
 
   function handleCustomDateApply() {
-    const start = new Date(customStartDate);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(customEndDate);
-    end.setHours(23, 59, 59, 999);
+    const { start, end } = mytRangeFromIso(customStartDate, customEndDate);
 
     if (start > end) {
       alert('Start date must be before end date');

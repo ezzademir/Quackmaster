@@ -14,6 +14,7 @@ export interface HubLotLine {
   last_updated?: string;
   expiry_date?: string | null;
   lot_label?: string | null;
+  run_number?: string | null;
   recipe_sku?: string | null;
 }
 

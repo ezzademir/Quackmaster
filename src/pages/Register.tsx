@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../utils/supabase';
-import { writeLedgerEntry } from '../utils/ledger';
+import { getSignupConfirmRedirectUrl } from '../utils/passwordRules';
 
 export function Register() {
   const [form, setForm] = useState({
@@ -38,6 +38,7 @@ export function Register() {
       email: form.email,
       password: form.password,
       options: {
+        emailRedirectTo: getSignupConfirmRedirectUrl(),
         data: { full_name: form.full_name, role: 'pending' },
       },
     });
@@ -48,54 +49,18 @@ export function Register() {
       return;
     }
 
-    // Create profile with pending role
-    if (data.user) {
-      const { error: profileError } = await supabase.from('profiles').upsert({
-        id: data.user.id,
-        full_name: form.full_name,
-        role: 'pending',
-      });
-      if (!profileError) {
-        await writeLedgerEntry({
-          action: 'created',
-          entityType: 'profile',
-          entityId: data.user.id,
-          module: 'auth',
-          operation: 'event',
-          afterData: { full_name: form.full_name, role: 'pending' },
-          metadata: { source: 'register' },
-        });
-      }
-
-      if (profileError) {
-        console.error('Profile creation error:', profileError);
-      }
-
-      // Create pending registration entry
-      const { error: regError } = await supabase.from('pending_registrations').insert({
-        user_id: data.user.id,
-        email: form.email,
-        full_name: form.full_name,
-        status: 'pending',
-        requested_at: new Date().toISOString(),
-      });
-      if (!regError) {
-        await writeLedgerEntry({
-          action: 'created',
-          entityType: 'pending_registration',
-          entityId: data.user.id,
-          module: 'auth',
-          operation: 'insert',
-          afterData: { email: form.email, full_name: form.full_name, status: 'pending' },
-          referenceId: data.user.id,
-        });
-      }
-
-      if (regError) {
-        console.error('Pending registration error:', regError);
-        // Don't fail registration if pending_registrations insert fails
-        // The profile was created, user can proceed to pending approval page
-      }
+    // Profile + pending_registrations are created server-side by the auth.users trigger
+    // (handle_new_user, migration 070). With email confirmation on there is no session here,
+    // so client inserts would be rejected by RLS — do not write from the browser.
+    if (!data.user) {
+      setError('Sign-up did not return a user. Please try again or contact an admin.');
+      setLoading(false);
+      return;
+    }
+    if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      setError('An account with this email already exists. Try signing in or resetting your password.');
+      setLoading(false);
+      return;
     }
 
     setLoading(false);
@@ -113,10 +78,10 @@ export function Register() {
           <p className="mt-1 text-sm text-stone-500">Join Quackmaster ERP</p>
         </div>
 
-        <div className="rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
+        <div className="rounded-2xl border border-stone-200 bg-white p-8">
           {submitted ? (
             <div className="space-y-4">
-              <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">
+              <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
                 <p className="font-medium mb-1">Registration submitted!</p>
                 <p>Your account is pending admin approval. You'll receive an email once your request is reviewed.</p>
               </div>
@@ -142,49 +107,49 @@ export function Register() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Full Name</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Full Name</label>
               <input
                 type="text"
                 required
                 value={form.full_name}
                 onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Email address</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Email address</label>
               <input
                 type="email"
                 autoComplete="email"
                 required
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Password</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Password</label>
               <input
                 type="password"
                 autoComplete="new-password"
                 required
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Confirm Password</label>
+              <label className="mb-1.5 block text-sm font-medium text-stone-700">Confirm Password</label>
               <input
                 type="password"
                 autoComplete="new-password"
                 required
                 value={form.confirm}
                 onChange={(e) => setForm({ ...form, confirm: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               />
             </div>
 
@@ -197,7 +162,7 @@ export function Register() {
             </button>
           </form>
 
-              <p className="mt-5 text-center text-sm text-gray-500">
+              <p className="mt-5 text-center text-sm text-stone-500">
                 Already have an account?{' '}
                 <Link to="/login" className="font-medium text-brand-800 hover:text-brand-900">
                   Sign in

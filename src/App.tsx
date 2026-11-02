@@ -3,7 +3,12 @@ import { HashRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-
 
 /** GitHub Pages only serves real files; deep pathname URLs can 404. Hash routing loads index.html once. */
 import { AuthProvider, useAuth } from './utils/auth';
+import { PageRefreshProvider } from './utils/pageRefresh';
 import { Layout } from './components/Layout';
+import { isPathAllowedForRole, homePathForRole } from './utils/roleAccess';
+import { Receiving } from './pages/Receiving';
+import { Bills } from './pages/Bills';
+import { SectionHome } from './pages/SectionHome';
 
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
 const Register = lazy(() => import('./pages/Register').then((m) => ({ default: m.Register })));
@@ -27,6 +32,7 @@ const AuditDashboard = lazy(() => import('./pages/AuditDashboard').then((m) => (
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const StockTake = lazy(() => import('./pages/StockTake').then((m) => ({ default: m.StockTake })));
 const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
+const Costing = lazy(() => import('./pages/Costing').then((m) => ({ default: m.Costing })));
 
 function LoadingScreen({ subtitle }: { subtitle?: string }) {
   return (
@@ -93,6 +99,11 @@ function AuditGate() {
   return isAdmin ? <AuditDashboard /> : <Navigate to="/" replace />;
 }
 
+function CostingGate() {
+  const { isAdmin } = useAuth();
+  return isAdmin ? <Costing /> : <Navigate to="/" replace />;
+}
+
 function GenealogyGate() {
   const { isAdmin, profile } = useAuth();
   const canView = isAdmin || profile?.role === 'staff';
@@ -101,16 +112,18 @@ function GenealogyGate() {
 
 function LayoutShell() {
   return (
-    <Layout>
-      <Outlet />
-    </Layout>
+    <PageRefreshProvider>
+      <Layout>
+        <Outlet />
+      </Layout>
+    </PageRefreshProvider>
   );
 }
 
 function ProfileLoadError({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="flex min-h-dvh h-dvh max-h-dvh items-center justify-center overflow-y-auto bg-stone-50 auth-safe-padding">
-      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 shadow-sm text-center">
+      <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 text-center">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 text-xl font-bold text-white">
           Q
         </div>
@@ -122,7 +135,27 @@ function ProfileLoadError({ onSignOut }: { onSignOut: () => void }) {
         <button
           type="button"
           onClick={onSignOut}
-          className="w-full rounded-lg border border-gray-200 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          className="btn-secondary w-full"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AccountDeactivated({ onSignOut }: { onSignOut: () => void }) {
+  return (
+    <div className="mobile-auth-shell py-10">
+      <div className="w-full max-w-sm panel p-6 text-center">
+        <h1 className="text-lg font-semibold text-stone-900">Account deactivated</h1>
+        <p className="mt-2 text-sm text-stone-600">
+          This account has been deactivated by an administrator. Contact an admin if you think this is a mistake.
+        </p>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="mt-4 w-full rounded-lg bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-800"
         >
           Sign out
         </button>
@@ -154,6 +187,10 @@ function ProtectedShell() {
     );
   }
 
+  if (profile.is_active === false) {
+    return <AccountDeactivated onSignOut={() => void signOut()} />;
+  }
+
   const role = profile?.role?.toLowerCase?.()?.trim();
   if (role === 'pending') return <PendingApproval />;
 
@@ -162,13 +199,8 @@ function ProtectedShell() {
     return <Navigate to="/required-password-reset" replace />;
   }
 
-  if (role === 'supervisor') {
-    const path = location.pathname;
-    const allowed =
-      path === '/stock-take' || path === '/sales' || path === '/waste' || path === '/required-password-reset';
-    if (!allowed) {
-      return <Navigate to="/stock-take" replace />;
-    }
+  if (!isPathAllowedForRole(role, location.pathname)) {
+    return <Navigate to={homePathForRole(role)} replace />;
   }
 
   return <Outlet />;
@@ -192,6 +224,14 @@ function App() {
                 <Route path="/production/*" element={<Production />} />
                 <Route path="/inventory/*" element={<Inventory />} />
                 <Route path="/distribution/*" element={<Distribution />} />
+                <Route path="/receiving" element={<Receiving />} />
+                <Route path="/bills" element={<Bills />} />
+                <Route path="/costing" element={<CostingGate />} />
+                <Route path="/buy" element={<SectionHome />} />
+                <Route path="/kitchen" element={<SectionHome />} />
+                <Route path="/outlets" element={<SectionHome />} />
+                <Route path="/books" element={<SectionHome />} />
+                <Route path="/suppliers" element={<Navigate to="/procurement?tab=suppliers" replace />} />
                 <Route path="/sales" element={<Sales />} />
                 <Route path="/pos-compare" element={<PosCompareGate />} />
                 <Route path="/waste" element={<Waste />} />

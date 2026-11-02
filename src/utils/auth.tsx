@@ -4,16 +4,18 @@ import { supabase } from './supabase';
 
 function normalizeRole(r: string | undefined | null): Profile['role'] {
   const v = String(r ?? 'staff').toLowerCase().trim();
-  if (v === 'admin' || v === 'staff' || v === 'pending' || v === 'supervisor') return v;
+  if (v === 'admin' || v === 'staff' || v === 'pending' || v === 'supervisor' || v === 'procurement') return v;
   return 'staff';
 }
 
 export interface Profile {
   id: string;
   full_name: string;
-  role: 'admin' | 'staff' | 'pending' | 'supervisor';
+  role: 'admin' | 'staff' | 'pending' | 'supervisor' | 'procurement';
   assigned_outlet_id?: string | null;
   password_reset_required?: boolean | null;
+  /** false = deactivated by an admin (login blocked, no access). Missing = active. */
+  is_active?: boolean | null;
 }
 
 interface AuthContextValue {
@@ -23,6 +25,7 @@ interface AuthContextValue {
   isAdmin: boolean;
   /** Outlet supervisor — narrow app shell (Stock take module). */
   isSupervisor: boolean;
+  isProcurement: boolean;
   /** Session bootstrap (getSession) — ends quickly once storage/network responds */
   loading: boolean;
   /** Profile row fetch after session exists — does not block login screen when logged out */
@@ -39,6 +42,7 @@ const AuthContext = createContext<AuthContextValue>({
   profile: null,
   isAdmin: false,
   isSupervisor: false,
+  isProcurement: false,
   loading: true,
   profileLoading: false,
   signOut: async () => {},
@@ -65,7 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       const query = supabase
         .from('profiles')
-        .select('id, full_name, role, assigned_outlet_id, password_reset_required')
+        .select('*') // includes is_active once migration 071 is applied; safe before it
         .eq('id', userId)
         .maybeSingle();
 
@@ -90,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   role: normalizeRole(row.role),
                   assigned_outlet_id: row.assigned_outlet_id ?? null,
                   password_reset_required: Boolean(row.password_reset_required),
+                  is_active: row.is_active !== false,
                 }
               : null
           );
@@ -249,6 +254,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile,
       isAdmin: profile?.role?.toLowerCase?.()?.trim() === 'admin',
       isSupervisor: profile?.role?.toLowerCase?.()?.trim() === 'supervisor',
+      isProcurement: profile?.role?.toLowerCase?.()?.trim() === 'procurement',
       loading,
       profileLoading,
       signOut,

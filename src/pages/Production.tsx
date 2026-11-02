@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, ChevronRight, FlaskConical, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
+import { saveRunMaterialsOrRollback, type MaterialsClient } from '../utils/productionRunMaterials';
+import { Plus, CreditCard as Edit2, Trash2, ChevronRight, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
 import { DateFilter } from '../components/DateFilter';
-import { Button, PageHeader, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, Tabs } from '../components/ui';
 import { ProductionPlanningPanel } from '../components/ProductionPlanningPanel';
 import { FinishedGoodsLotLabel, type FinishedGoodsLotLabelData } from '../components/FinishedGoodsLotLabel';
 import { supabase } from '../utils/supabase';
-import { isDateInRange, type DateRange } from '../utils/dateRange';
+import { isDateInRange, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { logActivity } from '../utils/activityLog';
 import {
   backfillLotExpiryForRecipe,
@@ -18,6 +19,7 @@ import {
 } from '../utils/productionService';
 import { voidConfirmMatches } from '../utils/lotLabel';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
 import type { Recipe, RecipeIngredient, RawMaterial, ProductionRun } from '../types';
 
 type Tab = 'runs' | 'recipes' | 'planning';
@@ -42,10 +44,10 @@ function StatusBadge({ status }: { status: string }) {
     in_progress: 'bg-blue-100 text-blue-700',
     completed: 'bg-emerald-100 text-emerald-700',
     cancelled: 'bg-red-100 text-red-700',
-    voided: 'bg-gray-200 text-gray-700',
+    voided: 'bg-stone-200 text-stone-700',
   };
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${map[status] ?? 'bg-gray-100 text-gray-700'}`}>
+    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${map[status] ?? 'bg-stone-100 text-stone-700'}`}>
       {status.replace('_', ' ')}
     </span>
   );
@@ -55,10 +57,10 @@ function YieldBar({ value }: { value: number }) {
   const color = value >= 95 ? 'bg-emerald-500' : value >= 80 ? 'bg-amber-400' : 'bg-red-500';
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-20 rounded-full bg-gray-200">
+      <div className="h-1.5 w-20 rounded-full bg-stone-200">
         <div className={`h-1.5 rounded-full ${color} transition-all`} style={{ width: `${Math.min(value, 100)}%` }} />
       </div>
-      <span className="text-sm font-semibold text-gray-900">{value.toFixed(1)}%</span>
+      <span className="text-sm font-semibold text-stone-900">{value.toFixed(1)}%</span>
     </div>
   );
 }
@@ -190,45 +192,45 @@ function RecipeModal({
       <div className="space-y-5">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Recipe Name *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Recipe Name *</label>
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Description</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Description</label>
             <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Standard Batch Size *</label>
-            <input type="number" min="0" step="0.01" value={form.standard_batch_size} onChange={(e) => setForm({ ...form, standard_batch_size: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            <label className="mb-1 block text-sm font-medium text-stone-700">Standard Batch Size *</label>
+            <input type="number" min="0" step="0.0001" value={form.standard_batch_size} onChange={(e) => setForm({ ...form, standard_batch_size: e.target.value })}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Batch Unit *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Batch Unit *</label>
             <input value={form.batch_unit} onChange={(e) => setForm({ ...form, batch_unit: e.target.value })} placeholder="kg, L, pcs…"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Target Yield %</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Target Yield %</label>
             <input type="number" min="0" max="100" step="0.1" value={form.target_yield_percentage} onChange={(e) => setForm({ ...form, target_yield_percentage: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Product SKU</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Product SKU</label>
             <input
               value={form.default_product_batch}
               onChange={(e) => setForm({ ...form, default_product_batch: e.target.value })}
               placeholder="Product SKU (e.g. QUACKTEOW)"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             />
-            <p className="mt-1 text-xs text-gray-500">
+            <p className="mt-1 text-xs text-stone-500">
               What you sell, PAR, and FIFO against. Each completed run gets a unique lot like SKU-YYMMDD-0007.
               Changing SKU only affects <span className="font-medium">new</span> lots — already-inked codes stay as printed.
             </p>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Shelf life (days)</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Shelf life (days)</label>
             <input
               type="number"
               min="0"
@@ -236,9 +238,9 @@ function RecipeModal({
               value={form.shelf_life_days}
               onChange={(e) => setForm({ ...form, shelf_life_days: e.target.value })}
               placeholder="e.g. 7"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
             />
-            <p className="mt-1 text-xs text-gray-500">
+            <p className="mt-1 text-xs text-stone-500">
               Days from production date to EXP on the lot label. Also powers “Lots expiring soon” on Overview. Saving
               fills expiry on lots that still have none.
             </p>
@@ -247,36 +249,36 @@ function RecipeModal({
 
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Ingredients (per batch)</h3>
+            <h3 className="text-sm font-semibold text-stone-900">Ingredients (per batch)</h3>
             <button onClick={addLine} className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800">
               <Plus size={14} /> Add Ingredient
             </button>
           </div>
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <div className="overflow-x-auto rounded-lg border border-stone-200">
             <table className="w-full text-sm">
-              <thead className="border-b border-gray-200 bg-gray-50">
+              <thead className="border-b border-stone-200 bg-stone-50">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Raw Material</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Qty Required</th>
+                  <th className="px-3 py-2 text-left font-semibold text-stone-700">Raw Material</th>
+                  <th className="px-3 py-2 text-right font-semibold text-stone-700">Qty Required</th>
                   <th className="w-8 px-2 py-2" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-stone-100">
                 {lines.map((line, i) => (
                   <tr key={i}>
                     <td className="px-3 py-2">
                       <select value={line.raw_material_id} onChange={(e) => updateLine(i, 'raw_material_id', e.target.value)}
-                        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
+                        className="w-full rounded border border-stone-300 px-2 py-1.5 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20">
                         <option value="">Select material…</option>
                         {materials.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit_of_measure})</option>)}
                       </select>
                     </td>
                     <td className="px-3 py-2">
-                      <input type="number" min="0" step="0.001" value={line.quantity_required} onChange={(e) => updateLine(i, 'quantity_required', e.target.value)}
-                        className="w-24 rounded border border-gray-300 px-2 py-1.5 text-right text-sm focus:border-blue-500 focus:outline-none" />
+                      <input type="number" min="0" step="0.0001" value={line.quantity_required} onChange={(e) => updateLine(i, 'quantity_required', e.target.value)}
+                        className="w-24 rounded border border-stone-300 px-2 py-1.5 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                     </td>
                     <td className="px-2 py-2">
-                      <button onClick={() => removeLine(i)} className="text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+                      <button onClick={() => removeLine(i)} className="text-stone-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
                     </td>
                   </tr>
                 ))}
@@ -286,7 +288,7 @@ function RecipeModal({
         </div>
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <button onClick={handleSave} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors">
           {saving ? 'Saving…' : 'Save Recipe'}
         </button>
@@ -335,13 +337,15 @@ function NewRunModal({
   recipes: RecipeWithIngredients[];
   onClose: () => void;
   onSave: () => void;
-  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' } | null;
+  profile: { role: 'admin' | 'staff' | 'pending' | 'supervisor' | 'procurement' } | null;
   initialRecipeId?: string;
   initialPlannedOutput?: number;
   plannedBatchId?: string | null;
 }) {
   const [recipe_id, setRecipeId] = useState(initialRecipeId ?? '');
-  const [production_date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  // Malaysia calendar date (00:00-08:00 MYT is still the previous day in UTC).
+  const [production_date, setDate] = useState(() => malaysiaCalendarDate());
+  const productionDateInFuture = production_date > malaysiaCalendarDate();
   const [planned_output, setPlanned] = useState(
     initialPlannedOutput != null ? String(initialPlannedOutput) : ''
   );
@@ -439,7 +443,7 @@ function NewRunModal({
 
     // Calculate new planned output based on the bottleneck ratio
     const maxPlanned = recipe.standard_batch_size * minRatio;
-    updatePlannedOutput(maxPlanned.toFixed(2));
+    updatePlannedOutput(String(Math.round(maxPlanned * 10000) / 10000));
   }
 
   async function handleSave() {
@@ -515,14 +519,19 @@ function NewRunModal({
         setSaving(false);
         return;
       }
-      if (runMaterials.length > 0) {
-        await supabase.from('production_run_materials').insert(
-          runMaterials.map((m) => ({
-            production_run_id: run.id,
-            raw_material_id: m.raw_material_id,
-            quantity_consumed: parseFloat(m.quantity_consumed) || 0,
-          }))
-        );
+      const saved = await saveRunMaterialsOrRollback(
+        supabase as unknown as MaterialsClient,
+        run.id,
+        runMaterials.map((m) => ({
+          production_run_id: run.id,
+          raw_material_id: m.raw_material_id,
+          quantity_consumed: parseFloat(m.quantity_consumed) || 0,
+        }))
+      );
+      if (!saved.ok) {
+        setError(saved.error);
+        setSaving(false);
+        return;
       }
 
       // Get recipe for QC evaluation
@@ -619,26 +628,31 @@ function NewRunModal({
       <div className="space-y-5">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
           <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-gray-700">Recipe *</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Recipe *</label>
             <select value={recipe_id} onChange={(e) => selectRecipe(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20">
               <option value="">Select recipe…</option>
               {recipes.map((r) => <option key={r.id} value={r.id}>{r.name} (batch: {r.standard_batch_size} {r.batch_unit})</option>)}
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Production Date</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Production Date</label>
             <input type="date" value={production_date} onChange={(e) => setDate(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
+            {productionDateInFuture && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                This date is in the future (Malaysia time). The lot code and expiry use this date.
+              </p>
+            )}
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Notes</label>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Notes</label>
             <input value={notes} onChange={(e) => setNotes(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-700">Planned Output ({selectedRecipe?.batch_unit ?? 'units'})</label>
+              <label className="text-sm font-medium text-stone-700">Planned Output ({selectedRecipe?.batch_unit ?? 'units'})</label>
               {recipe_id && (
                 <button
                   onClick={adjustToStock}
@@ -649,13 +663,13 @@ function NewRunModal({
                 </button>
               )}
             </div>
-            <input type="number" min="0" step="0.01" value={planned_output} onChange={(e) => updatePlannedOutput(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            <input type="number" min="0" step="0.0001" value={planned_output} onChange={(e) => updatePlannedOutput(e.target.value)}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Actual Output ({selectedRecipe?.batch_unit ?? 'units'})</label>
-            <input type="number" min="0" step="0.01" value={actual_output} onChange={(e) => setActual(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            <label className="mb-1 block text-sm font-medium text-stone-700">Actual Output ({selectedRecipe?.batch_unit ?? 'units'})</label>
+            <input type="number" min="0" step="0.0001" value={actual_output} onChange={(e) => setActual(e.target.value)}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           </div>
         </div>
 
@@ -684,11 +698,11 @@ function NewRunModal({
                 <>
                   Yield: <strong>{yieldPct.toFixed(1)}%</strong>
                   {selectedRecipe?.target_yield_percentage && (
-                    <span className="text-gray-500"> · Target: {selectedRecipe.target_yield_percentage}%</span>
+                    <span className="text-stone-500"> · Target: {selectedRecipe.target_yield_percentage}%</span>
                   )}
-                  <span className="text-gray-500">
+                  <span className="text-stone-500">
                     {' '}· Variants (Planned - Actual):{' '}
-                    <strong className="text-gray-800">
+                    <strong className="text-stone-800">
                       {variants > 0 ? '+' : ''}
                       {variants.toFixed(2)} {selectedRecipe?.batch_unit ?? 'units'}
                     </strong>
@@ -701,38 +715,38 @@ function NewRunModal({
 
         {runMaterials.length > 0 && (
           <div>
-            <h3 className="mb-2 text-sm font-semibold text-gray-900">Material Consumption</h3>
-            <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <h3 className="mb-2 text-sm font-semibold text-stone-900">Material Consumption</h3>
+            <div className="overflow-x-auto rounded-lg border border-stone-200">
               <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
+                <thead className="border-b border-stone-200 bg-stone-50">
                   <tr>
-                    <th className="px-3 py-2 text-left font-semibold text-gray-700">Material</th>
-                    <th className="px-3 py-2 text-right font-semibold text-gray-700">Required</th>
-                    <th className="px-3 py-2 text-right font-semibold text-gray-700">Available</th>
-                    <th className="px-3 py-2 text-right font-semibold text-gray-700">Actual Used</th>
+                    <th className="px-3 py-2 text-left font-semibold text-stone-700">Material</th>
+                    <th className="px-3 py-2 text-right font-semibold text-stone-700">Required</th>
+                    <th className="px-3 py-2 text-right font-semibold text-stone-700">Available</th>
+                    <th className="px-3 py-2 text-right font-semibold text-stone-700">Actual Used</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-stone-100">
                   {runMaterials.map((m, i) => {
                     const hasEnoughStock = (m.available_qty ?? 0) >= m.required;
                     return (
                     <tr key={i}>
-                      <td className="px-3 py-2 font-medium text-gray-900">
+                      <td className="px-3 py-2 font-medium text-stone-900">
                         <span className={`inline-block h-2 w-2 rounded-full mr-2 ${hasEnoughStock ? 'bg-emerald-500' : 'bg-red-500'}`} title={hasEnoughStock ? 'Stock available' : 'Insufficient stock'} />
-                        {m.material_name}<span className="ml-1 text-xs text-gray-400">({m.unit})</span>
+                        {m.material_name}<span className="ml-1 text-xs text-stone-400">({m.unit})</span>
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-500">{m.required.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-right text-stone-500">{m.required.toFixed(2)}</td>
                       <td className="px-3 py-2 text-right">
-                        <span className={hasEnoughStock ? 'text-gray-500' : 'font-medium text-red-600'}>
+                        <span className={hasEnoughStock ? 'text-stone-500' : 'font-medium text-red-600'}>
                           {m.available_qty?.toFixed(2)}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <input type="number" min="0" step="0.001" value={m.quantity_consumed}
+                        <input type="number" min="0" step="0.0001" value={m.quantity_consumed}
                           onChange={(e) => {
                             const next = [...runMaterials]; next[i] = { ...next[i], quantity_consumed: e.target.value }; setRunMaterials(next);
                           }}
-                          className="w-24 rounded border border-gray-300 px-2 py-1 text-right text-sm focus:border-blue-500 focus:outline-none" />
+                          className="w-24 rounded border border-stone-300 px-2 py-1 text-right text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
                       </td>
                     </tr>
                     );
@@ -744,7 +758,7 @@ function NewRunModal({
         )}
       </div>
       <div className="mt-6 flex justify-end gap-3">
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <button onClick={handleSave} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors">
           {saving ? 'Processing…' : 'Complete Run & Update Stock'}
         </button>
@@ -811,31 +825,31 @@ function RunDetailModal({
         />
       ) : (
       <div className="space-y-5">
-        <div className="grid gap-4 rounded-lg bg-gray-50 p-4 grid-cols-1 sm:grid-cols-2">
-          <div><p className="text-xs text-gray-500">Recipe</p><p className="font-semibold text-gray-900">{run.recipe?.name ?? '—'}</p></div>
-          <div><p className="text-xs text-gray-500">Status</p><StatusBadge status={run.status} /></div>
+        <div className="detail-meta sm:grid-cols-2">
+          <div><p className="text-xs text-stone-500">Recipe</p><p className="font-semibold text-stone-900">{run.recipe?.name ?? '—'}</p></div>
+          <div><p className="text-xs text-stone-500">Status</p><StatusBadge status={run.status} /></div>
           {run.status === 'voided' && (
-            <div className="sm:col-span-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600">
+            <div className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50/40 px-3 py-2 text-sm text-stone-600">
               This run is voided. Hub finished goods were reversed. Restore to put the lot back into hub stock.
             </div>
           )}
-          <div><p className="text-xs text-gray-500">Date</p><p className="font-semibold text-gray-900">{new Date(run.production_date).toLocaleDateString()}</p></div>
-          <div><p className="text-xs text-gray-500">Planned Output</p><p className="font-semibold text-gray-900">{run.planned_output} {run.recipe?.batch_unit}</p></div>
-          <div><p className="text-xs text-gray-500">Actual Output</p><p className="font-semibold text-gray-900">{run.actual_output} {run.recipe?.batch_unit}</p></div>
+          <div><p className="text-xs text-stone-500">Date</p><p className="font-semibold text-stone-900">{new Date(run.production_date).toLocaleDateString()}</p></div>
+          <div><p className="text-xs text-stone-500">Planned Output</p><p className="font-semibold text-stone-900">{run.planned_output} {run.recipe?.batch_unit}</p></div>
+          <div><p className="text-xs text-stone-500">Actual Output</p><p className="font-semibold text-stone-900">{run.actual_output} {run.recipe?.batch_unit}</p></div>
           <div>
-            <p className="text-xs text-gray-500">Variants (Planned - Actual)</p>
-            <p className="font-semibold text-gray-900">
+            <p className="text-xs text-stone-500">Variants (Planned - Actual)</p>
+            <p className="font-semibold text-stone-900">
               {variants > 0 ? '+' : ''}
               {variants.toFixed(2)} {run.recipe?.batch_unit}
             </p>
           </div>
-          <div><p className="text-xs text-gray-500">Yield</p>{yieldPct != null ? <YieldBar value={yieldPct} /> : <p className="text-gray-400">—</p>}</div>
-          {run.notes && <div className="sm:col-span-2"><p className="text-xs text-gray-500">Notes</p><p className="text-sm text-gray-900">{run.notes}</p></div>}
+          <div><p className="text-xs text-stone-500">Yield</p>{yieldPct != null ? <YieldBar value={yieldPct} /> : <p className="text-stone-400">—</p>}</div>
+          {run.notes && <div className="sm:col-span-2"><p className="text-xs text-stone-500">Notes</p><p className="text-sm text-stone-900">{run.notes}</p></div>}
           {lot && (
             <div className="sm:col-span-2">
-              <p className="text-xs text-gray-500">Printable lot</p>
-              <p className="font-mono text-sm font-semibold text-gray-900">{lot.product_batch_label}</p>
-              <p className="mt-0.5 text-xs text-gray-500">
+              <p className="text-xs text-stone-500">Printable lot</p>
+              <p className="font-mono text-sm font-semibold text-stone-900">{lot.product_batch_label}</p>
+              <p className="mt-0.5 text-xs text-stone-500">
                 EXP {lot.expiry_date ?? '—'} · ink-label packs with this code
               </p>
             </div>
@@ -843,20 +857,20 @@ function RunDetailModal({
         </div>
         {(run.materials ?? []).length > 0 && (
           <div>
-            <h3 className="mb-2 text-sm font-semibold text-gray-900">Material Usage</h3>
-            <div className="overflow-x-auto rounded-lg border border-gray-200">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
+            <h3 className="mb-2 text-sm font-semibold text-stone-900">Material Usage</h3>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
                   <tr>
-                    <th className="px-4 py-2 text-left font-semibold text-gray-700">Material</th>
-                    <th className="px-4 py-2 text-right font-semibold text-gray-700">Consumed</th>
+                    <th>Material</th>
+                    <th className="text-right">Consumed</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody>
                   {run.materials?.map((m) => (
                     <tr key={m.raw_material_id}>
-                      <td className="px-4 py-2 font-medium text-gray-900">{m.material?.name ?? '—'}</td>
-                      <td className="px-4 py-2 text-right text-gray-700">{m.quantity_consumed} {m.material?.unit_of_measure}</td>
+                      <td className="font-medium">{m.material?.name ?? '—'}</td>
+                      <td className="text-right">{m.quantity_consumed} {m.material?.unit_of_measure}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -903,7 +917,7 @@ function RunDetailModal({
             <Printer size={15} /> Print label
           </button>
         )}
-        <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Close</button>
+        <Button variant="secondary" onClick={onClose}>Close</Button>
       </div>
     </Modal>
   );
@@ -912,6 +926,7 @@ function RunDetailModal({
 // ---- Main Production Page ----
 export function Production() {
   const { profile, isAdmin } = useAuth();
+  useRegisterRefresh(() => loadAll());
   const [tab, setTab] = useState<Tab>('runs');
   const [runs, setRuns] = useState<RunWithDetails[]>([]);
   const [recipes, setRecipes] = useState<RecipeWithIngredients[]>([]);
@@ -1079,7 +1094,7 @@ export function Production() {
       </div>
 
       {loading ? (
-        <div className="flex h-48 items-center justify-center text-gray-400 text-sm">Loading…</div>
+        <div className="flex h-48 items-center justify-center text-stone-400 text-sm">Loading…</div>
       ) : (
         <>
           {tab === 'planning' && (
@@ -1091,113 +1106,128 @@ export function Production() {
             />
           )}
           {tab === 'runs' && (
-            <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-              <table className="w-full text-sm">
-                <thead className="border-b border-gray-200 bg-gray-50">
-                  <tr>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Run #</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Lot</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Recipe</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Date</th>
-                    <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Planned</th>
-                    <th className="px-4 md:px-6 py-3 text-right font-semibold text-gray-700">Actual</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Variants</th>
-                    <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Yield</th>
-                    <th className="px-4 md:px-6 py-3 text-left font-semibold text-gray-700">Status</th>
-                    <th className="w-16 px-4 md:px-6 py-3" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {runs.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center">
-                        <FlaskConical className="mx-auto mb-3 text-gray-300" size={40} />
-                        <p className="text-gray-400">No production runs yet</p>
-                      </td>
-                    </tr>
-                  ) : filteredRuns.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center">
-                        <p className="text-gray-500">No runs match this date range.</p>
-                        <p className="mt-1 text-sm text-gray-400">Try All time or adjust the filter.</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRuns.map((run) => {
-                      const yieldPct = effectiveRunYieldPct(run);
-                      return (
-                      <tr key={run.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 font-medium text-gray-900 text-xs sm:text-sm">{run.run_number}</td>
-                        <td className="px-4 md:px-6 py-4 font-mono text-xs text-gray-800">
-                          {firstFgLot(run)?.product_batch_label ?? '—'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-gray-700 text-xs sm:text-sm">{run.recipe?.name ?? '—'}</td>
-                        <td className="px-4 md:px-6 py-4 text-gray-500 text-xs sm:text-sm">{new Date(run.production_date).toLocaleDateString()}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-right text-gray-700 text-xs">{run.planned_output}</td>
-                        <td className="px-4 md:px-6 py-4 text-right font-medium text-gray-900 text-xs sm:text-sm">{run.actual_output}</td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4">
-                          <VariantsBadge planned={run.planned_output} actual={run.actual_output} />
-                        </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4">{yieldPct != null ? <YieldBar value={yieldPct} /> : <span className="text-gray-400">—</span>}</td>
-                        <td className="px-4 md:px-6 py-4"><StatusBadge status={run.status} /></td>
-                        <td className="px-4 md:px-6 py-4">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setViewRun(run)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
-                            >
-                              Manage <ChevronRight size={14} />
-                            </button>
-                          </div>
-                        </td>
+            filteredRuns.length === 0 ? (
+              <div className="panel py-2">
+                <EmptyState
+                  title={runs.length === 0 ? 'No production runs yet' : 'No runs match this date range.'}
+                  description={runs.length === 0 ? undefined : 'Try All time or adjust the filter.'}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="ios-group">
+                  {filteredRuns.map((run) => (
+                    <ListRow
+                      key={run.id}
+                      title={run.run_number}
+                      meta={`${run.recipe?.name ?? '—'} · ${new Date(run.production_date).toLocaleDateString()} · Actual ${run.actual_output}`}
+                      aside={<StatusBadge status={run.status} />}
+                      body={
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs text-stone-600">
+                            {firstFgLot(run)?.product_batch_label ?? '—'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setViewRun(run)}
+                            className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-700"
+                          >
+                            Manage <ChevronRight size={14} />
+                          </button>
+                        </div>
+                      }
+                    />
+                  ))}
+                </div>
+                <div className="hidden">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Run #</th>
+                        <th>Lot</th>
+                        <th>Recipe</th>
+                        <th>Date</th>
+                        <th className="hidden text-right sm:table-cell">Planned</th>
+                        <th className="text-right">Actual</th>
+                        <th className="hidden md:table-cell">Variants</th>
+                        <th className="hidden md:table-cell">Yield</th>
+                        <th>Status</th>
+                        <th className="w-16" />
                       </tr>
-                    );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {filteredRuns.map((run) => {
+                        const yieldPct = effectiveRunYieldPct(run);
+                        return (
+                          <tr key={run.id}>
+                            <td className="font-medium">{run.run_number}</td>
+                            <td className="font-mono text-xs">{firstFgLot(run)?.product_batch_label ?? '—'}</td>
+                            <td>{run.recipe?.name ?? '—'}</td>
+                            <td className="text-stone-500">{new Date(run.production_date).toLocaleDateString()}</td>
+                            <td className="hidden text-right sm:table-cell">{run.planned_output}</td>
+                            <td className="text-right font-medium">{run.actual_output}</td>
+                            <td className="hidden md:table-cell">
+                              <VariantsBadge planned={run.planned_output} actual={run.actual_output} />
+                            </td>
+                            <td className="hidden md:table-cell">
+                              {yieldPct != null ? <YieldBar value={yieldPct} /> : <span className="text-stone-400">—</span>}
+                            </td>
+                            <td>
+                              <StatusBadge status={run.status} />
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                onClick={() => setViewRun(run)}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-brand-800 hover:underline"
+                              >
+                                Manage <ChevronRight size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )
           )}
 
           {tab === 'recipes' && (
-            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-              {recipes.length === 0 ? (
-                <div className="sm:col-span-3 rounded-xl border-2 border-dashed border-gray-200 px-6 py-12 text-center text-gray-400">No recipes yet</div>
-              ) : (
-                recipes.map((recipe) => (
-                  <div key={recipe.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:border-emerald-200 transition-all">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="font-semibold text-gray-900">{recipe.name}</h3>
-                        <p className="mt-0.5 text-xs text-gray-500">Batch: {recipe.standard_batch_size} {recipe.batch_unit}</p>
+            recipes.length === 0 ? (
+              <div className="panel py-2">
+                <EmptyState title="No recipes yet" />
+              </div>
+            ) : (
+              <div className="ios-group">
+                {recipes.map((recipe) => (
+                  <ListRow
+                    key={recipe.id}
+                    title={recipe.name}
+                    meta={`Batch ${recipe.standard_batch_size} ${recipe.batch_unit} · ${(recipe.ingredients ?? []).length} ingredients · yield ${recipe.target_yield_percentage ?? 100}%`}
+                    body={
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openEditRecipe(recipe)}
+                          className="inline-flex min-h-11 items-center gap-1 rounded-full bg-stone-100 px-4 text-[15px] font-medium text-stone-800"
+                        >
+                          <Edit2 size={16} aria-hidden /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteRecipe(recipe.id)}
+                          className="inline-flex min-h-11 items-center gap-1 rounded-full bg-red-50 px-4 text-[15px] font-medium text-red-700"
+                        >
+                          <Trash2 size={16} aria-hidden /> Delete
+                        </button>
                       </div>
-                      <div className="flex gap-1">
-                        <button onClick={() => openEditRecipe(recipe)} className="text-gray-400 hover:text-blue-600 transition-colors p-1"><Edit2 size={15} /></button>
-                        <button onClick={() => deleteRecipe(recipe.id)} className="text-gray-400 hover:text-red-600 transition-colors p-1"><Trash2 size={15} /></button>
-                      </div>
-                    </div>
-                    {recipe.description && <p className="mt-2 text-xs text-gray-600 line-clamp-2">{recipe.description}</p>}
-                    <div className="mt-3 space-y-1">
-                      <p className="text-xs font-semibold text-gray-500">Ingredients ({(recipe.ingredients ?? []).length})</p>
-                      {(recipe.ingredients ?? []).slice(0, 4).map((ing) => (
-                        <div key={ing.id} className="flex items-center justify-between text-xs text-gray-700">
-                          <span>{ing.material?.name ?? ing.raw_material_id}</span>
-                          <span className="font-medium">{ing.quantity_required} {ing.material?.unit_of_measure}</span>
-                        </div>
-                      ))}
-                      {(recipe.ingredients ?? []).length > 4 && (
-                        <p className="text-xs text-gray-400">+{(recipe.ingredients ?? []).length - 4} more…</p>
-                      )}
-                    </div>
-                    <div className="mt-3 flex items-center justify-between border-t border-gray-100 pt-3">
-                      <span className="text-xs text-gray-500">Target yield</span>
-                      <span className="text-sm font-bold text-emerald-600">{recipe.target_yield_percentage ?? 100}%</span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+                    }
+                  />
+                ))}
+              </div>
+            )
           )}
         </>
       )}
@@ -1249,7 +1279,7 @@ export function Production() {
           size="sm"
         >
           <div className="space-y-4">
-            <p className="text-sm text-gray-700">
+            <p className="text-sm text-stone-700">
               {runAction.kind === 'void'
                 ? 'This removes hub finished goods if they are still at the hub and puts consumed raw materials back. The run and lot stay on record so you can restore later. Blocked if the lot already left the hub.'
                 : runAction.kind === 'restore'
@@ -1257,7 +1287,7 @@ export function Production() {
                   : 'This permanently deletes the draft run. Completed batches cannot be deleted this way.'}
             </p>
             <label className="block">
-              <span className="mb-1 block text-xs font-medium text-gray-600">
+              <span className="mb-1 block text-xs font-medium text-stone-600">
                 Type {runAction.run.run_number}
                 {firstFgLot(runAction.run)?.product_batch_label
                   ? ` or ${firstFgLot(runAction.run)?.product_batch_label}`
@@ -1268,7 +1298,7 @@ export function Production() {
                 autoFocus
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm font-mono"
                 placeholder={runAction.run.run_number}
               />
             </label>
@@ -1282,7 +1312,7 @@ export function Production() {
                   setConfirmText('');
                   setActionError(null);
                 }}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="rounded-lg border border-stone-300 px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
               >
                 Cancel
               </button>

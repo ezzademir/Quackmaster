@@ -14,7 +14,15 @@ export async function postSalesJournal(params: {
   lines: SalesJournalLineInput[];
   notes?: string;
   idempotencyKey?: string;
-}): Promise<{ success: boolean; salesJournalId?: string; error?: string; idempotentReplay?: boolean }> {
+}): Promise<{
+  success: boolean;
+  salesJournalId?: string;
+  error?: string;
+  idempotentReplay?: boolean;
+  /** Lines / units taken from batches past expiry on the business date (flag only, never blocked). */
+  expiredLines?: number;
+  expiredQty?: number;
+}> {
   const lines = params.lines.map((l) => {
     const base: Record<string, unknown> = {
       product_batch: l.product_batch.trim(),
@@ -46,6 +54,8 @@ export async function postSalesJournal(params: {
     sales_journal_id?: string;
     error?: string;
     idempotent_replay?: boolean;
+    expired_lines?: number;
+    expired_qty?: number;
   } | null;
 
   if (!payload?.success) {
@@ -61,6 +71,8 @@ export async function postSalesJournal(params: {
     success: true,
     salesJournalId: payload.sales_journal_id,
     idempotentReplay: Boolean(payload.idempotent_replay),
+    expiredLines: Number(payload.expired_lines ?? 0),
+    expiredQty: Number(payload.expired_qty ?? 0),
   };
 }
 

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ban, CircleDollarSign, Eye, FileText, Package, Plus, Trash2 } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, EmptyState, PageHeader, StatCard, Tabs } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard, StickyActions, Tabs } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { supabase } from '../utils/supabase';
 import { formatDateForInput, getLast7Days, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
 import { outletRowAvailableQuantity } from '../utils/hubInventoryMath';
 import { useAuth } from '../utils/auth';
+import { useRegisterRefresh } from '../utils/pageRefresh';
+import { getOutletSaleBatches } from '../utils/outletStockTakeService';
 import {
   postSalesJournal,
   replaceSalesJournal,
@@ -15,6 +17,7 @@ import {
 } from '../utils/visibilityService';
 import { displayLotFirst, formatLotWithSku, nestedLotLabel, nestedRecipeSku, skuForDisplay } from '../utils/lotLabel';
 import type { Outlet } from '../types';
+import { isBatchExpired, nestedRunNumber, runSequence } from '../utils/hubBatchPick';
 
 interface LineRow extends SalesJournalLineInput {
   key: string;
@@ -23,6 +26,7 @@ interface LineRow extends SalesJournalLineInput {
   lot_label?: string | null;
   available_qty?: number;
   fromInventory?: boolean;
+  expiry_date?: string | null;
 }
 
 const blankLines = (): LineRow[] => [
@@ -42,7 +46,8 @@ interface OutletInventoryLot {
 interface OutletInventoryRowForLoad {
   id: string;
   product_batch: string;
-  quantity_on_hand: number;
+  /** null when a blind count hides quantities (rows from get_outlet_sale_batches). */
+  quantity_on_hand: number | null;
   reserved_quantity: number | null;
   available_quantity: number | null;
   created_at: string | null;
@@ -85,6 +90,10 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
   parsed.sort((a, b) => {
     const byExpiry = compareNullableStringAsc(a.lot?.expiry_date, b.lot?.expiry_date);
     if (byExpiry !== 0) return byExpiry;
+    // Same FEFO order as the server: equal expiry -> lower production run number first.
+    const ra = runSequence(nestedRunNumber(a.lot));
+    const rb = runSequence(nestedRunNumber(b.lot));
+    if (ra !== rb) return ra == null ? 1 : rb == null ? -1 : ra - rb;
     const byMfg = compareNullableStringAsc(a.lot?.manufactured_at, b.lot?.manufactured_at);
     if (byMfg !== 0) return byMfg;
     const byCreated = compareNullableStringAsc(a.row.created_at, b.row.created_at);
@@ -95,10 +104,10 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
   return parsed.map(({ row, batch, lot }) => {
     const lotLabel = nestedLotLabel(lot as never);
     const recipeSku = nestedRecipeSku(lot);
-    const displayBatch = displayLotFirst(lotLabel, batch) || batch;
+    const qtyHidden = row.quantity_on_hand == null;
     const qoh = Number(row.quantity_on_hand ?? 0);
     const res = Number(row.reserved_quantity ?? 0);
-    const avail = outletRowAvailableQuantity(qoh, res, row.available_quantity);
+    const avail = qtyHidden ? undefined : outletRowAvailableQuantity(qoh, res, row.available_quantity);
     return {
       key: crypto.randomUUID(),
       // Keep a matchable identifier; posting uses outlet_inventory_id for the exact lot row.
@@ -109,9 +118,13 @@ function outletInventoryToSaleLines(rows: OutletInventoryRowForLoad[]): LineRow[
       lot_label: lotLabel,
       available_qty: avail,
       fromInventory: true,
+      expiry_date: lot?.expiry_date ?? null,
     };
   });
 }
+
+/** One posted sales line for history views; expired_at_sale = batch was past expiry on the business date. */
+type SaleHistLine = { product_batch: string; quantity_sold: number; lot_label: string | null; expired_at_sale?: boolean | null };
 
 interface ModalDraftLine extends SalesJournalLineInput {
   key: string;
@@ -125,7 +138,7 @@ interface SalesJournalHistoryRow {
   notes: string | null;
   status: string;
   source?: string | null;
-  lines: { product_batch: string; quantity_sold: number; lot_label: string | null }[];
+  lines: SaleHistLine[];
 }
 
 function isVoidedSalesStatus(status: string | null | undefined): boolean {
@@ -178,12 +191,13 @@ function linesByJournalFromDb(
     product_batch: string;
     quantity_sold: string | number;
     created_at: string;
+    expired_at_sale?: boolean | null;
     lot?: { product_batch_label?: string | null } | { product_batch_label?: string | null }[] | null;
   }[]
-): Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]> {
+): Map<string, SaleHistLine[]> {
   const buckets = new Map<
     string,
-    { product_batch: string; quantity_sold: number; created_at: string; lot_label: string | null }[]
+    { product_batch: string; quantity_sold: number; created_at: string; lot_label: string | null; expired_at_sale: boolean | null }[]
   >();
   for (const row of rows) {
     const jid = row.sales_journal_id;
@@ -193,14 +207,15 @@ function linesByJournalFromDb(
       quantity_sold: Number(row.quantity_sold),
       created_at: row.created_at,
       lot_label: nestedLotLabel(row.lot),
+      expired_at_sale: row.expired_at_sale ?? null,
     });
   }
-  const out = new Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]>();
+  const out = new Map<string, SaleHistLine[]>();
   for (const [jid, arr] of buckets) {
     arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     out.set(
       jid,
-      arr.map(({ product_batch, quantity_sold, lot_label }) => ({ product_batch, quantity_sold, lot_label }))
+      arr.map(({ product_batch, quantity_sold, lot_label, expired_at_sale }) => ({ product_batch, quantity_sold, lot_label, expired_at_sale }))
     );
   }
   return out;
@@ -403,12 +418,12 @@ export function Sales() {
       const list = journals ?? [];
       const ids = list.map((j) => j.id);
 
-      let lineMap = new Map<string, { product_batch: string; quantity_sold: number; lot_label: string | null }[]>();
+      let lineMap = new Map<string, SaleHistLine[]>();
 
       if (ids.length > 0) {
         const { data: jl, error: lErr } = await supabase
           .from('sales_journal_lines')
-          .select('sales_journal_id,product_batch,quantity_sold,created_at,lot:inventory_lots(product_batch_label)')
+          .select('sales_journal_id,product_batch,quantity_sold,created_at,expired_at_sale,lot:inventory_lots(product_batch_label)')
           .in('sales_journal_id', ids);
         if (lErr) {
           console.error('[Sales] Failed to load sales journal lines:', lErr);
@@ -526,6 +541,11 @@ export function Sales() {
     }
   }, [outletId, journalDateRange]);
 
+  useRegisterRefresh(() => {
+    void loadHistory();
+    void loadOverview();
+  });
+
   async function handleLoadMoreHistory() {
     const start = history.length;
     setHistoryLoadingMore(true);
@@ -572,22 +592,45 @@ export function Sales() {
       const { data, error } = await supabase
         .from('outlet_inventory')
         .select(
-          'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(recipe:recipe_id(default_product_batch)))'
+          'id, product_batch, quantity_on_hand, reserved_quantity, available_quantity, created_at, lot:inventory_lots(expiry_date, manufactured_at, product_batch_label, production_run:production_run_id(run_number, recipe:recipe_id(default_product_batch)))'
         )
         .eq('outlet_id', outletSnap)
         .is('raw_material_id', null)
         .gt('quantity_on_hand', 0);
 
       if (error) throw error;
+      let rows = (data ?? []) as OutletInventoryRowForLoad[];
+      let blindCount = false;
+      if (rows.length === 0) {
+        // A blind stock take hides this outlet's stock from non-admins (RLS). Sales still post
+        // server-side; list the batches without quantities.
+        const alt = await getOutletSaleBatches(outletSnap);
+        if (alt.success && alt.hidden) {
+          blindCount = true;
+          rows = (alt.rows ?? []).map((r) => ({
+            ...r,
+            quantity_on_hand: null,
+            reserved_quantity: null,
+            available_quantity: null,
+          }));
+        }
+      }
       if (gen !== batchesFetchGenRef.current || outletSnap !== outletIdRef.current) {
         return true;
       }
 
-      const next = outletInventoryToSaleLines((data ?? []) as OutletInventoryRowForLoad[]);
+      const next = outletInventoryToSaleLines(rows);
       const isEmpty = next.length === 1 && !next[0].product_batch;
       setLines(next);
       setInventoryEmptyNotice(isEmpty);
-      if (!opts?.afterPost && !isEmpty) {
+      if (blindCount) {
+        setMessage({
+          tone: 'ok',
+          text:
+            'Stock take in progress at this outlet: on-hand quantities are hidden until it is submitted. ' +
+            'You can still post sales (deducted oldest expiry first).',
+        });
+      } else if (!opts?.afterPost && !isEmpty) {
         setMessage({
           tone: 'ok',
           text: `Loaded ${next.length} supplied batch${next.length === 1 ? '' : 'es'} on hand at this outlet. Enter qty sold, then Post.`,
@@ -641,8 +684,16 @@ export function Sales() {
         tone: 'ok',
         text: res.idempotentReplay
           ? 'Sale already recorded.'
-          : `Posted ${formatSoldQty(postedQty)} units`,
+          : `Posted ${formatSoldQty(postedQty)} units` +
+            (res.expiredQty
+              ? ` — warning: ${formatSoldQty(res.expiredQty)} unit(s) came from expired batch(es) and are flagged.`
+              : ''),
       });
+      if (res.expiredQty) {
+        window.alert(
+          `Expired stock sold: ${formatSoldQty(res.expiredQty)} unit(s) on ${res.expiredLines} line(s) were taken from batches past expiry (FEFO). They are flagged on the journal.`
+        );
+      }
       setNotes('');
       const reloaded = await loadBatchesFromInventory({ afterPost: true });
       if (!reloaded) setLines(blankLines());
@@ -959,6 +1010,10 @@ export function Sales() {
           {inventoryEmptyNotice && (
             <p className="mb-2 text-sm text-stone-500">No supplied batches on hand for this outlet.</p>
           )}
+          <p className="mb-2 text-xs text-stone-500">
+            Quantities are deducted from the earliest-expiry batch of the same product first (FEFO, then production run
+            number), whichever batch row you type them on. Expired batches are sold but flagged.
+          </p>
           <div className="mb-1 hidden gap-2 sm:flex sm:items-end sm:gap-2 sm:px-1">
             <div className="min-w-[140px] flex-1 text-xs font-medium text-stone-500">Batch / lot</div>
             <div className="w-28 min-w-[7rem] text-xs font-medium text-stone-500">Prod. date</div>
@@ -975,6 +1030,11 @@ export function Sales() {
                       <span className="break-all font-mono text-stone-900">
                         {formatLotWithSku(line.lot_label, line.product_batch)}
                       </span>
+                      {isBatchExpired(line.expiry_date, businessDate) ? (
+                        <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-red-800">
+                          Expired
+                        </span>
+                      ) : null}
                     </div>
                   ) : (
                     <input
@@ -1005,7 +1065,7 @@ export function Sales() {
                   <input
                     type="number"
                     min={0}
-                    step="0.01"
+                    step="0.0001"
                     placeholder="Qty"
                     value={Number.isFinite(line.quantity_sold) ? line.quantity_sold : ''}
                     onChange={(e) => {
@@ -1046,9 +1106,11 @@ export function Sales() {
           />
         </div>
 
-        <Button type="submit" disabled={submitting || batchesLoading || !outletId}>
-          {submitting ? 'Posting…' : 'Post journal'}
-        </Button>
+        <StickyActions>
+          <Button type="submit" disabled={submitting || batchesLoading || !outletId} className="w-full sm:w-auto">
+            {submitting ? 'Posting…' : 'Post journal'}
+          </Button>
+        </StickyActions>
       </form>
       )}
 
@@ -1056,42 +1118,106 @@ export function Sales() {
       <div>
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-gray-700">Recent journals</h2>
-            <p className="mt-0.5 max-w-md text-xs text-gray-500">
+            <h2 className="text-sm font-semibold text-stone-800">Recent journals</h2>
+            <p className="mt-0.5 max-w-md text-xs text-stone-500">
               Posted sales for{' '}
-              <span className="font-medium text-gray-600">
+              <span className="font-medium text-stone-600">
                 {outlets.find((o) => o.id === outletId)?.name ?? 'this outlet'}
               </span>
               . Voided sales are hidden unless you include them.
             </p>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
-            <label className="inline-flex items-center gap-2 text-xs text-gray-600">
+            <label className="inline-flex items-center gap-2 text-xs text-stone-600">
               <input
                 type="checkbox"
                 checked={includeVoided}
                 onChange={(e) => setIncludeVoided(e.target.checked)}
-                className="rounded border-gray-300"
+                className="rounded border-stone-300"
               />
               Include voided
             </label>
-            <p className="max-w-xs text-xs text-gray-500 sm:text-right">
+            <p className="max-w-xs text-xs text-stone-500 sm:text-right">
               Same outlet and business-date filter as the overview. Loads {HISTORY_PAGE_SIZE} at a time; use{' '}
-              <strong className="font-medium text-gray-600">Next</strong> below for older journals.
+              <span className="font-medium text-stone-600">Next</span> below for older journals.
             </p>
           </div>
         </div>
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white text-sm">
-          <table className="w-full">
-            <thead className="border-b bg-gray-50">
+
+        {/* Mobile cards */}
+        <div className="ios-group">
+          {history.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState
+                title={includeVoided ? 'No sales in this period' : 'No posted sales for this outlet'}
+              />
+            </div>
+          ) : (
+            history.map((h) => {
+              const voided = isVoidedSalesStatus(h.status);
+              return (
+                <ListRow
+                  key={h.id}
+                  muted={voided}
+                  title={
+                    <span className="inline-flex flex-wrap items-center gap-2">
+                      <span className="tabular-nums">{h.business_date}</span>
+                      {voided ? (
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+                          Voided
+                        </span>
+                      ) : null}
+                    </span>
+                  }
+                  meta={h.notes?.trim() || undefined}
+                  body={
+                    h.lines.length === 0 ? (
+                      <span className="text-stone-400">—</span>
+                    ) : (
+                      <ul className={`space-y-1 font-mono text-xs ${voided ? 'line-through text-stone-500' : ''}`}>
+                        {h.lines.map((ln, i) => (
+                          <li key={`${h.id}-${i}-${ln.product_batch}`}>
+                            <span className="font-semibold">{ln.quantity_sold}</span>
+                            <span className="mx-1 text-stone-400">×</span>
+                            <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
+                            {ln.expired_at_sale ? (
+                              <span className="ml-1 rounded bg-red-100 px-1 py-0.5 font-sans text-[10px] font-semibold uppercase text-red-800">
+                                Expired
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  }
+                  aside={
+                    <button
+                      type="button"
+                      onClick={() => void loadJournalIntoModal(h.id)}
+                      disabled={recentJournalBusy}
+                      className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                    >
+                      <Eye size={14} aria-hidden /> View
+                    </button>
+                  }
+                />
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="px-4 py-2 text-left font-medium text-stone-600">Date</th>
-                <th className="px-4 py-2 text-left font-medium text-stone-600 min-w-[12rem]">Qty sold</th>
-                <th className="px-4 py-2 text-left font-medium text-stone-600">Notes</th>
-                <th className="px-4 py-2 text-right font-medium text-stone-600">Actions</th>
+                <th>Date</th>
+                <th className="min-w-[12rem]">Qty sold</th>
+                <th>Notes</th>
+                <th className="text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody>
               {history.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-6 text-center text-stone-400">
@@ -1102,41 +1228,46 @@ export function Sales() {
                 history.map((h) => {
                   const voided = isVoidedSalesStatus(h.status);
                   return (
-                  <tr key={h.id} className={voided ? 'bg-gray-50 text-gray-500' : undefined}>
-                    <td className="whitespace-nowrap px-4 py-2 align-top">
+                  <tr key={h.id} className={voided ? 'bg-stone-50 text-stone-500' : undefined}>
+                    <td className="whitespace-nowrap align-top">
                       <div className="flex flex-wrap items-center gap-2">
                         <span>{h.business_date}</span>
                         {voided ? (
-                          <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
                             Voided
                           </span>
                         ) : null}
                       </div>
                     </td>
-                    <td className="px-4 py-2 align-top">
+                    <td className="align-top">
                       {h.lines.length === 0 ? (
-                        <span className="text-gray-400">—</span>
+                        <span className="text-stone-400">—</span>
                       ) : (
-                        <ul className={`space-y-1 font-mono text-xs sm:text-sm ${voided ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
+                        <ul className={`space-y-1 font-mono text-sm ${voided ? 'text-stone-500 line-through' : 'text-stone-800'}`}>
                           {h.lines.map((ln, i) => (
                             <li key={`${h.id}-${i}-${ln.product_batch}`}>
                               <span className="font-semibold">{ln.quantity_sold}</span>
-                              <span className="mx-1 text-gray-400">×</span>
+                              <span className="mx-1 text-stone-400">×</span>
                               <span className="break-all">{formatLotWithSku(ln.lot_label, ln.product_batch)}</span>
+                            {ln.expired_at_sale ? (
+                              <span className="ml-1 rounded bg-red-100 px-1 py-0.5 font-sans text-[10px] font-semibold uppercase text-red-800">
+                                Expired
+                              </span>
+                            ) : null}
                             </li>
                           ))}
                         </ul>
                       )}
                     </td>
-                    <td className="max-w-[10rem] px-4 py-2 align-top text-gray-600 sm:max-w-xs">
+                    <td className="max-w-xs align-top text-stone-600">
                       {h.notes ?? '—'}
                     </td>
-                    <td className="px-4 py-2 text-right align-top">
+                    <td className="text-right align-top">
                       <button
                         type="button"
                         onClick={() => void loadJournalIntoModal(h.id)}
                         disabled={recentJournalBusy}
-                        className="inline-flex items-center gap-1 rounded-lg border border-stone-300 px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
                       >
                         <Eye size={14} aria-hidden /> View
                       </button>
@@ -1147,27 +1278,28 @@ export function Sales() {
               )}
             </tbody>
           </table>
+        </div>
+
           {history.length > 0 && historyHasMore ? (
-            <div className="flex flex-col items-center gap-2 border-t border-gray-100 bg-gray-50/80 px-4 py-3 sm:flex-row sm:justify-center">
-              <button
+            <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={() => void handleLoadMoreHistory()}
                 disabled={historyLoadingMore}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm hover:bg-gray-50 disabled:opacity-50"
               >
                 {historyLoadingMore ? 'Loading…' : 'Next'}
-              </button>
-              <p className="text-xs text-gray-500">
+              </Button>
+              <p className="text-xs text-stone-500">
                 Showing {history.length} journal{history.length === 1 ? '' : 's'}
                 {historyHasMore ? ' · more available' : ''}
               </p>
             </div>
           ) : history.length > 0 ? (
-            <div className="border-t border-gray-100 bg-gray-50/50 px-4 py-2 text-center text-xs text-gray-500">
+            <p className="mt-3 text-center text-xs text-stone-500">
               Showing all {history.length} loaded journal{history.length === 1 ? '' : 's'}
-            </div>
+            </p>
           ) : null}
-        </div>
       </div>
       )}
 
@@ -1302,7 +1434,7 @@ export function Sales() {
                         <input
                           type="number"
                           min={0}
-                          step="0.01"
+                          step="0.0001"
                           value={ln.quantity_sold || ''}
                           onChange={(e) => {
                             const v = parseFloat(e.target.value);

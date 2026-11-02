@@ -16,9 +16,25 @@ import {
   Search,
   PanelRightClose,
 } from 'lucide-react';
+import { Button, EmptyState, ListRow, Tabs } from '../components/ui';
 import { writeLedgerEntry } from '../utils/ledger';
+import { parseApproveResult } from '../utils/approveResult';
+import { countDeactivated, filterByActive, isUserActive } from '../utils/userActive';
 import { getPasswordRecoveryRedirectUrl, MIN_PASSWORD_LENGTH } from '../utils/passwordRules';
 import type { Outlet } from '../types';
+import {
+  ASSIGNABLE_ROLES,
+  PROCUREMENT_TAG_OPTIONS,
+  isAssignableRole,
+  normaliseTags,
+  planRoleSave,
+  roleDraftFromRole,
+  roleRpcArgs,
+  saveErrorText,
+  tagsDraftFromUser,
+  tagsLabel,
+  userAfterSave,
+} from '../utils/userRoleDraft';
 
 interface UserRecord {
   id: string;
@@ -29,6 +45,10 @@ interface UserRecord {
   last_login: string | null;
   password_reset_required: boolean;
   created_at: string;
+  is_active?: boolean | null;
+  deactivated_at?: string | null;
+  /** business tags (procurement users only), from get_users_management_data */
+  entity_tags?: string[];
 }
 
 interface PendingUser extends UserRecord {
@@ -63,6 +83,8 @@ export function Users() {
   const [busyRoleUserId, setBusyRoleUserId] = useState<string | null>(null);
   const [roleNotice, setRoleNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showDeactivated, setShowDeactivated] = useState(false);
+  const [activeBusyUserId, setActiveBusyUserId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerState>({ open: false });
   const [nameDraft, setNameDraft] = useState('');
   const [nameSaving, setNameSaving] = useState(false);
@@ -80,19 +102,20 @@ export function Users() {
   const [tempPassMessage, setTempPassMessage] = useState('');
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
-  const [roleDraft, setRoleDraft] = useState<'admin' | 'staff' | 'supervisor'>('staff');
+  const [roleDraft, setRoleDraft] = useState<string>('staff');
   const [outletDraft, setOutletDraft] = useState('');
+  const [tagsDraft, setTagsDraft] = useState<string[]>([]);
 
   const q = searchQuery.trim().toLowerCase();
   const filteredUsers = useMemo(
     () =>
-      users.filter(
+      filterByActive(users, showDeactivated).filter(
         (u) =>
           !q ||
           u.email.toLowerCase().includes(q) ||
           (u.full_name || '').toLowerCase().includes(q)
       ),
-    [users, q]
+    [users, q, showDeactivated]
   );
   const filteredPending = useMemo(
     () =>
@@ -155,6 +178,9 @@ export function Users() {
           password_reset_required: boolean;
           created_at: string;
           email: string;
+          is_active?: boolean | null;
+          deactivated_at?: string | null;
+          entity_tags?: string[] | null;
         }>;
         pending?: Array<{
           id: string;
@@ -215,6 +241,9 @@ export function Users() {
         last_login: p.last_login,
         password_reset_required: p.password_reset_required,
         created_at: p.created_at,
+        is_active: p.is_active !== false,
+        deactivated_at: p.deactivated_at ?? null,
+        entity_tags: normaliseTags(p.entity_tags),
         email: (p.email && p.email.trim() !== '' ? p.email : null) || 'Unknown',
       })) as UserRecord[];
 
@@ -311,114 +340,146 @@ export function Users() {
   }
 
   async function handleApproveUser(userId: string) {
+    setRoleNotice(null);
     try {
-      const reviewerId = (await supabase.auth.getUser()).data.user?.id;
-
-      const { error: updateError } = await supabase.from('profiles').update({ role: 'staff' }).eq('id', userId);
-
-      if (updateError) throw updateError;
-
-      const { error } = await supabase
-        .from('pending_registrations')
-        .update({
-          status: 'approved',
-          reviewed_by: reviewerId,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId);
-
-      if (error) {
-        await supabase.from('profiles').update({ role: 'pending' }).eq('id', userId);
-        throw error;
+      // Single atomic server-side approve (profile role + registration status, row-count checked).
+      const { data, error } = await supabase.rpc('admin_approve_registration', { p_user_id: userId });
+      if (error) throw error;
+      const res = parseApproveResult(data);
+      if (!res.ok) {
+        setRoleNotice({ tone: 'err', text: `Approve failed: ${res.message}` });
+        return;
       }
-
-      await writeLedgerEntry({
-        action: 'approved',
-        entityType: 'pending_registration',
-        entityId: userId,
-        module: 'users',
-        operation: 'update',
-        afterData: { status: 'approved', role: 'staff' },
-      });
-
+      setRoleNotice({ tone: 'ok', text: 'User approved as staff.' });
       await loadUsers();
       setDrawer({ open: false });
     } catch (error) {
       console.error('Error approving user:', error);
+      setRoleNotice({
+        tone: 'err',
+        text: `Approve failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
+    }
+  }
+
+  async function handleSetUserActive(target: UserRecord, active: boolean) {
+    if (!authUser?.id || target.id === authUser.id) return;
+    const verb = active ? 'Reactivate' : 'Deactivate';
+    const ok = window.confirm(
+      active
+        ? `Reactivate ${target.email}? They will be able to sign in again.`
+        : `Deactivate ${target.email}? They will be signed out and blocked from signing in. Their history is kept.`
+    );
+    if (!ok) return;
+    setActiveBusyUserId(target.id);
+    setRoleNotice(null);
+    try {
+      const { data, error } = await supabase.functions.invoke<{ success?: boolean; error?: string; message?: string }>(
+        'admin_set_user_active',
+        { body: { userId: target.id, active } }
+      );
+      if (error || !data?.success) {
+        let msg = data?.message || data?.error || error?.message || 'Request failed';
+        const ctx = (error as { context?: Response } | null)?.context;
+        if (ctx && typeof ctx.json === 'function') {
+          try {
+            const j = (await ctx.json()) as { message?: string; error?: string };
+            msg = j.message || j.error || msg;
+          } catch {
+            /* keep msg */
+          }
+        }
+        setRoleNotice({ tone: 'err', text: `${verb} failed: ${msg}` });
+        return;
+      }
+      setRoleNotice({ tone: 'ok', text: `${target.email} ${active ? 'reactivated' : 'deactivated'}.` });
+      await loadUsers();
+      setDrawer({ open: false });
+    } finally {
+      setActiveBusyUserId(null);
     }
   }
 
   async function handleSaveRoleAndOutlet(target: UserRecord) {
     if (!authUser?.id || target.id === authUser.id) return;
 
-    const r = roleDraft;
-    if (r === 'supervisor' && !outletDraft.trim()) {
-      setRoleNotice({ tone: 'err', text: 'Supervisors need an assigned outlet.' });
+    const plan = planRoleSave(
+      { role: target.role, assignedOutletId: target.assigned_outlet_id, tags: target.entity_tags },
+      { role: roleDraft, outletId: outletDraft, tags: tagsDraft }
+    );
+    if (plan.error) {
+      setRoleNotice({ tone: plan.error === 'Nothing to change.' ? 'ok' : 'err', text: plan.error });
       return;
     }
 
     setBusyRoleUserId(target.id);
     setRoleNotice(null);
 
-    try {
-      const { data, error } = await supabase.rpc('admin_set_profile_role_and_outlet', {
-        p_target_user_id: target.id,
-        p_role: r,
-        p_assigned_outlet_id: r === 'supervisor' ? outletDraft.trim() : null,
-      });
-
-      if (error) throw error;
-
-      const payload = data as {
-        success?: boolean;
-        error?: string;
-        message?: string;
-        role?: string;
-        assigned_outlet_id?: string | null;
-      };
-
-      if (!payload?.success) {
-        setRoleNotice({
-          tone: 'err',
-          text: payload?.message ?? payload?.error ?? 'Could not update role',
-        });
-        return;
-      }
-
-      await writeLedgerEntry({
-        action: 'updated',
-        entityType: 'profile',
-        entityId: target.id,
-        module: 'users',
-        operation: 'event',
-        metadata: {
-          role_change: true,
-          new_role: payload.role,
-          assigned_outlet_id: payload.assigned_outlet_id,
-        },
-      });
-
-      setRoleNotice({ tone: 'ok', text: 'Role and outlet saved.' });
+    // The database writes the audit (ledger) entries for role and tag changes, with old and new values, so
+    // the screen no longer writes one of its own.
+    let roleSaved = false;
+    // Role saved but tags not: the drawer must show the role the database now holds (procurement, no tags yet), keep the
+    // tags the admin ticked so Save retries only the tags, and say so plainly. Never leave the old role on screen.
+    const showPartialSave = async (reason: string) => {
       await loadUsers();
       if (drawer.open && drawer.tab === 'approved' && drawer.user.id === target.id) {
         setDrawer({
           open: true,
           tab: 'approved',
-          user: {
-            ...drawer.user,
-            role: payload.role ?? r,
-            assigned_outlet_id: payload.assigned_outlet_id ?? (r === 'supervisor' ? outletDraft : null),
-          },
+          user: userAfterSave(drawer.user, { role: roleDraft, outletId: outletDraft, tags: [] }),
         });
-        setOutletDraft(payload.assigned_outlet_id ?? (r === 'supervisor' ? outletDraft : ''));
+      }
+      setRoleNotice({ tone: 'err', text: `The role was saved, but the business tags were not: ${reason} Press Save again to retry the tags.` });
+    };
+    try {
+      if (plan.callRole) {
+        const { data, error } = await supabase.rpc(
+          'admin_set_profile_role_and_outlet',
+          roleRpcArgs(target.id, roleDraft, outletDraft)
+        );
+        if (error) throw error;
+        const payload = data as { success?: boolean; error?: string; message?: string } | null;
+        if (!payload?.success) {
+          setRoleNotice({ tone: 'err', text: saveErrorText(payload?.error, payload?.message ?? 'Could not update role') });
+          return;
+        }
+        roleSaved = true;
+      }
+
+      if (plan.callTags) {
+        const { data, error } = await supabase.rpc('admin_set_procurement_tags', {
+          p_target_user_id: target.id,
+          p_tags: plan.tags,
+        });
+        if (error) throw error;
+        const payload = data as { success?: boolean; error?: string; message?: string } | null;
+        if (!payload?.success) {
+          const reason = saveErrorText(payload?.error, payload?.message);
+          if (roleSaved) await showPartialSave(reason);
+          else setRoleNotice({ tone: 'err', text: reason });
+          return;
+        }
+      }
+
+      setRoleNotice({ tone: 'ok', text: 'Role, outlet and business tags saved.' });
+      await loadUsers();
+      if (drawer.open && drawer.tab === 'approved' && drawer.user.id === target.id) {
+        setDrawer({
+          open: true,
+          tab: 'approved',
+          user: userAfterSave(drawer.user, { role: roleDraft, outletId: outletDraft, tags: plan.tags }),
+        });
+        setOutletDraft(roleDraft === 'supervisor' ? outletDraft : '');
+        setTagsDraft(plan.tags);
       }
     } catch (error: unknown) {
       console.error('Error updating role:', error);
-      const msg =
+      const raw =
         error && typeof error === 'object' && 'message' in error
-          ? String((error as { message: string }).message)
+          ? `${'code' in error ? String((error as { code?: string }).code ?? '') : ''} ${String((error as { message: string }).message)}`.trim()
           : 'Failed to update role';
-      setRoleNotice({ tone: 'err', text: msg });
+      if (roleSaved) await showPartialSave(saveErrorText(raw));
+      else setRoleNotice({ tone: 'err', text: saveErrorText(raw) });
     } finally {
       setBusyRoleUserId(null);
     }
@@ -598,8 +659,8 @@ export function Users() {
     }
     return (
       <div className="flex items-center gap-1">
-        <Clock size={14} className="text-gray-400" />
-        <span className="text-gray-600">Never</span>
+        <Clock size={14} className="text-stone-400" />
+        <span className="text-stone-600">Never</span>
       </div>
     );
   }
@@ -607,7 +668,7 @@ export function Users() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="text-gray-500">Loading users...</div>
+        <div className="text-stone-500">Loading users...</div>
       </div>
     );
   }
@@ -622,20 +683,20 @@ export function Users() {
             <h1 className="text-2xl font-bold text-stone-900 sm:text-3xl">User Management</h1>
             <p className="mt-2 text-sm text-stone-600 sm:text-base">
               Approve registrations, roles, and passwords. See{' '}
-              <span className="font-medium text-gray-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
+              <span className="font-medium text-stone-800">docs/AUTH_REDIRECTS.md</span> for recovery URL setup.
             </p>
           </div>
           <div className="relative max-w-md w-full">
             <Search
               size={18}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400"
             />
             <input
               type="search"
               placeholder="Search email or name…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 py-2.5 pl-10 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-lg border border-stone-300 py-2.5 pl-10 pr-3 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
               aria-label="Search users"
             />
           </div>
@@ -668,256 +729,146 @@ export function Users() {
           </div>
         )}
 
-        <div className="mb-6 flex flex-wrap gap-4 border-b border-gray-200">
-          <button
-            type="button"
-            onClick={() => setActiveTab('approved')}
-            className={`px-4 py-3 font-medium transition-colors ${
-              activeTab === 'approved'
-                ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Registered ({filteredUsers.length}
-            {q ? ` of ${users.length}` : ''})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('pending')}
-            className={`px-4 py-3 font-medium transition-colors ${
-              activeTab === 'pending'
-                ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Pending ({filteredPending.length}
-            {q ? ` of ${pendingUsers.length}` : ''})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('rejected')}
-            className={`px-4 py-3 font-medium transition-colors ${
-              activeTab === 'rejected'
-                ? 'border-b-2 border-brand-600 text-brand-800'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Rejected ({filteredRejected.length}
-            {q ? ` of ${rejectedUsers.length}` : ''})
-          </button>
+        <div className="mb-4">
+          <Tabs
+            value={activeTab}
+            onChange={setActiveTab}
+            items={[
+              { id: 'approved', label: `Registered (${filteredUsers.length}${q ? ` of ${users.length}` : ''})` },
+              { id: 'pending', label: `Pending (${filteredPending.length}${q ? ` of ${pendingUsers.length}` : ''})` },
+              { id: 'rejected', label: `Rejected (${filteredRejected.length}${q ? ` of ${rejectedUsers.length}` : ''})` },
+            ]}
+          />
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          {activeTab === 'approved' &&
-            (filteredUsers.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No registered users match your search</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Email
-                      </th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Name
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Role
-                      </th>
-                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Outlet
-                      </th>
-                      <th className="hidden md:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Status
-                      </th>
-                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Login
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredUsers.map((user) => (
-                      <tr key={user.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">{user.email}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">
-                          {user.full_name || 'N/A'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm">
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              String(user.role).toLowerCase().trim() === 'admin'
-                                ? 'bg-purple-100 text-purple-700'
-                                : String(user.role).toLowerCase().trim() === 'supervisor'
-                                  ? 'bg-amber-100 text-amber-900'
-                                  : 'bg-blue-100 text-blue-700'
-                            }`}
-                          >
-                            {user.role}
-                          </span>
-                        </td>
-                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-700">
-                          {user.role?.toLowerCase()?.trim() === 'supervisor'
-                            ? outletNameById.get(user.assigned_outlet_id ?? '') ?? '—'
-                            : '—'}
-                        </td>
-                        <td className="hidden md:table-cell px-4 md:px-6 py-4 text-xs">{statusCell(user)}</td>
-                        <td className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-600">
-                          {user.last_login ? new Date(user.last_login).toLocaleDateString() : 'N/A'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNameDraft(user.full_name ?? '');
-                              const rl = String(user.role).toLowerCase().trim();
-                              setRoleDraft(
-                                rl === 'admin' ? 'admin' : rl === 'supervisor' ? 'supervisor' : 'staff'
-                              );
-                              setOutletDraft(user.assigned_outlet_id ?? '');
-                              setDrawer({ open: true, tab: 'approved', user });
-                            }}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-medium"
-                          >
-                            Manage
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
+        {activeTab === 'approved' && countDeactivated(users) > 0 && (
+          <label className="mb-3 inline-flex items-center gap-2 text-sm text-stone-700">
+            <input
+              type="checkbox"
+              checked={showDeactivated}
+              onChange={(e) => setShowDeactivated(e.target.checked)}
+            />
+            Show deactivated ({countDeactivated(users)})
+          </label>
+        )}
 
-          {activeTab === 'pending' &&
-            (filteredPending.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No pending approvals match your search</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Email
-                      </th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Name
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Requested
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPending.map((user) => (
-                      <tr key={user.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">{user.email}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">
-                          {user.full_name || 'N/A'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-600">
-                          {new Date(user.requested_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-right">
-                          <div className="flex flex-wrap justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setDrawer({ open: true, tab: 'pending', user })}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-50 text-gray-800 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium"
-                            >
-                              Details
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleApproveUser(user.id)}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors text-sm font-medium"
-                            >
-                              <Check size={14} />
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRejectUser(user.id)}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium"
-                            >
-                              <X size={14} />
-                              Reject
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-
-          {activeTab === 'rejected' &&
-            (filteredRejected.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">No rejected registrations match your search</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Email
-                      </th>
-                      <th className="hidden sm:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Name
-                      </th>
-                      <th className="hidden lg:table-cell px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Reason
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">
-                        Reviewed
-                      </th>
-                      <th className="px-4 md:px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredRejected.map((row) => (
-                      <tr
-                        key={`${row.registration_id ?? row.id}-rej`}
-                        className="border-b border-gray-200 hover:bg-gray-50 transition-colors"
-                      >
-                        <td className="px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">{row.email}</td>
-                        <td className="hidden sm:table-cell px-4 md:px-6 py-4 text-xs sm:text-sm text-gray-900">
-                          {row.full_name || 'N/A'}
-                        </td>
-                        <td
-                          className="hidden lg:table-cell px-4 md:px-6 py-4 text-xs text-gray-600 max-w-xs truncate"
-                          title={row.rejection_reason ?? ''}
+        {activeTab === 'approved' &&
+          (filteredUsers.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState title="No registered users match your search" />
+            </div>
+          ) : (
+            <>
+              <div className="ios-group">
+                {filteredUsers.map((user) => {
+                  const outletLabel =
+                    user.role?.toLowerCase()?.trim() === 'supervisor'
+                      ? outletNameById.get(user.assigned_outlet_id ?? '') ?? '—'
+                      : '—';
+                  return (
+                    <ListRow
+                      key={user.id}
+                      title={user.email}
+                      meta={`${user.full_name || 'N/A'} · ${user.role}${String(user.role).toLowerCase().trim() === 'procurement' ? ` (${tagsLabel(user.entity_tags)})` : ''} · ${outletLabel}${isUserActive(user) ? '' : ' · Deactivated'} · login ${user.last_login ? new Date(user.last_login).toLocaleDateString() : '—'}`}
+                      body={<div className="text-[13px]">{statusCell(user)}</div>}
+                      aside={
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNameDraft(user.full_name ?? '');
+                            setRoleDraft(roleDraftFromRole(user.role));
+                            setTagsDraft(tagsDraftFromUser(user.role, user.entity_tags));
+                            setOutletDraft(user.assigned_outlet_id ?? '');
+                            setDrawer({ open: true, tab: 'approved', user });
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors"
                         >
-                          {row.rejection_reason || '—'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-xs text-gray-600">
-                          {row.reviewed_at ? new Date(row.reviewed_at).toLocaleDateString() : '—'}
-                        </td>
-                        <td className="px-4 md:px-6 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setDrawer({ open: true, tab: 'rejected', row })}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-50 text-gray-800 rounded-lg hover:bg-gray-100 transition-colors text-xs font-medium"
-                          >
-                            Details
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          Manage
+                        </button>
+                      }
+                    />
+                  );
+                })}
               </div>
-            ))}
-        </div>
+            </>
+          ))}
+
+        {activeTab === 'pending' &&
+          (filteredPending.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState title="No pending approvals match your search" />
+            </div>
+          ) : (
+            <>
+              <div className="ios-group">
+                {filteredPending.map((user) => (
+                  <ListRow
+                    key={user.id}
+                    title={user.email}
+                    meta={`${user.full_name || 'N/A'} · ${new Date(user.requested_at).toLocaleDateString()}`}
+                    body={
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDrawer({ open: true, tab: 'pending', user })}
+                          className="inline-flex items-center gap-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-800 hover:bg-stone-100 transition-colors"
+                        >
+                          Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApproveUser(user.id)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-green-50 px-3 py-1.5 text-sm font-medium text-green-600 hover:bg-green-100 transition-colors"
+                        >
+                          <Check size={14} />
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRejectUser(user.id)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-red-50 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-100 transition-colors"
+                        >
+                          <X size={14} />
+                          Reject
+                        </button>
+                      </div>
+                    }
+                  />
+                ))}
+              </div>
+            </>
+          ))}
+
+        {activeTab === 'rejected' &&
+          (filteredRejected.length === 0 ? (
+            <div className="panel py-2">
+              <EmptyState title="No rejected registrations match your search" />
+            </div>
+          ) : (
+            <>
+              <div className="ios-group">
+                {filteredRejected.map((row) => (
+                  <ListRow
+                    key={`${row.registration_id ?? row.id}-rej`}
+                    title={row.email}
+                    meta={`${row.full_name || 'N/A'} · ${
+                      row.reviewed_at ? new Date(row.reviewed_at).toLocaleDateString() : '—'
+                    }`}
+                    body={<p className="text-[13px] text-stone-500">{row.rejection_reason || 'No reason recorded'}</p>}
+                    aside={
+                      <button
+                        type="button"
+                        onClick={() => setDrawer({ open: true, tab: 'rejected', row })}
+                        className="inline-flex items-center gap-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-800 hover:bg-stone-100 transition-colors"
+                      >
+                        Details
+                      </button>
+                    }
+                  />
+                ))}
+              </div>
+            </>
+          ))}
       </div>
 
       {/* Detail drawer */}
@@ -929,13 +880,13 @@ export function Users() {
             className="fixed inset-0 z-40 bg-black/30 md:bg-black/20"
             onClick={() => setDrawer({ open: false })}
           />
-          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-gray-200 bg-white shadow-xl max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:top-[env(safe-area-inset-top,0px)]">
-            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-              <h2 className="text-lg font-semibold text-gray-900">User details</h2>
+          <aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-stone-200 bg-white max-md:bottom-[env(safe-area-inset-bottom,0px)] max-md:top-[env(safe-area-inset-top,0px)]">
+            <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3">
+              <h2 className="text-lg font-semibold text-stone-900">User details</h2>
               <button
                 type="button"
                 onClick={() => setDrawer({ open: false })}
-                className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"
+                className="rounded-lg p-2 text-stone-500 hover:bg-stone-100"
               >
                 <PanelRightClose size={20} />
               </button>
@@ -944,17 +895,17 @@ export function Users() {
               {drawer.tab === 'approved' && drawerApproved && (
                 <div className="space-y-5">
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Email</p>
-                    <p className="mt-1 text-gray-900">{drawerApproved.email}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Email</p>
+                    <p className="mt-1 text-stone-900">{drawerApproved.email}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">User ID</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">User ID</p>
                     <div className="mt-1 flex items-center gap-2">
-                      <code className="break-all text-xs text-gray-700">{drawerApproved.id}</code>
+                      <code className="break-all text-xs text-stone-700">{drawerApproved.id}</code>
                       <button
                         type="button"
                         onClick={() => copyToClipboard(drawerApproved.id)}
-                        className="rounded p-1 text-gray-500 hover:bg-gray-100"
+                        className="rounded p-1 text-stone-500 hover:bg-stone-100"
                         title="Copy"
                       >
                         <Copy size={16} />
@@ -962,25 +913,26 @@ export function Users() {
                     </div>
                   </div>
                   <div>
-                    <label className="text-xs font-medium uppercase text-gray-500">Display name</label>
+                    <label className="text-xs font-medium uppercase text-stone-500">Display name</label>
                     <input
                       type="text"
                       value={nameDraft}
                       onChange={(e) => setNameDraft(e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
                     />
-                    <button
+                    <Button
                       type="button"
+                      variant="primary"
                       disabled={nameSaving}
                       onClick={() => void handleSaveDisplayName(drawerApproved.id)}
-                      className="mt-2 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                      className="mt-2 px-3 py-1.5 text-xs"
                     >
                       {nameSaving ? 'Saving…' : 'Save name'}
-                    </button>
+                    </Button>
                   </div>
                   <div>{statusCell(drawerApproved)}</div>
-                  <div className="space-y-2 border-t border-gray-100 pt-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Password</p>
+                  <div className="space-y-2 border-t border-stone-100 pt-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Password</p>
                     <button
                       type="button"
                       onClick={() => {
@@ -988,7 +940,7 @@ export function Users() {
                         setSendEmailModalOpen(true);
                       }}
                       disabled={drawerApproved.email === 'Unknown'}
-                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50 disabled:opacity-50"
                     >
                       <Mail size={16} />
                       Send password reset email
@@ -1002,7 +954,7 @@ export function Users() {
                         setTempPassMessage('');
                         setTempPassModalOpen(true);
                       }}
-                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 py-2 text-sm font-medium text-stone-800 hover:bg-stone-50"
                     >
                       <KeyRound size={16} />
                       Set temporary password
@@ -1019,28 +971,36 @@ export function Users() {
                       Require new password on next sign-in
                     </button>
                   </div>
-                  <div className="border-t border-gray-100 pt-4 space-y-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <div className="border-t border-stone-100 pt-4 space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
                       Role &amp; outlet
                     </p>
+                    {String(drawerApproved.role).toLowerCase().trim() === 'procurement' && (
+                      <p className="text-xs text-stone-600">
+                        Current business tags: <span className="font-medium">{tagsLabel(drawerApproved.entity_tags)}</span>
+                      </p>
+                    )}
                     {authUser?.id !== drawerApproved.id ? (
                       <>
                         <select
                           value={roleDraft}
-                          onChange={(e) =>
-                            setRoleDraft(e.target.value as 'admin' | 'staff' | 'supervisor')
-                          }
-                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+                          onChange={(e) => setRoleDraft(e.target.value)}
+                          className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900"
                         >
-                          <option value="staff">Staff</option>
-                          <option value="admin">Admin</option>
-                          <option value="supervisor">Outlet supervisor</option>
+                          {ASSIGNABLE_ROLES.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                          {!isAssignableRole(roleDraft) && (
+                            <option value={roleDraft}>{roleDraft} (current)</option>
+                          )}
                         </select>
                         {roleDraft === 'supervisor' && (
                           <select
                             value={outletDraft}
                             onChange={(e) => setOutletDraft(e.target.value)}
-                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+                            className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900"
                           >
                             <option value="">Select outlet…</option>
                             {outlets.map((o) => (
@@ -1049,6 +1009,35 @@ export function Users() {
                               </option>
                             ))}
                           </select>
+                        )}
+                        {roleDraft === 'procurement' && (
+                          <fieldset className="space-y-1.5 rounded-lg border border-stone-200 p-3">
+                            <legend className="px-1 text-xs font-medium text-stone-600">
+                              Business tags (pick one or more)
+                            </legend>
+                            {PROCUREMENT_TAG_OPTIONS.map((o) => (
+                              <label key={o.value} className="flex items-center gap-2 text-sm text-stone-800">
+                                <input
+                                  type="checkbox"
+                                  checked={tagsDraft.includes(o.value)}
+                                  onChange={(e) =>
+                                    setTagsDraft((cur) =>
+                                      e.target.checked ? normaliseTags([...cur, o.value]) : cur.filter((t) => t !== o.value)
+                                    )
+                                  }
+                                />
+                                {o.short} · {o.label}
+                              </label>
+                            ))}
+                            {tagsDraft.length === 0 && (
+                              <p className="text-xs text-amber-700">At least one tag is required to save.</p>
+                            )}
+                          </fieldset>
+                        )}
+                        {drawerApproved.role !== roleDraft && drawerApproved.role === 'procurement' && (
+                          <p className="text-xs text-stone-500">
+                            Moving this user away from Procurement clears their business tags (recorded in the audit log).
+                          </p>
                         )}
                         <button
                           type="button"
@@ -1061,8 +1050,35 @@ export function Users() {
                         </button>
                       </>
                     ) : (
-                      <p className="text-xs text-gray-500">You cannot change your own role here.</p>
+                      <p className="text-xs text-stone-500">You cannot change your own role here.</p>
                     )}
+                  </div>
+                  <div className="space-y-2 border-t border-stone-200 pt-4">
+                    <p className="text-xs font-medium uppercase text-stone-500">Account status</p>
+                    <p className="text-sm text-stone-700">
+                      {isUserActive(drawerApproved)
+                        ? 'Active'
+                        : `Deactivated${drawerApproved.deactivated_at ? ` on ${new Date(drawerApproved.deactivated_at).toLocaleString()}` : ''}`}
+                    </p>
+                    {authUser?.id !== drawerApproved.id ? (
+                      <button
+                        type="button"
+                        disabled={activeBusyUserId === drawerApproved.id}
+                        onClick={() => void handleSetUserActive(drawerApproved, !isUserActive(drawerApproved))}
+                        className={`w-full rounded-lg py-2 text-sm font-medium disabled:opacity-50 ${
+                          isUserActive(drawerApproved)
+                            ? 'border border-red-300 text-red-700 hover:bg-red-50'
+                            : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        }`}
+                      >
+                        {isUserActive(drawerApproved) ? 'Deactivate user' : 'Reactivate user'}
+                      </button>
+                    ) : (
+                      <p className="text-xs text-stone-500">You cannot deactivate yourself.</p>
+                    )}
+                    <p className="text-xs text-stone-500">
+                      Deactivation blocks sign-in and all access; history and names on past records are kept.
+                    </p>
                   </div>
                 </div>
               )}
@@ -1070,16 +1086,16 @@ export function Users() {
               {drawer.open && drawer.tab === 'pending' && (
                 <div className="space-y-4">
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Email</p>
-                    <p className="mt-1 text-gray-900">{drawer.user.email}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Email</p>
+                    <p className="mt-1 text-stone-900">{drawer.user.email}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Name</p>
-                    <p className="mt-1 text-gray-900">{drawer.user.full_name || '—'}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Name</p>
+                    <p className="mt-1 text-stone-900">{drawer.user.full_name || '—'}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Requested</p>
-                    <p className="mt-1 text-gray-700">
+                    <p className="text-xs font-medium uppercase text-stone-500">Requested</p>
+                    <p className="mt-1 text-stone-700">
                       {new Date(drawer.user.requested_at).toLocaleString()}
                     </p>
                   </div>
@@ -1107,24 +1123,24 @@ export function Users() {
               {drawer.open && drawer.tab === 'rejected' && (
                 <div className="space-y-4">
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Email</p>
-                    <p className="mt-1 text-gray-900">{drawer.row.email}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Email</p>
+                    <p className="mt-1 text-stone-900">{drawer.row.email}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Name</p>
-                    <p className="mt-1 text-gray-900">{drawer.row.full_name || '—'}</p>
+                    <p className="text-xs font-medium uppercase text-stone-500">Name</p>
+                    <p className="mt-1 text-stone-900">{drawer.row.full_name || '—'}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Reviewed</p>
-                    <p className="mt-1 text-gray-700">
+                    <p className="text-xs font-medium uppercase text-stone-500">Reviewed</p>
+                    <p className="mt-1 text-stone-700">
                       {drawer.row.reviewed_at
                         ? new Date(drawer.row.reviewed_at).toLocaleString()
                         : '—'}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium uppercase text-gray-500">Reason</p>
-                    <p className="mt-1 text-gray-700 whitespace-pre-wrap">
+                    <p className="text-xs font-medium uppercase text-stone-500">Reason</p>
+                    <p className="mt-1 text-stone-700 whitespace-pre-wrap">
                       {drawer.row.rejection_reason || '—'}
                     </p>
                   </div>
@@ -1141,7 +1157,7 @@ export function Users() {
         onClose={() => !resetLoading && setResetModalOpen(false)}
       >
         <div className="w-full max-w-sm">
-          <p className="text-gray-600 mb-6">
+          <p className="text-stone-600 mb-6">
             {selectedUser &&
               `Require ${selectedUser.email} to choose a new password before using the app? They can still sign in with their current password once, then must update it.`}
           </p>
@@ -1157,19 +1173,20 @@ export function Users() {
           )}
 
           <div className="flex gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => setResetModalOpen(false)}
               disabled={resetLoading}
-              className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium disabled:opacity-50"
+              className="flex-1"
             >
               Cancel
-            </button>
+            </Button>
             <button
               type="button"
               onClick={() => void handleForcePasswordReset()}
               disabled={resetLoading}
-              className="flex-1 px-4 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium disabled:opacity-50"
+              className="flex-1 rounded-lg bg-amber-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
             >
               {resetLoading ? 'Processing…' : 'Confirm'}
             </button>
@@ -1183,9 +1200,9 @@ export function Users() {
         onClose={() => !sendEmailLoading && setSendEmailModalOpen(false)}
       >
         <div className="w-full max-w-md space-y-4">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-stone-600">
             Supabase will email <strong>{sendEmailTarget?.email}</strong> a link to set a new password. Ensure{' '}
-            <code className="rounded bg-gray-100 px-1 text-xs">{getPasswordRecoveryRedirectUrl()}</code> is allowed in
+            <code className="rounded bg-stone-100 px-1 text-xs">{getPasswordRecoveryRedirectUrl()}</code> is allowed in
             Dashboard → Authentication → URL configuration.
           </p>
           {sendEmailMessage && (
@@ -1200,26 +1217,27 @@ export function Users() {
             </div>
           )}
           <div className="flex gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => {
                 setSendEmailModalOpen(false);
                 setSendEmailTarget(null);
                 setSendEmailMessage('');
               }}
               disabled={sendEmailLoading}
-              className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="flex-1"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => void handleConfirmSendResetEmail()}
               disabled={sendEmailLoading}
-              className="flex-1 rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="flex-1"
             >
               {sendEmailLoading ? 'Sending…' : 'Send email'}
-            </button>
+            </Button>
           </div>
         </div>
       </Modal>
@@ -1230,28 +1248,28 @@ export function Users() {
         onClose={() => !tempPassLoading && setTempPassModalOpen(false)}
       >
         <div className="w-full max-w-md space-y-4">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-stone-600">
             Sets Auth password for <strong>{tempPassUser?.email}</strong> via secure Edge Function. User will be required
             to pick a new password on next sign-in. Minimum {MIN_PASSWORD_LENGTH} characters.
           </p>
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">New password</label>
+            <label className="mb-1 block text-xs font-medium text-stone-700">New password</label>
             <input
               type="password"
               autoComplete="new-password"
               value={tempPassNew}
               onChange={(e) => setTempPassNew(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">Confirm</label>
+            <label className="mb-1 block text-xs font-medium text-stone-700">Confirm</label>
             <input
               type="password"
               autoComplete="new-password"
               value={tempPassConfirm}
               onChange={(e) => setTempPassConfirm(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
             />
           </div>
           {tempPassMessage && (
@@ -1264,26 +1282,27 @@ export function Users() {
             </div>
           )}
           <div className="flex gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => {
                 setTempPassModalOpen(false);
                 setTempPassUser(null);
                 setTempPassMessage('');
               }}
               disabled={tempPassLoading}
-              className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="flex-1"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => void handleConfirmTempPassword()}
               disabled={tempPassLoading}
-              className="flex-1 rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
+              className="flex-1"
             >
               {tempPassLoading ? 'Saving…' : 'Set password'}
-            </button>
+            </Button>
           </div>
         </div>
       </Modal>

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+/** iOS segmented control. One submodule is on screen. Switching does not leave the page. */
 export function Tabs<T extends string>({
   value,
   onChange,
@@ -10,23 +11,26 @@ export function Tabs<T extends string>({
   items: { id: T; label: ReactNode }[];
 }) {
   return (
-    <div className="border-b border-stone-200">
-      <nav className="-mx-1 flex gap-4 overflow-x-auto overscroll-x-contain px-1">
-        {items.map((item) => (
+    <div
+      data-no-swipe
+      className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full bg-black/5 p-1 scrollbar-none"
+    >
+      {items.map((item) => {
+        const selected = value === item.id;
+        return (
           <button
             key={item.id}
             type="button"
+            aria-pressed={selected}
             onClick={() => onChange(item.id)}
-            className={`shrink-0 border-b-2 px-1 py-3 text-sm font-medium transition-colors ${
-              value === item.id
-                ? 'border-brand-600 text-brand-800'
-                : 'border-transparent text-stone-500 hover:text-stone-800'
+            className={`min-h-9 shrink-0 rounded-full px-4 text-[13px] font-semibold tracking-tight transition-colors ${
+              selected ? 'bg-white text-brand-800 shadow-sm' : 'text-stone-500'
             }`}
           >
             {item.label}
           </button>
-        ))}
-      </nav>
+        );
+      })}
     </div>
   );
 }

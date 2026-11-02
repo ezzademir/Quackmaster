@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, CircleDollarSign, HelpCircle, Package, Scale, Truck } from 'lucide-react';
+import { AlertTriangle, Archive, ChevronRight, CircleDollarSign, HelpCircle, Package, Scale, Truck } from 'lucide-react';
 import { DateFilter } from '../components/DateFilter';
-import { Button, EmptyState, PageHeader, StatCard } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader, StatCard } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import {
   formatDateForInput,
@@ -91,20 +91,29 @@ function fmtRm(n: number | null | undefined): string {
 const STATUS_LABEL: Record<StorehubDiffStatus, string> = {
   match: 'Match',
   qty_mismatch: 'Qty differs',
-  missing_in_dashboard: 'Missing in QMERP',
-  extra_in_dashboard: 'Only in QMERP',
-  pos_only: 'SHPOS only',
+  missing_in_dashboard: 'Missing in Outlet Sales',
+  extra_in_dashboard: 'Only in Outlet Sales',
+  pos_only: 'POS only',
 };
 
-/** Plain-language help for status chips (title tooltip). */
+/** Plain-language help for status chips (title tooltip). Period reports match vs all posted Outlet sales. */
 const STATUS_HELP: Record<StorehubDiffStatus, string> = {
-  match: 'SHPOS sold matches QMERP sold from StoreHub ingest for this row.',
-  qty_mismatch: 'SHPOS sold and QMERP StoreHub-ingested sold both exist but the unit counts differ.',
+  match: 'POS sold matches Outlet sold (StoreHub + manual) for this row.',
+  qty_mismatch: 'POS sold and Outlet sold (StoreHub + manual) both exist but the unit counts differ.',
   missing_in_dashboard:
-    'SHPOS has sales here, but QMERP has no StoreHub-ingested journal for this row (manual journals do not count as a match).',
+    'POS has sales here, but Outlet Sales has no posted journal (manual or StoreHub) for this row.',
   extra_in_dashboard:
-    'QMERP has posted sales here (often manual or StoreHub ingest) with no matching SHPOS tickets in this period.',
-  pos_only: 'This report has no QMERP journal side — POS tickets only.',
+    'Outlet Sales has posted sales here (often manual or StoreHub ingest) with no matching POS tickets in this period.',
+  pos_only: 'This report has no Outlet Sales journal side — POS tickets only.',
+};
+
+/** Sold vs supplied: Gaps compare POS to posted Outlet sold (all journals). */
+const TALLY_STATUS_HELP: Record<StorehubDiffStatus, string> = {
+  match: 'POS sold matches posted Outlet sold for this row.',
+  qty_mismatch: 'POS sold and posted Outlet sold both exist but the unit counts differ.',
+  missing_in_dashboard: 'POS has sales here, but Outlet Sales has no posted journal for this row.',
+  extra_in_dashboard: 'Outlet Sales has posted sales here with no matching POS tickets in this period.',
+  pos_only: 'This report has no Outlet Sales journal side — POS tickets only.',
 };
 
 const STATUS_CLASS: Record<StorehubDiffStatus, string> = {
@@ -128,11 +137,17 @@ function gapKeys(rows: StorehubReportRow[]): string[] {
   return rows.filter(tallyRowHasGap).map((r) => r.key);
 }
 
-function StatusChip({ status }: { status: StorehubDiffStatus }) {
+function StatusChip({
+  status,
+  help = STATUS_HELP,
+}: {
+  status: StorehubDiffStatus;
+  help?: Record<StorehubDiffStatus, string>;
+}) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[status]}`}
-      title={STATUS_HELP[status]}
+      title={help[status]}
     >
       {STATUS_LABEL[status]}
       <HelpCircle size={11} className="opacity-70" aria-hidden />
@@ -416,7 +431,7 @@ export function PosCompare() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="SHPOS vs QMERP"
+        title="POS compare"
         description={
           tally
             ? 'Sold vs supplied: compare live POS to manual Outlet Sales and hub dispatch by supply date. Finished goods are pre-selected when possible. Key gaps in Outlet Sales. On a multi-day period, expand a product to see which days differ.'
@@ -443,7 +458,7 @@ export function PosCompare() {
                       <option key={r.id} value={r.id} disabled={!r.available}>
                         {r.label}
                         {r.available ? '' : ' (not in API)'}
-                        {r.posOnly ? ' · SHPOS only' : ''}
+                        {r.posOnly ? ' · POS only' : ''}
                       </option>
                     ))}
                   </optgroup>
@@ -453,7 +468,7 @@ export function PosCompare() {
             <label className="w-full min-w-0 text-sm sm:w-auto">
               <span className="mb-1 block text-xs text-stone-500">Store</span>
               <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className={fieldClass}>
-                <option value="">{tally ? 'All QMERP outlets' : 'All mapped stores'}</option>
+                <option value="">{tally ? 'All outlets' : 'All mapped stores'}</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -641,9 +656,9 @@ export function PosCompare() {
               tally
                 ? selectedIds.length === 0
                   ? 'Next: click Finished goods (or tick products), set the Malaysia period, then Compare.'
-                  : 'Next: set the Malaysia period if needed, then click Compare. QMERP sold should be keyed in Outlet Sales; SHPOS sold is live POS. Leftover is hub dispatch minus those manuals. Expand a product to see days when the period is longer than one day.'
+                  : 'Next: set the Malaysia period if needed, then click Compare. Outlet sold should be keyed in Outlet Sales; POS sold is live POS. Leftover is hub dispatch minus those manuals. Expand a product to see days when the period is longer than one day.'
                 : reportId === 'sales_over_time'
-                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual QMERP sold is what staff keyed; historical StoreHub ingest still appears in the split.'
+                  ? 'Next: pick store (or all), set the period + Daily/Weekly/Monthly bucket, then Compare — no product pick needed. Manual Outlet sold is what staff keyed; historical StoreHub ingest still appears in the split.'
                   : 'Next: choose a report, set the period, then Compare. Gaps show POS vs what is posted in Outlet Sales.'
             }
             action={
@@ -672,9 +687,10 @@ export function PosCompare() {
             <details className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-600">
               <summary className="cursor-pointer font-medium text-stone-800">What do the status chips mean?</summary>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-600">
-                {(Object.keys(STATUS_HELP) as StorehubDiffStatus[]).map((k) => (
+                {(Object.keys(tally ? TALLY_STATUS_HELP : STATUS_HELP) as StorehubDiffStatus[]).map((k) => (
                   <li key={k}>
-                    <span className="font-medium">{STATUS_LABEL[k]}:</span> {STATUS_HELP[k]}
+                    <span className="font-medium">{STATUS_LABEL[k]}:</span>{' '}
+                    {(tally ? TALLY_STATUS_HELP : STATUS_HELP)[k]}
                   </li>
                 ))}
               </ul>
@@ -682,20 +698,29 @@ export function PosCompare() {
           )}
 
           {(() => {
-            const hasSplit =
-              showSplitSold &&
-              !result.posOnly &&
-              (result.totals.dashStorehubQty != null ||
-                result.totals.dashManualQty != null ||
-                result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null));
+            const ingestActive = (result.totals.dashStorehubQty ?? 0) > 0;
+            const hasSplit = tally
+              ? ingestActive
+              : showSplitSold &&
+                !result.posOnly &&
+                (result.totals.dashStorehubQty != null ||
+                  result.totals.dashManualQty != null ||
+                  result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null));
             const shSold = result.totals.dashStorehubQty ?? null;
             const manSold = result.totals.dashManualQty ?? null;
+            const gridCols = tally
+              ? hasSplit
+                ? 'lg:grid-cols-3 xl:grid-cols-7'
+                : 'lg:grid-cols-5'
+              : hasSplit
+                ? 'lg:grid-cols-3 xl:grid-cols-6'
+                : 'lg:grid-cols-4';
             return (
-          <div className={`grid grid-cols-2 gap-3 ${hasSplit || tally ? 'lg:grid-cols-3 xl:grid-cols-6' : 'lg:grid-cols-4'}`}>
+          <div className={`grid grid-cols-2 gap-3 ${gridCols}`}>
             <StatCard
               icon={<Package size={18} />}
               tone="brand"
-              label="SHPOS sold"
+              label="POS sold"
               value={fmtQty(result.totals.posQty)}
               sub={result.snapshot ? 'On hand now' : 'Units on completed POS tickets'}
             />
@@ -703,19 +728,19 @@ export function PosCompare() {
               <>
                 <StatCard
                   icon={<Scale size={18} />}
-                  label="QMERP sold (StoreHub)"
+                  label="Outlet sold (StoreHub)"
                   value={fmtQty(shSold)}
                   sub="source = storehub"
                 />
                 <StatCard
                   icon={<Scale size={18} />}
-                  label="QMERP sold (manual)"
+                  label="Outlet sold (manual)"
                   value={fmtQty(manSold)}
                   sub="null / manual / other"
                 />
                 <StatCard
                   icon={<Scale size={18} />}
-                  label="QMERP sold (all)"
+                  label="Outlet sold (all)"
                   value={fmtQty(result.totals.dashQty)}
                   sub="StoreHub + manual posted"
                 />
@@ -723,51 +748,52 @@ export function PosCompare() {
             ) : tally ? (
               <StatCard
                 icon={<Scale size={18} />}
-                label="QMERP sold (all)"
+                label="Outlet sold"
                 value={fmtQty(result.totals.dashQty)}
-                sub="Manual Outlet Sales units"
+                sub="Posted Outlet Sales units"
               />
             ) : (
               <StatCard
                 icon={<CircleDollarSign size={18} />}
-                label="SHPOS RM"
+                label="POS RM"
                 value={fmtRm(result.totals.posRm)}
                 sub="POS only"
               />
             )}
-            {!hasSplit && (
-            <StatCard
-              icon={tally ? <Truck size={18} /> : <Scale size={18} />}
-              label={tally ? 'QMERP supplied' : 'QMERP sold (all)'}
-              value={
-                result.posOnly
-                  ? '—'
-                  : fmtQty(tally ? result.totals.suppliedQty : result.totals.dashQty)
-              }
-              sub={
-                result.posOnly
-                  ? 'Not stored in journals'
-                  : tally
-                    ? 'Dispatched to outlet (supply date)'
-                    : 'Manual Outlet Sales units'
-              }
-            />
-            )}
-            {tally && (
-              <StatCard
-                icon={<Truck size={18} />}
-                label="QMERP supplied"
-                value={fmtQty(result.totals.suppliedQty)}
-                sub="Dispatched to outlet (supply date)"
-              />
-            )}
-            {hasSplit && !tally && (
-              <StatCard
-                icon={<CircleDollarSign size={18} />}
-                label="SHPOS RM"
-                value={fmtRm(result.totals.posRm)}
-                sub="POS only"
-              />
+            {tally ? (
+              <>
+                <StatCard
+                  icon={<Truck size={18} />}
+                  label="Outlet supplied"
+                  value={fmtQty(result.totals.suppliedQty)}
+                  sub="Dispatched to outlet (supply date)"
+                />
+                <StatCard
+                  icon={<Archive size={18} />}
+                  label="Leftover"
+                  value={fmtQty(result.totals.leftoverQty)}
+                  sub="Dispatch minus Outlet sold · not a POS gap"
+                />
+              </>
+            ) : (
+              <>
+                {!hasSplit && (
+                  <StatCard
+                    icon={<Scale size={18} />}
+                    label="Outlet sold (all)"
+                    value={result.posOnly ? '—' : fmtQty(result.totals.dashQty)}
+                    sub={result.posOnly ? 'Not stored in journals' : 'Manual Outlet Sales units'}
+                  />
+                )}
+                {hasSplit && (
+                  <StatCard
+                    icon={<CircleDollarSign size={18} />}
+                    label="POS RM"
+                    value={fmtRm(result.totals.posRm)}
+                    sub="POS only"
+                  />
+                )}
+              </>
             )}
             <StatCard
               icon={<AlertTriangle size={18} />}
@@ -776,10 +802,10 @@ export function PosCompare() {
               value={String(gapCount)}
               sub={
                 tally
-                  ? `${result.totals.match} SHPOS vs StoreHub sold match · leftover is not a gap`
+                  ? `${result.totals.match} match · POS vs Outlet sold`
                   : hasSplit
-                    ? `${result.totals.match} match (vs StoreHub sold) · manual explains all−SHPOS`
-                    : `${result.totals.match} match · ${result.totals.pos_only} SHPOS only`
+                    ? `${result.totals.match} match (vs Outlet sold, StoreHub + manual)`
+                    : `${result.totals.match} match · ${result.totals.pos_only} POS only`
               }
             />
           </div>
@@ -795,7 +821,7 @@ export function PosCompare() {
             </div>
           ) : (
             <div className="panel overflow-x-auto">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 px-4 py-2">
+              <div className="flex flex-col gap-2 border-b border-stone-100 px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-4">
                 <p className="text-sm font-medium text-stone-800">
                   {selected?.label ?? 'Report'}
                   <span className="ml-2 font-normal text-stone-400">
@@ -836,7 +862,7 @@ export function PosCompare() {
                   expanded={expanded}
                   onToggle={toggleExpand}
                   gapsOnly={rowFilter === 'gaps'}
-                  showSplit={result.rows.some((r) => r.dashStorehubQty != null || r.dashManualQty != null)}
+                  showSplit={(result.totals.dashStorehubQty ?? 0) > 0}
                 />
               ) : (
                 <PeriodTable
@@ -867,6 +893,23 @@ export function PosCompare() {
   );
 }
 
+function PeriodFigures({ row, showSplit }: { row: StorehubReportRow; showSplit: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-stone-600">
+      <span className="tabular-nums">POS {fmtQty(row.posQty)}</span>
+      <span className="tabular-nums">{fmtRm(row.posRm)}</span>
+      {showSplit ? (
+        <>
+          <span className="tabular-nums">StoreHub {fmtQty(row.dashStorehubQty)}</span>
+          <span className="tabular-nums">Manual {fmtQty(row.dashManualQty)}</span>
+        </>
+      ) : null}
+      <span className="tabular-nums">Sold {fmtQty(row.dashQty)}</span>
+      <StatusChip status={row.status} />
+    </div>
+  );
+}
+
 function PeriodTable({
   rows,
   canDrill,
@@ -879,140 +922,62 @@ function PeriodTable({
   onDrill: (row: StorehubReportRow) => void;
 }) {
   return (
-    <table className={`data-table ${showSplit ? 'min-w-[52rem]' : 'min-w-[40rem]'}`}>
-      <thead>
-        <tr>
-          <th>
-            Row
-            {canDrill ? (
-              <span className="ml-2 font-normal text-stone-400">· click bucket for days</span>
-            ) : null}
-          </th>
-          <th className="text-right">SHPOS sold</th>
-          <th className="text-right">SHPOS RM</th>
-          {showSplit ? (
-            <>
-              <th className="text-right">QMERP sold (StoreHub)</th>
-              <th className="text-right">QMERP sold (manual)</th>
-              <th className="text-right">QMERP sold (all)</th>
-            </>
-          ) : (
-            <th className="text-right">QMERP sold (all)</th>
-          )}
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-stone-100">
-        {rows.map((row) => (
-          <tr
-            key={row.key}
-            className={
-              row.status === 'qty_mismatch' || row.status === 'missing_in_dashboard'
-                ? 'bg-amber-50/60'
-                : 'hover:bg-stone-50'
-            }
-          >
-            <td>
-              {canDrill ? (
-                <button
-                  type="button"
-                  onClick={() => onDrill(row)}
-                  className="inline-flex items-center gap-1 text-left font-medium text-sky-900 underline-offset-2 hover:underline"
-                  title="Show daily rows for this bucket"
-                >
-                  {row.label}
-                  <ChevronRight size={14} className="shrink-0 text-sky-700" />
-                </button>
-              ) : (
-                row.label
-              )}
-            </td>
-            <td className="text-right tabular-nums">{fmtQty(row.posQty)}</td>
-            <td className="text-right tabular-nums">{fmtRm(row.posRm)}</td>
-            {showSplit ? (
-              <>
-                <td className="text-right tabular-nums">{fmtQty(row.dashStorehubQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.dashManualQty)}</td>
-                <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-              </>
-            ) : (
-              <td className="text-right tabular-nums">{fmtQty(row.dashQty)}</td>
-            )}
-            <td>
-              <StatusChip status={row.status} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="ios-group">
+      {rows.map((row) => (
+        <ListRow
+          key={row.key}
+          title={
+            <span className="inline-flex items-center gap-1">
+              {row.label}
+              {canDrill ? <ChevronRight size={14} className="shrink-0 text-brand-800" /> : null}
+            </span>
+          }
+          onClick={canDrill ? () => onDrill(row) : undefined}
+          body={<PeriodFigures row={row} showSplit={showSplit} />}
+        />
+      ))}
+    </div>
   );
 }
 
-function TallyQtyCells({
+function TallyFigures({
   row,
   showSplit,
-  muted,
 }: {
   row: Pick<
     StorehubReportRow,
-    'posQty' | 'dashQty' | 'dashStorehubQty' | 'dashManualQty' | 'suppliedQty' | 'leftoverQty' | 'posVsSold'
+    'posQty' | 'dashQty' | 'dashStorehubQty' | 'dashManualQty' | 'suppliedQty' | 'leftoverQty' | 'posVsSold' | 'status'
   >;
   showSplit: boolean;
-  muted?: boolean;
 }) {
-  const numClass = muted ? 'text-right text-xs tabular-nums' : 'text-right tabular-nums';
   return (
-    <>
-      <td className={numClass}>{fmtQty(row.posQty)}</td>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-stone-600">
+      <span className="tabular-nums">POS {fmtQty(row.posQty)}</span>
       {showSplit ? (
         <>
-          <td className={numClass}>{fmtQty(row.dashStorehubQty)}</td>
-          <td className={numClass}>{fmtQty(row.dashManualQty)}</td>
-          <td className={numClass}>{fmtQty(row.dashQty)}</td>
+          <span className="tabular-nums">StoreHub {fmtQty(row.dashStorehubQty)}</span>
+          <span className="tabular-nums">Manual {fmtQty(row.dashManualQty)}</span>
         </>
-      ) : (
-        <td className={numClass}>{fmtQty(row.dashQty)}</td>
-      )}
-      <td className={numClass}>{fmtQty(row.suppliedQty)}</td>
-      <td className={numClass}>{fmtQty(row.leftoverQty)}</td>
-      <td className={numClass}>{fmtQty(row.posVsSold)}</td>
-    </>
+      ) : null}
+      <span className="tabular-nums">Sold {fmtQty(row.dashQty)}</span>
+      <span className="tabular-nums">Supplied {fmtQty(row.suppliedQty)}</span>
+      <span className="tabular-nums">Leftover {fmtQty(row.leftoverQty)}</span>
+      <span className="tabular-nums">POS vs sold {fmtQty(row.posVsSold)}</span>
+      <StatusChip status={row.status} help={TALLY_STATUS_HELP} />
+    </div>
   );
 }
 
-function TallyLotRows({
-  parentKey,
-  lots,
-  showSplit,
-  indentClass,
-}: {
-  parentKey: string;
-  lots: NonNullable<StorehubReportRow['lots']>;
-  showSplit: boolean;
-  indentClass: string;
-}) {
+function TallyLotLines({ lots }: { lots: NonNullable<StorehubReportRow['lots']> }) {
+  if (lots.length === 0) return null;
   return (
-    <>
+    <div className="space-y-1 text-[13px] text-stone-500">
       {lots.map((lot) => (
-        <tr key={`${parentKey}:${lot.label}`} className="bg-stone-50/80 text-stone-600">
-          <td className={`${indentClass} text-xs`}>{lot.label}</td>
-          <td className="text-right text-xs text-stone-400">—</td>
-          {showSplit ? (
-            <>
-              <td className="text-right text-xs text-stone-400">—</td>
-              <td className="text-right text-xs text-stone-400">—</td>
-              <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
-            </>
-          ) : (
-            <td className="text-right text-xs tabular-nums">{fmtQty(lot.sold)}</td>
-          )}
-          <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied)}</td>
-          <td className="text-right text-xs tabular-nums">{fmtQty(lot.supplied - lot.sold)}</td>
-          <td className="text-right text-xs text-stone-400">—</td>
-          <td />
-        </tr>
+        <p key={lot.label}>
+          {lot.label} · sold {fmtQty(lot.sold)} · supplied {fmtQty(lot.supplied)} · leftover {fmtQty(lot.supplied - lot.sold)}
+        </p>
       ))}
-    </>
+    </div>
   );
 }
 
@@ -1032,91 +997,42 @@ function TallyTable({
   showSplit: boolean;
 }) {
   return (
-    <table className={`data-table ${showSplit ? 'min-w-[64rem]' : 'min-w-[52rem]'}`}>
-      <thead>
-        <tr>
-          <th>Product</th>
-          <th className="text-right">SHPOS sold</th>
-          {showSplit ? (
-            <>
-              <th className="text-right">QMERP sold (StoreHub)</th>
-              <th className="text-right">QMERP sold (manual)</th>
-              <th className="text-right">QMERP sold (all)</th>
-            </>
-          ) : (
-            <th className="text-right">QMERP sold (all)</th>
-          )}
-          <th className="text-right">QMERP supplied</th>
-          <th className="text-right">Leftover</th>
-          <th className="text-right">{showSplit ? 'POS vs StoreHub' : 'POS vs sold'}</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-stone-100">
-        {rows.map((row) => {
-          const open = expanded.has(row.key);
-          const days = gapsOnly ? (row.days ?? []).filter((d) => isGapStatus(d.status)) : (row.days ?? []);
-          const hasExpand = days.length > 0 || (row.lots?.length ?? 0) > 0 || (row.days?.length ?? 0) > 0;
-          const label = displayProductLabel(row.key, row.label, picks);
-          return (
-            <Fragment key={row.key}>
-              <tr
-                className={
-                  row.status === 'qty_mismatch' || row.status === 'missing_in_dashboard'
-                    ? 'bg-amber-50/60'
-                    : 'hover:bg-stone-50'
-                }
-              >
-                <td>
-                  {hasExpand ? (
-                    <button
-                      type="button"
-                      onClick={() => onToggle(row.key)}
-                      className="inline-flex items-center gap-1 text-left font-medium text-stone-800"
-                    >
-                      <ChevronRight size={14} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-                      {label}
-                    </button>
-                  ) : (
-                    label
-                  )}
-                </td>
-                <TallyQtyCells row={row} showSplit={showSplit} />
-                <td>
-                  <StatusChip status={row.status} />
-                </td>
-              </tr>
-              {open &&
-                days.map((day) => (
-                  <Fragment key={day.key}>
-                    <tr
-                      className={
-                        day.status === 'qty_mismatch' || day.status === 'missing_in_dashboard'
-                          ? 'bg-amber-50/40 text-stone-800'
-                          : 'bg-stone-50/60 text-stone-700'
-                      }
-                    >
-                      <td className="pl-8 text-sm font-medium">{day.label}</td>
-                      <TallyQtyCells row={day} showSplit={showSplit} muted />
-                      <td>
-                        <StatusChip status={day.status} />
-                      </td>
-                    </tr>
-                    <TallyLotRows
-                      parentKey={day.key}
-                      lots={day.lots ?? []}
-                      showSplit={showSplit}
-                      indentClass="pl-12"
-                    />
-                  </Fragment>
-                ))}
-              {open && (row.lots?.length ?? 0) > 0 && (
-                <TallyLotRows parentKey={row.key} lots={row.lots ?? []} showSplit={showSplit} indentClass="pl-8" />
-              )}
-            </Fragment>
-          );
-        })}
-      </tbody>
-    </table>
+    <div className="ios-group">
+      {rows.map((row) => {
+        const open = expanded.has(row.key);
+        const days = gapsOnly ? (row.days ?? []).filter((d) => isGapStatus(d.status)) : (row.days ?? []);
+        const hasExpand = days.length > 0 || (row.lots?.length ?? 0) > 0 || (row.days?.length ?? 0) > 0;
+        const label = displayProductLabel(row.key, row.label, picks);
+        return (
+          <ListRow
+            key={row.key}
+            title={
+              <span className="inline-flex items-center gap-1">
+                {hasExpand ? (
+                  <ChevronRight size={14} className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+                ) : null}
+                {label}
+              </span>
+            }
+            onClick={hasExpand ? () => onToggle(row.key) : undefined}
+            body={
+              <div className="space-y-2">
+                <TallyFigures row={row} showSplit={showSplit} />
+                {open
+                  ? days.map((day) => (
+                      <div key={day.key} className="space-y-1 rounded-xl bg-stone-50 px-3 py-2">
+                        <p className="text-[15px] font-medium text-stone-800">{day.label}</p>
+                        <TallyFigures row={day} showSplit={showSplit} />
+                        <TallyLotLines lots={day.lots ?? []} />
+                      </div>
+                    ))
+                  : null}
+                {open ? <TallyLotLines lots={row.lots ?? []} /> : null}
+              </div>
+            }
+          />
+        );
+      })}
+    </div>
   );
 }

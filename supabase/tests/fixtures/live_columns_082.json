@@ -1,0 +1,1722 @@
+[
+{
+"c": "id",
+"t": "hub_inventory",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "raw_material_id",
+"t": "hub_inventory",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "product_batch",
+"t": "hub_inventory",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_on_hand",
+"t": "hub_inventory",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": "0",
+"gen": ""
+},
+{
+"c": "reserved_quantity",
+"t": "hub_inventory",
+"nn": false,
+"ty": "numeric(10,2)",
+"def": "0",
+"gen": ""
+},
+{
+"c": "available_quantity",
+"t": "hub_inventory",
+"nn": false,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "last_updated",
+"t": "hub_inventory",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "hub_inventory",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "hub_inventory",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "lot_id",
+"t": "hub_inventory",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "hub_inventory_id",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "reference_type",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "reference_id",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "numeric(12,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "reason",
+"t": "hub_inventory_reservations",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "hub_inventory_reservations",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "hub_inventory_id",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "adjustment_type",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "adjusted_quantity",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "adjustment_reason",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "status",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "text",
+"def": "'pending'::text",
+"gen": ""
+},
+{
+"c": "notes",
+"t": "inventory_adjustments",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_by",
+"t": "inventory_adjustments",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "reviewed_by",
+"t": "inventory_adjustments",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "reviewed_at",
+"t": "inventory_adjustments",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": null,
+"gen": ""
+},
+{
+"c": "review_notes",
+"t": "inventory_adjustments",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "inventory_adjustments",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "inventory_lots",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "product_batch_label",
+"t": "inventory_lots",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "expiry_date",
+"t": "inventory_lots",
+"nn": false,
+"ty": "date",
+"def": null,
+"gen": ""
+},
+{
+"c": "manufactured_at",
+"t": "inventory_lots",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": null,
+"gen": ""
+},
+{
+"c": "parent_lot_id",
+"t": "inventory_lots",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "purchase_order_item_id",
+"t": "inventory_lots",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "production_run_id",
+"t": "inventory_lots",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "inventory_lots",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "inventory_lots",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "outlet_inventory",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "outlet_id",
+"t": "outlet_inventory",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "product_batch",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_on_hand",
+"t": "outlet_inventory",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": "0",
+"gen": ""
+},
+{
+"c": "reserved_quantity",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "numeric(10,2)",
+"def": "0",
+"gen": ""
+},
+{
+"c": "available_quantity",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "last_updated",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "lot_id",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "raw_material_id",
+"t": "outlet_inventory",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "outlet_stock_take_lines",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "session_id",
+"t": "outlet_stock_take_lines",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "outlet_inventory_id",
+"t": "outlet_stock_take_lines",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "system_qoh_before",
+"t": "outlet_stock_take_lines",
+"nn": true,
+"ty": "numeric(14,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "counted_qty",
+"t": "outlet_stock_take_lines",
+"nn": true,
+"ty": "numeric(14,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "variance",
+"t": "outlet_stock_take_lines",
+"nn": true,
+"ty": "numeric(14,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "line_remark",
+"t": "outlet_stock_take_lines",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "lot_id",
+"t": "outlet_stock_take_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "system_qoh_at_open",
+"t": "outlet_stock_take_lines",
+"nn": false,
+"ty": "numeric",
+"def": null,
+"gen": ""
+},
+{
+"c": "qty_moved_during_count",
+"t": "outlet_stock_take_lines",
+"nn": false,
+"ty": "numeric",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "outlet_stock_take_sessions",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "outlet_id",
+"t": "outlet_stock_take_sessions",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "count_date",
+"t": "outlet_stock_take_sessions",
+"nn": true,
+"ty": "date",
+"def": "(timezone('Asia/Kuala_Lumpur'::text, now()))::date",
+"gen": ""
+},
+{
+"c": "notes",
+"t": "outlet_stock_take_sessions",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "idempotency_key",
+"t": "outlet_stock_take_sessions",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_by",
+"t": "outlet_stock_take_sessions",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "outlet_stock_take_sessions",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "posted_at",
+"t": "outlet_stock_take_sessions",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "status",
+"t": "outlet_stock_take_sessions",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "opened_at",
+"t": "outlet_stock_take_sessions",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": null,
+"gen": ""
+},
+{
+"c": "opened_by",
+"t": "outlet_stock_take_sessions",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "outlets",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "name",
+"t": "outlets",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "location_code",
+"t": "outlets",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "address",
+"t": "outlets",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "city",
+"t": "outlets",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "country",
+"t": "outlets",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "manager_name",
+"t": "outlets",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "manager_phone",
+"t": "outlets",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "manager_email",
+"t": "outlets",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "outlets",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "outlets",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "production_run_materials",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "production_run_id",
+"t": "production_run_materials",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "raw_material_id",
+"t": "production_run_materials",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_consumed",
+"t": "production_run_materials",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "production_run_materials",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "production_run_materials",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "production_runs",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "run_number",
+"t": "production_runs",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "recipe_id",
+"t": "production_runs",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "production_date",
+"t": "production_runs",
+"nn": true,
+"ty": "date",
+"def": "CURRENT_DATE",
+"gen": ""
+},
+{
+"c": "planned_output",
+"t": "production_runs",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "actual_output",
+"t": "production_runs",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "yield_percentage",
+"t": "production_runs",
+"nn": false,
+"ty": "numeric(5,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "status",
+"t": "production_runs",
+"nn": true,
+"ty": "text",
+"def": "'in_progress'::text",
+"gen": ""
+},
+{
+"c": "notes",
+"t": "production_runs",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "production_runs",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "production_runs",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "planned_batch_id",
+"t": "production_runs",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "purchase_order_items",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "purchase_order_id",
+"t": "purchase_order_items",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "raw_material_id",
+"t": "purchase_order_items",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_ordered",
+"t": "purchase_order_items",
+"nn": true,
+"ty": "numeric(14,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_received",
+"t": "purchase_order_items",
+"nn": false,
+"ty": "numeric(14,4)",
+"def": "0",
+"gen": ""
+},
+{
+"c": "unit_price",
+"t": "purchase_order_items",
+"nn": true,
+"ty": "numeric(12,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "line_total",
+"t": "purchase_order_items",
+"nn": false,
+"ty": "numeric(15,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "purchase_order_items",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "purchase_order_items",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "purchase_uom",
+"t": "purchase_order_items",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_ordered_base",
+"t": "purchase_order_items",
+"nn": true,
+"ty": "numeric(14,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "purchase_orders",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "order_number",
+"t": "purchase_orders",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "supplier_id",
+"t": "purchase_orders",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "status",
+"t": "purchase_orders",
+"nn": true,
+"ty": "text",
+"def": "'draft'::text",
+"gen": ""
+},
+{
+"c": "order_date",
+"t": "purchase_orders",
+"nn": true,
+"ty": "date",
+"def": "CURRENT_DATE",
+"gen": ""
+},
+{
+"c": "expected_delivery_date",
+"t": "purchase_orders",
+"nn": false,
+"ty": "date",
+"def": null,
+"gen": ""
+},
+{
+"c": "actual_delivery_date",
+"t": "purchase_orders",
+"nn": false,
+"ty": "date",
+"def": null,
+"gen": ""
+},
+{
+"c": "total_amount",
+"t": "purchase_orders",
+"nn": false,
+"ty": "numeric(15,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "notes",
+"t": "purchase_orders",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "purchase_orders",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "purchase_orders",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "raw_materials",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "name",
+"t": "raw_materials",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "description",
+"t": "raw_materials",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "unit_of_measure",
+"t": "raw_materials",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "cost_price",
+"t": "raw_materials",
+"nn": false,
+"ty": "numeric(12,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "reorder_level",
+"t": "raw_materials",
+"nn": false,
+"ty": "numeric(10,2)",
+"def": "10",
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "raw_materials",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "raw_materials",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "weighted_avg_unit_cost",
+"t": "raw_materials",
+"nn": true,
+"ty": "numeric(14,4)",
+"def": "0",
+"gen": ""
+},
+{
+"c": "id",
+"t": "recipe_ingredients",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "recipe_id",
+"t": "recipe_ingredients",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "raw_material_id",
+"t": "recipe_ingredients",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_required",
+"t": "recipe_ingredients",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "recipe_ingredients",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "recipe_ingredients",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "recipes",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "name",
+"t": "recipes",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "description",
+"t": "recipes",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "target_yield_percentage",
+"t": "recipes",
+"nn": false,
+"ty": "numeric(5,2)",
+"def": "100",
+"gen": ""
+},
+{
+"c": "standard_batch_size",
+"t": "recipes",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "batch_unit",
+"t": "recipes",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "recipes",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "recipes",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "default_product_batch",
+"t": "recipes",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "shelf_life_days",
+"t": "recipes",
+"nn": false,
+"ty": "integer",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "sales_journal_lines",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "sales_journal_id",
+"t": "sales_journal_lines",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "product_batch",
+"t": "sales_journal_lines",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "lot_id",
+"t": "sales_journal_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity_sold",
+"t": "sales_journal_lines",
+"nn": true,
+"ty": "numeric(12,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "sales_journal_lines",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "outlet_inventory_id",
+"t": "sales_journal_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "expired_at_sale",
+"t": "sales_journal_lines",
+"nn": false,
+"ty": "boolean",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "sales_journals",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "outlet_id",
+"t": "sales_journals",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "business_date",
+"t": "sales_journals",
+"nn": true,
+"ty": "date",
+"def": null,
+"gen": ""
+},
+{
+"c": "status",
+"t": "sales_journals",
+"nn": true,
+"ty": "text",
+"def": "'posted'::text",
+"gen": ""
+},
+{
+"c": "notes",
+"t": "sales_journals",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "idempotency_key",
+"t": "sales_journals",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_by",
+"t": "sales_journals",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "sales_journals",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "sales_journals",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "source",
+"t": "sales_journals",
+"nn": true,
+"ty": "text",
+"def": "'manual'::text",
+"gen": ""
+},
+{
+"c": "id",
+"t": "suppliers",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "name",
+"t": "suppliers",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "contact_person",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "email",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "phone",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "address",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "city",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "country",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "payment_terms",
+"t": "suppliers",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "suppliers",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "suppliers",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "supply_order_lines",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "supply_order_id",
+"t": "supply_order_lines",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "hub_inventory_id",
+"t": "supply_order_lines",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "product_batch",
+"t": "supply_order_lines",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity",
+"t": "supply_order_lines",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "supply_order_lines",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "lot_id",
+"t": "supply_order_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "expired_at_dispatch",
+"t": "supply_order_lines",
+"nn": false,
+"ty": "boolean",
+"def": null,
+"gen": ""
+},
+{
+"c": "id",
+"t": "supply_orders",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "supply_order_number",
+"t": "supply_orders",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "outlet_id",
+"t": "supply_orders",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "dispatch_date",
+"t": "supply_orders",
+"nn": true,
+"ty": "date",
+"def": "CURRENT_DATE",
+"gen": ""
+},
+{
+"c": "received_date",
+"t": "supply_orders",
+"nn": false,
+"ty": "date",
+"def": null,
+"gen": ""
+},
+{
+"c": "status",
+"t": "supply_orders",
+"nn": true,
+"ty": "text",
+"def": "'pending'::text",
+"gen": ""
+},
+{
+"c": "total_quantity",
+"t": "supply_orders",
+"nn": true,
+"ty": "numeric(10,2)",
+"def": null,
+"gen": ""
+},
+{
+"c": "notes",
+"t": "supply_orders",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "supply_orders",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "supply_orders",
+"nn": false,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "supply_date",
+"t": "supply_orders",
+"nn": true,
+"ty": "date",
+"def": "(timezone('Asia/Kuala_Lumpur'::text, now()))::date",
+"gen": ""
+},
+{
+"c": "id",
+"t": "waste_events",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "location_kind",
+"t": "waste_events",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "outlet_id",
+"t": "waste_events",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "waste_date",
+"t": "waste_events",
+"nn": true,
+"ty": "date",
+"def": "CURRENT_DATE",
+"gen": ""
+},
+{
+"c": "status",
+"t": "waste_events",
+"nn": true,
+"ty": "text",
+"def": "'posted'::text",
+"gen": ""
+},
+{
+"c": "notes",
+"t": "waste_events",
+"nn": false,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "idempotency_key",
+"t": "waste_events",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_by",
+"t": "waste_events",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "waste_events",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "updated_at",
+"t": "waste_events",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "id",
+"t": "waste_lines",
+"nn": true,
+"ty": "uuid",
+"def": "gen_random_uuid()",
+"gen": ""
+},
+{
+"c": "waste_event_id",
+"t": "waste_lines",
+"nn": true,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "hub_inventory_id",
+"t": "waste_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "outlet_id",
+"t": "waste_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "product_batch",
+"t": "waste_lines",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "quantity",
+"t": "waste_lines",
+"nn": true,
+"ty": "numeric(12,4)",
+"def": null,
+"gen": ""
+},
+{
+"c": "waste_reason",
+"t": "waste_lines",
+"nn": true,
+"ty": "text",
+"def": null,
+"gen": ""
+},
+{
+"c": "created_at",
+"t": "waste_lines",
+"nn": true,
+"ty": "timestamp with time zone",
+"def": "now()",
+"gen": ""
+},
+{
+"c": "outlet_inventory_id",
+"t": "waste_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+},
+{
+"c": "lot_id",
+"t": "waste_lines",
+"nn": false,
+"ty": "uuid",
+"def": null,
+"gen": ""
+}
+]

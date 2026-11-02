@@ -248,22 +248,22 @@ export function Genealogy() {
             setSelectedId(lot.id);
             if (kids.length) toggle(lot.id);
           }}
-          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-gray-50 ${
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-stone-50 ${
             selected ? 'bg-teal-50 ring-1 ring-teal-200' : ''
           }`}
           style={{ paddingLeft: 8 + depth * 16 }}
         >
           {kids.length > 0 ? (
             open ? (
-              <ChevronDown size={14} className="text-gray-400" />
+              <ChevronDown size={14} className="text-stone-400" />
             ) : (
-              <ChevronRight size={14} className="text-gray-400" />
+              <ChevronRight size={14} className="text-stone-400" />
             )
           ) : (
             <span className="inline-block w-3.5" />
           )}
-          <span className="min-w-0 flex-1 truncate font-medium text-gray-900">{lot.product_batch_label}</span>
-          <span className="shrink-0 text-xs tabular-nums text-gray-500">{remaining}</span>
+          <span className="min-w-0 flex-1 truncate font-medium text-stone-900">{lot.product_batch_label}</span>
+          <span className="shrink-0 text-xs tabular-nums text-stone-500">{remaining}</span>
         </button>
         {open && kids.map((c) => renderNode(c, depth + 1))}
       </div>
@@ -311,11 +311,11 @@ export function Genealogy() {
           onBlur={() => {
             window.setTimeout(() => setSuggestOpen(false), 180);
           }}
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
         />
         {skuListHint ? <p className="mt-1 text-xs text-amber-800">{skuListHint}</p> : null}
         {suggestOpen && q.trim() && suggestions.length > 0 ? (
-          <ul className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+          <ul className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-stone-200 bg-white py-1 ">
             {suggestions.map((lot) => {
               const rem = remainingOnHand(locationsByLot.get(lot.id) ?? []);
               const hint = skuForDisplay(lot.product_batch_label, lot.aliases[0] ?? null, lot.recipeSku);
@@ -328,10 +328,10 @@ export function Genealogy() {
                     className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-teal-50"
                   >
                     <span className="min-w-0">
-                      <span className="block truncate font-mono font-medium text-gray-900">{lot.product_batch_label}</span>
-                      {hint ? <span className="block truncate text-xs text-gray-500">SKU {hint}</span> : null}
+                      <span className="block truncate font-mono font-medium text-stone-900">{lot.product_batch_label}</span>
+                      {hint ? <span className="block truncate text-xs text-stone-500">SKU {hint}</span> : null}
                     </span>
-                    <span className="shrink-0 tabular-nums text-xs text-gray-600">{rem} on hand</span>
+                    <span className="shrink-0 tabular-nums text-xs text-stone-600">{rem} on hand</span>
                   </button>
                 </li>
               );
@@ -341,12 +341,12 @@ export function Genealogy() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="panel p-4">
           <h2 className="mb-2 text-sm font-semibold text-gray-800">Lot tree</h2>
-          <p className="mb-2 text-xs text-gray-500">Parent ingredient lot and finished-goods children. Qty is remaining on hand.</p>
+          <p className="mb-2 text-xs text-stone-500">Parent ingredient lot and finished-goods children. Qty is remaining on hand.</p>
           <div className="max-h-[32rem] overflow-y-auto">
             {filteredRoots.length === 0 ? (
-              <p className="py-8 text-center text-sm text-gray-400">
+              <p className="py-8 text-center text-sm text-stone-400">
                 {q.trim() ? 'No lots match that search.' : 'No lots recorded yet.'}
               </p>
             ) : (
@@ -355,50 +355,50 @@ export function Genealogy() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="panel p-4">
           <h2 className="mb-2 text-sm font-semibold text-gray-800">Lot detail</h2>
           {!selected ? (
-            <p className="text-sm text-gray-400">Search or select a lot in the tree.</p>
+            <p className="text-sm text-stone-400">Search or select a lot in the tree.</p>
           ) : (
             <div className="space-y-4">
               <dl className="space-y-2 text-sm">
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500">Lot</dt>
-                  <dd className="font-mono font-medium text-gray-900">{selected.product_batch_label}</dd>
+                  <dt className="text-stone-500">Lot</dt>
+                  <dd className="font-mono font-medium text-stone-900">{selected.product_batch_label}</dd>
                 </div>
                 {sku ? (
                   <div className="flex justify-between gap-4">
-                    <dt className="text-gray-500">SKU</dt>
-                    <dd className="text-gray-900">{sku}</dd>
+                    <dt className="text-stone-500">SKU</dt>
+                    <dd className="text-stone-900">{sku}</dd>
                   </div>
                 ) : null}
                 {selected.aliases.length > 0 ? (
                   <div className="flex justify-between gap-4">
-                    <dt className="text-gray-500">Also stored as</dt>
-                    <dd className="font-mono text-xs text-gray-600">{selected.aliases.join(', ')}</dd>
+                    <dt className="text-stone-500">Also stored as</dt>
+                    <dd className="font-mono text-xs text-stone-600">{selected.aliases.join(', ')}</dd>
                   </div>
                 ) : null}
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500">Expiry</dt>
+                  <dt className="text-stone-500">Expiry</dt>
                   <dd>{formatDate(selected.expiry_date)}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500">Manufactured</dt>
+                  <dt className="text-stone-500">Manufactured</dt>
                   <dd>{formatDate(selected.manufactured_at)}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500">Parent lot</dt>
+                  <dt className="text-stone-500">Parent lot</dt>
                   <dd className="font-mono text-xs text-gray-800">
                     {parent?.product_batch_label ?? (selected.parent_lot_id ? selected.parent_lot_id.slice(0, 8) : '—')}
                   </dd>
                 </div>
                 <div className="flex justify-between gap-4">
-                  <dt className="text-gray-500">Production run</dt>
+                  <dt className="text-stone-500">Production run</dt>
                   <dd>{selected.runNumber ?? selected.production_run_id?.slice(0, 8) ?? '—'}</dd>
                 </div>
                 <div className="flex justify-between gap-4 border-t pt-2">
-                  <dt className="text-gray-500">Remaining</dt>
-                  <dd className="tabular-nums font-semibold text-gray-900">{remaining}</dd>
+                  <dt className="text-stone-500">Remaining</dt>
+                  <dd className="tabular-nums font-semibold text-stone-900">{remaining}</dd>
                 </div>
               </dl>
 
@@ -408,31 +408,31 @@ export function Genealogy() {
                   <StockViewToggle value={stockView} onChange={setStockView} />
                 </div>
                 {visibleLocations.length === 0 ? (
-                  <p className="text-sm text-gray-400">
+                  <p className="text-sm text-stone-400">
                     {allLocations.length > 0 && stockView === 'in_stock'
                       ? 'No in-stock locations. Switch to All lots for empty / audit.'
                       : 'No hub or outlet rows linked to this lot.'}
                   </p>
                 ) : (
-                  <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <div className="overflow-x-auto rounded-lg border border-stone-200">
                     <table className="w-full text-sm">
-                      <thead className="border-b bg-gray-50 text-left">
+                      <thead className="border-b bg-stone-50 text-left">
                         <tr>
-                          <th className="px-3 py-2 font-medium text-gray-700">Location</th>
-                          <th className="px-3 py-2 text-right font-medium text-gray-700">On hand</th>
-                          <th className="px-3 py-2 text-right font-medium text-gray-700">Reserved</th>
-                          <th className="px-3 py-2 text-right font-medium text-gray-700">Available</th>
+                          <th className="px-3 py-2 font-medium text-stone-700">Location</th>
+                          <th className="px-3 py-2 text-right font-medium text-stone-700">On hand</th>
+                          <th className="px-3 py-2 text-right font-medium text-stone-700">Reserved</th>
+                          <th className="px-3 py-2 text-right font-medium text-stone-700">Available</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
                         {visibleLocations.map((row) => (
                           <tr key={row.key}>
-                            <td className="px-3 py-2 text-gray-900">
+                            <td className="px-3 py-2 text-stone-900">
                               {row.name}
-                              <span className="ml-1 text-xs text-gray-400">{row.kind === 'hub' ? 'hub' : 'outlet'}</span>
+                              <span className="ml-1 text-xs text-stone-400">{row.kind === 'hub' ? 'hub' : 'outlet'}</span>
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums font-medium">{row.onHand}</td>
-                            <td className="px-3 py-2 text-right tabular-nums text-gray-600">{row.reserved}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-stone-600">{row.reserved}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-800">{row.available}</td>
                           </tr>
                         ))}

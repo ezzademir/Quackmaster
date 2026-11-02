@@ -10,7 +10,7 @@ import {
 } from '../utils/reconciliationService';
 import { formatDateForInput } from '../utils/dateRange';
 import { AlertsPanel, type AlertItem } from '../components/AlertsPanel';
-import { Button, PageHeader } from '../components/ui';
+import { Button, EmptyState, ListRow, PageHeader } from '../components/ui';
 
 const COUNT_DUE_DAYS = 30;
 
@@ -161,7 +161,7 @@ export function AuditDashboard() {
         }
       />
 
-      <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
+      <p className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-2 text-sm text-stone-700">
         Period for variance: {formatDateForInput(range.start)} → {formatDateForInput(range.end)}.
         Drill down per outlet in{' '}
         <Link to="/reconciliation" className="font-medium text-teal-600 hover:underline">Stock Reconciliation</Link>.
@@ -192,63 +192,51 @@ export function AuditDashboard() {
         />
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="w-full min-w-[800px] text-sm">
-          <thead className="border-b border-gray-200 bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left font-semibold text-gray-700">Outlet</th>
-              <th className="px-4 py-3 text-right font-semibold text-gray-700">Live on-hand</th>
-              <th className="px-4 py-3 text-left font-semibold text-gray-700">Last count</th>
-              <th className="px-4 py-3 text-right font-semibold text-gray-700">Count variance</th>
-              <th className="px-4 py-3 text-right font-semibold text-gray-700">In transit</th>
-              <th className="px-4 py-3 text-right font-semibold text-gray-700">Unexplained (30d)</th>
-              <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
-              <th className="px-4 py-3 text-left font-semibold text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
+      {outlets.length === 0 && !loading ? (
+        <div className="panel py-2">
+          <EmptyState
+            title="No outlets configured"
+            description="Add outlets in Distribution first."
+          />
+        </div>
+      ) : (
+        <>
+          <div className="ios-group">
             {loading && rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-gray-400">Loading audit data…</td>
-              </tr>
+              <p className="px-4 py-6 text-center text-sm text-stone-400">Loading audit data…</p>
             ) : (
               rows.map((row) => (
-                <tr key={row.outlet.id} className="hover:bg-gray-50/80">
-                  <td className="px-4 py-3 font-medium text-gray-900">{row.outlet.name}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{row.liveOnHand.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-gray-600">{row.lastCountDate ?? '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{row.lastCountVariance.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{row.inTransit.toLocaleString()}</td>
-                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${Math.abs(row.unexplainedVariance) > 0.001 ? 'text-amber-700' : 'text-gray-900'}`}>
-                    {row.loading ? '…' : row.unexplainedVariance.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3"><StatusBadge status={row.countStatus} /></td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-x-3 gap-y-1">
-                      <Link
-                        to={`/reconciliation?outlet=${row.outlet.id}`}
-                        className="text-teal-600 hover:underline"
-                      >
-                        Reconcile
-                      </Link>
-                      <Link
-                        to={`/stock-take?outlet=${row.outlet.id}`}
-                        className="text-teal-600 hover:underline"
-                      >
-                        Stock take
-                      </Link>
+                <ListRow
+                  key={row.outlet.id}
+                  title={row.outlet.name}
+                  meta={`${row.lastCountDate ?? '—'} · ${row.countStatus}`}
+                  body={
+                    <div className="space-y-2 text-[13px] text-stone-600">
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 tabular-nums">
+                        <span>On-hand {row.liveOnHand.toLocaleString()}</span>
+                        <span>Count variance {row.lastCountVariance.toLocaleString()}</span>
+                        <span>Transit {row.inTransit.toLocaleString()}</span>
+                        <span className={Math.abs(row.unexplainedVariance) > 0.001 ? 'font-semibold text-amber-700' : ''}>
+                          Unexplained {row.loading ? '…' : row.unexplainedVariance.toLocaleString()}
+                        </span>
+                      </div>
+                      <StatusBadge status={row.countStatus} />
+                      {row.error ? <p className="text-red-600">{row.error}</p> : null}
+                      <div className="flex gap-4">
+                        <Link to={`/reconciliation?outlet=${row.outlet.id}`} className="font-medium text-brand-800">
+                          Reconcile
+                        </Link>
+                        <Link to={`/stock-take?outlet=${row.outlet.id}`} className="font-medium text-brand-800">
+                          Stock take
+                        </Link>
+                      </div>
                     </div>
-                    {row.error && <span className="mt-1 block text-xs text-red-600">{row.error}</span>}
-                  </td>
-                </tr>
+                  }
+                />
               ))
             )}
-          </tbody>
-        </table>
-      </div>
-
-      {outlets.length === 0 && !loading && (
-        <p className="text-sm text-gray-500">No outlets configured. Add outlets in Distribution first.</p>
+          </div>
+        </>
       )}
     </div>
   );

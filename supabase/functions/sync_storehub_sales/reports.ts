@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { fetchAllPages } from "./pager.ts";
 import type {
   DiffStatus,
   ReportId,
@@ -121,11 +122,11 @@ function splitJournalMaps(
 
 const SPLIT_SOLD_COLUMNS = [
   { key: "label", label: "Row" },
-  { key: "posQty", label: "SHPOS sold" },
-  { key: "posRm", label: "SHPOS RM" },
-  { key: "dashStorehubQty", label: "QMERP sold (StoreHub)" },
-  { key: "dashManualQty", label: "QMERP sold (manual)" },
-  { key: "dashQty", label: "QMERP sold (all)" },
+  { key: "posQty", label: "POS sold" },
+  { key: "posRm", label: "POS RM" },
+  { key: "dashStorehubQty", label: "Outlet sold (StoreHub)" },
+  { key: "dashManualQty", label: "Outlet sold (manual)" },
+  { key: "dashQty", label: "Outlet sold (all)" },
   { key: "status", label: "Status" },
 ];
 
@@ -315,9 +316,9 @@ function finish(rows: ReportRow[], extra: Partial<ReportResult> & Pick<ReportRes
     error: extra.error ?? null,
     columns: extra.columns ?? [
       { key: "label", label: "Row" },
-      { key: "posQty", label: "POS qty" },
+      { key: "posQty", label: "POS sold" },
       { key: "posRm", label: "POS RM" },
-      { key: "dashQty", label: "QMERP qty" },
+      { key: "dashQty", label: "Outlet sold" },
       { key: "status", label: "Status" },
     ],
     rows,
@@ -351,16 +352,17 @@ function mergeKeys(
     if (posOnly) {
       status = "pos_only";
     } else if (split) {
-      // Match SHPOS to StoreHub-ingested only (manual never closes a gap).
+      // A-05 (14 Oct 2026): ingest is off, sales are keyed manually. Match POS to
+      // all posted Outlet sales (StoreHub + manual); the split columns are informational.
       const posQty = havePos ? p!.qty : 0;
-      const shQty = sh ?? 0;
+      const outletQty = allDash;
       if (!havePos) {
         status = "extra_in_dashboard";
-      } else if (qtyEq(posQty, shQty)) {
+      } else if (qtyEq(posQty, outletQty)) {
         status = "match";
-      } else if (posQty > 0 && shQty === 0) {
+      } else if (posQty > 0 && outletQty === 0) {
         status = "missing_in_dashboard";
-      } else if (posQty === 0 && shQty > 0) {
+      } else if (posQty === 0 && outletQty > 0) {
         status = "extra_in_dashboard";
       } else {
         status = "qty_mismatch";
@@ -406,17 +408,17 @@ async function loadJournals(
   to: string,
   outletIds: string[],
 ): Promise<JournalLine[]> {
-  let q = admin
-    .from("sales_journals")
-    .select("id, business_date, outlet_id, status, notes, source, idempotency_key, sales_journal_lines(quantity_sold, product_batch, lot_id)")
-    .eq("status", "posted")
-    .gte("business_date", from)
-    .lte("business_date", to);
-  if (outletIds.length === 1) q = q.eq("outlet_id", outletIds[0]);
-  else if (outletIds.length > 1) q = q.in("outlet_id", outletIds);
-
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
+  const data = await fetchAllPages((a, b) => {
+    let q = admin
+      .from("sales_journals")
+      .select("id, business_date, outlet_id, status, notes, source, idempotency_key, sales_journal_lines(quantity_sold, product_batch, lot_id)")
+      .eq("status", "posted")
+      .gte("business_date", from)
+      .lte("business_date", to);
+    if (outletIds.length === 1) q = q.eq("outlet_id", outletIds[0]);
+    else if (outletIds.length > 1) q = q.in("outlet_id", outletIds);
+    return q.order("id", { ascending: true }).range(a, b);
+  });
 
   const raw: Omit<JournalLine, "recipe_sku">[] = [];
   for (const j of data ?? []) {
@@ -552,10 +554,13 @@ async function loadDispatchedSupplyLines(
   periodOrders: PeriodSupplyOrder[];
   periodAllOutletQty: number;
 }> {
-  const { data: orders, error: orderErr } = await admin
-    .from("supply_orders")
-    .select("id, outlet_id, status, supply_date, dispatch_date, total_quantity");
-  if (orderErr) throw new Error(orderErr.message);
+  const orders = await fetchAllPages((a, b) =>
+    admin
+      .from("supply_orders")
+      .select("id, outlet_id, status, supply_date, dispatch_date, total_quantity")
+      .order("id", { ascending: true })
+      .range(a, b)
+  );
 
   const inPeriod: Array<{ id: string; outlet_id: string; qty: number; supply_date: string }> = [];
   for (const so of orders ?? []) {
@@ -585,11 +590,14 @@ async function loadDispatchedSupplyLines(
   const rows: DispatchedSupplyLine[] = [];
   for (let i = 0; i < scopedIds.length; i += 200) {
     const slice = scopedIds.slice(i, i + 200);
-    const { data, error } = await admin
-      .from("supply_order_lines")
-      .select("quantity, product_batch, supply_order_id, hub:hub_inventory_id(lot_id, product_batch)")
-      .in("supply_order_id", slice);
-    if (error) throw new Error(error.message);
+    const data = await fetchAllPages((a, b) =>
+      admin
+        .from("supply_order_lines")
+        .select("id, quantity, product_batch, supply_order_id, hub:hub_inventory_id(lot_id, product_batch)")
+        .in("supply_order_id", slice)
+        .order("id", { ascending: true })
+        .range(a, b)
+    );
     for (const row of data ?? []) {
       const hub = firstEmbed(
         row.hub as
@@ -800,9 +808,9 @@ async function soldVsSuppliedReport(opts: {
           dashManualQty: dayMan,
           suppliedQty: daySupplied,
           leftoverQty: daySupplied - dayDashQty,
-          posVsSold: dayPosQty - daySh,
+          posVsSold: dayPosQty - dayDashQty,
           lots: dayLots,
-          status: soldVsSuppliedStatus(dayPosQty, daySh),
+          status: soldVsSuppliedStatus(dayPosQty, dayDashQty),
         });
       }
     }
@@ -816,11 +824,10 @@ async function soldVsSuppliedReport(opts: {
       dashManualQty,
       suppliedQty,
       leftoverQty,
-      // POS vs StoreHub-ingested sold — manual journals do not count as a POS gap.
-      posVsSold: posQty - dashStorehubQty,
+      posVsSold: posQty - dashQty,
       lots,
       days: days.length ? days : undefined,
-      status: soldVsSuppliedStatus(posQty, dashStorehubQty),
+      status: soldVsSuppliedStatus(posQty, dashQty),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
 
@@ -839,8 +846,8 @@ async function soldVsSuppliedReport(opts: {
     .sort((a, b) => b[1] - a[1])
     .map(([name, qty]) => `${name} ${qty.toLocaleString()}`);
   const noticeParts = [
-    "QMERP supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
-    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and POS vs sold compare SHPOS to StoreHub-ingested sold only — manual journals explain leftover and all-sold without flagging a POS gap.",
+    "Outlet supplied is hub dispatch by supply date — same definition as Distribution. Outlet-to-outlet transfers and later receipt dates are not counted.",
+    "Leftover is period dispatch minus all posted Outlet sales (StoreHub + manual). Status and Gaps compare POS to that same Outlet sold total — manual journals close a POS gap. Leftover is not a gap.",
     "Lots are ERP-only; StoreHub tickets have no batch numbers.",
     "On a multi-day period, expand a product to see which Malaysia days differ. Daily leftover is that day's dispatch minus that day's sold — not on-hand stock.",
   ];
@@ -852,8 +859,8 @@ async function soldVsSuppliedReport(opts: {
   if (unmappedParts.length) {
     noticeParts.push(
       opts.storeScoped
-        ? `Also dispatched to unmapped outlets (no SHPOS): ${unmappedParts.join(" · ")}.`
-        : `Includes outlets with no StoreHub map: ${unmappedParts.join(" · ")}. Those have QMERP dispatch but no SHPOS tickets.`,
+        ? `Also dispatched to unmapped outlets (no POS): ${unmappedParts.join(" · ")}.`
+        : `Includes outlets with no StoreHub map: ${unmappedParts.join(" · ")}. Those have Outlet dispatch but no POS tickets.`,
     );
   }
 
@@ -865,13 +872,13 @@ async function soldVsSuppliedReport(opts: {
     notice: noticeParts.join(" "),
     columns: [
       { key: "label", label: "Product" },
-      { key: "posQty", label: "SHPOS sold" },
-      { key: "dashStorehubQty", label: "QMERP sold (StoreHub)" },
-      { key: "dashManualQty", label: "QMERP sold (manual)" },
-      { key: "dashQty", label: "QMERP sold (all)" },
-      { key: "suppliedQty", label: "QMERP supplied" },
+      { key: "posQty", label: "POS sold" },
+      { key: "dashStorehubQty", label: "Outlet sold (StoreHub)" },
+      { key: "dashManualQty", label: "Outlet sold (manual)" },
+      { key: "dashQty", label: "Outlet sold (all)" },
+      { key: "suppliedQty", label: "Outlet supplied" },
       { key: "leftoverQty", label: "Leftover" },
-      { key: "posVsSold", label: "POS vs StoreHub sold" },
+      { key: "posVsSold", label: "POS vs Outlet sold" },
       { key: "status", label: "Status" },
     ],
   });
@@ -1016,7 +1023,7 @@ export async function handleReport(opts: {
         : SPLIT_SOLD_COLUMNS,
       notice: posOnly
         ? "Outlet sales journals are dated by business day, not hour. POS hours are shown only."
-        : "SHPOS sold = completed POS tickets (MY calendar; cancels & returns out). QMERP sold (StoreHub) = journals with source=storehub. QMERP sold (manual) = null/manual/other. QMERP sold (all) = both — so TTDI-style 923 vs 1498 is explained by the manual column. Match status compares SHPOS to StoreHub-ingested only.",
+        : "POS sold = completed POS tickets (MY calendar; cancels & returns out). Outlet sold (StoreHub) = journals with source=storehub. Outlet sold (manual) = null/manual/other. Outlet sold (all) = both. Match status compares POS to Outlet sold (all), so manual entries count; StoreHub ingest is off and sales are keyed manually.",
     });
   }
 
@@ -1100,7 +1107,7 @@ export async function handleReport(opts: {
       posOnly: false,
       notice:
         report === "sales_by_category"
-          ? "Category comes from the StoreHub catalog. QMERP qty is posted outlet sales rolled up by recipe SKU."
+          ? "Category comes from the StoreHub catalog. Outlet sold is posted outlet sales rolled up by recipe SKU."
           : "Both sides are recipe SKU (e.g. QUACKTEOW). Map StoreHub products in Settings. Add-ons stay missing until they are sold as an Outlet sales SKU.",
     });
   }
@@ -1264,7 +1271,7 @@ export async function handleReport(opts: {
         rows.length > 500
           ? `Showing first 500 of ${rows.length} rows. Narrow the date range.`
           : report === "returns"
-          ? "QMERP column is whether a return was flagged for review (qty stays 0 until FIFO reverse exists)."
+          ? "Outlet Sales column is whether a return was flagged for review (qty stays 0 until FIFO reverse exists)."
           : "Match is on StoreHub refId = sales journal idempotency key. Qty is units on the ticket vs journal lines.",
     });
   }
