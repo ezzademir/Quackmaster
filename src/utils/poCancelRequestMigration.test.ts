@@ -8,6 +8,7 @@ import MIG087 from '../../supabase/migrations/20261024100150_087_is_profiles_adm
 import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_tags.sql?raw';
 import MIG089 from '../../supabase/migrations/20261024100400_089_po_cancel_request.sql?raw';
 import MIG091 from '../../supabase/migrations/20261026091332_091_void_supplier_bill.sql?raw';
+import MIG092 from '../../supabase/migrations/20261102170000_092_po_bills_and_prices.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
@@ -192,7 +193,7 @@ const UP_TO_088: [string, string][] = [
 ];
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091]]) {
+  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091], ['092', MIG092]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -358,11 +359,22 @@ describe('089: request then approve, reject, admin direct, guards, RLS, atomicit
     expect(await reqs(pg)).toHaveLength(1);
   });
 
+  it('an accepted order has an unpaid bill and a price for that supplier and item', async () => {
+    const pg = await db();
+    expect(await rows(pg, `select bill_number, amount_rm::float a, payment_status from v_supplier_bill_status where purchase_order_id='${PO_QT}'`)).toEqual([
+      { bill_number: 'PO-QT', a: 30, payment_status: 'unpaid' },
+    ]);
+    expect(await rows(pg, `select order_number, unit_price_rm::float p, price_source from v_supplier_order_prices where raw_material_id='${RM}'`)).toEqual([
+      { order_number: 'PO-QT', p: 3, price_source: 'order' },
+    ]);
+  });
+
   it('a billed PO is refused on request, approve and admin cancel; nothing changes; message points at accounting', async () => {
     const pg = await db();
     await as(pg, BUYER_QT, () => deliver(pg, 4));
     const BILL = '00000000-0000-0000-0000-0000000b9901';
     await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, purchase_order_id, bill_number, bill_date, amount_rm) VALUES ('${BILL}','QT','${SUP}','${PO_QT}','G1-1','2026-10-20',12)`));
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('${BILL}', 12, '2026-10-21', 'cash')`));
     const snap = async () => ({
       mov: await mov(pg), qoh: await qoh(pg), po: await poState(pg),
       rec: await count(pg, 'select * from po_receipt_records'),
@@ -375,9 +387,10 @@ describe('089: request then approve, reject, admin direct, guards, RLS, atomicit
     expect(await as(pg, ADMIN, () => rpc(pg, `select cancel_purchase_order('${PO_QT}') r`))).toMatchObject({ success: false, error: 'bills_on_po' });
     expect(await snap()).toEqual(before);
 
-    await pg.exec(`DELETE FROM supplier_bills WHERE id='${BILL}'`);
+    await pg.exec(`DELETE FROM supplier_payments WHERE bill_id='${BILL}'; DELETE FROM supplier_bills WHERE id='${BILL}'`);
     const pending = await as(pg, BUYER_QT, () => rpc(pg, `select request_cancel_purchase_order('${PO_QT}', 'now') r`));
     await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, purchase_order_id, bill_number, bill_date, amount_rm) VALUES ('${BILL}','QT','${SUP}','${PO_QT}','G1-2','2026-10-20',12)`));
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('${BILL}', 12, '2026-10-21', 'cash')`));
     const beforeApprove = { po: await poState(pg), req: await reqs(pg), qoh: await qoh(pg) };
     expect(await as(pg, ADMIN, () => err(pg.exec(`select approve_po_cancel_request('${pending.request_id}')`)))).toMatch(/bills_on_po/);
     expect({ po: await poState(pg), req: await reqs(pg), qoh: await qoh(pg) }).toEqual(beforeApprove);
@@ -400,7 +413,7 @@ describe('089: request then approve, reject, admin direct, guards, RLS, atomicit
       { po: null, kept: PO_QT, void_reason: 'wrong delivery' },
     ]);
     expect(await as(pg, ADMIN, () => rpc(pg, `select cancel_purchase_order('${PO_QT}') r`))).toMatchObject({ success: true });
-    expect(await count(pg, `select * from data_ledger where entity_type='supplier_bill' and action='voided'`)).toBe(1);
+    expect(await count(pg, `select * from data_ledger where entity_type='supplier_bill' and action='voided' and entity_id='${BILL}'`)).toBe(1);
   });
 
   it('empty / blank reason is refused; a second pending request is refused; double decision is refused; cancelled PO is refused', async () => {
@@ -458,6 +471,7 @@ describe('089: request then approve, reject, admin direct, guards, RLS, atomicit
     const pg = await db();
     await as(pg, BUYER_QT, () => deliver(pg, 4));
     await as(pg, BUYER_QT, () => pg.exec(`INSERT INTO supplier_bills (id, entity_code, supplier_id, purchase_order_id, bill_number, bill_date, amount_rm) VALUES ('00000000-0000-0000-0000-0000000b9902','QT','${SUP}','${PO_QT}','G1-SOFT','2026-10-20',12)`));
+    await as(pg, ADMIN, () => pg.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('00000000-0000-0000-0000-0000000b9902', 12, '2026-10-21', 'cash')`));
     const r = await as(pg, ADMIN, () => rpc(pg, `select cancel_purchase_order('${PO_QT}') r`));
     expect(r).toMatchObject({ success: false, error: 'bills_on_po', bill_count: 1 });
     expect(String(r.message)).toMatch(/Handle the bill through accounting first/);
