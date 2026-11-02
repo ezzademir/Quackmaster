@@ -3,9 +3,13 @@
  */
 
 import { supabase } from './supabase';
+import { malaysiaCalendarDate } from './dateRange';
 import { isLegacyBatchCode, skuForDisplay } from './lotLabel';
 import { compareHubBatches } from './hubBatchPick';
 import type { Outlet } from '../types';
+
+/** Hub supply and outlet-to-outlet transfer both land stock at the outlet. */
+const RECEIPT_MOVEMENT_TYPES = ['supply_in', 'transfer_in'] as const;
 
 export interface OutletStockTakeLineInput {
   outlet_inventory_id: string;
@@ -390,6 +394,77 @@ function csvCell(v: string | number | null | undefined): string {
   const s = v === null || v === undefined ? '' : String(v);
   if (CSV_ESC.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
+}
+
+/**
+ * True when this outlet line was received on `receivedOn` (YYYY-MM-DD).
+ * A blank date keeps every line. A line matches when a supply or transfer receipt
+ * movement is dated that day, or when the inventory row was first created that
+ * Malaysia calendar day (first time the goods landed, if no movement was written).
+ */
+export function inventoryRowReceivedOn(
+  createdAt: string | null | undefined,
+  inventoryId: string,
+  receivedOn: string,
+  receiptInventoryIds: ReadonlySet<string>
+): boolean {
+  if (!receivedOn) return true;
+  if (receiptInventoryIds.has(inventoryId)) return true;
+  if (!createdAt) return false;
+  const t = Date.parse(createdAt);
+  if (!Number.isFinite(t)) return false;
+  return malaysiaCalendarDate(new Date(t)) === receivedOn;
+}
+
+/** Inventory rows that received stock at this outlet on the given business date. */
+export async function fetchOutletInventoryIdsReceivedOn(
+  outletId: string,
+  receivedOn: string
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('outlet_stock_movements')
+    .select('outlet_inventory_id')
+    .eq('outlet_id', outletId)
+    .eq('business_date', receivedOn)
+    .in('movement_type', [...RECEIPT_MOVEMENT_TYPES])
+    .limit(5000);
+
+  if (error) throw error;
+
+  const ids = new Set<string>();
+  for (const row of data ?? []) {
+    const id = (row as { outlet_inventory_id?: string | null }).outlet_inventory_id;
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/** Identity only: when each outlet line was first created. Call before a blind count opens. */
+export async function fetchOutletInventoryCreatedAts(
+  outletId: string
+): Promise<Array<{ id: string; created_at: string | null }>> {
+  const { data, error } = await supabase
+    .from('outlet_inventory')
+    .select('id, created_at')
+    .eq('outlet_id', outletId);
+  if (error) throw error;
+  return (data ?? []) as Array<{ id: string; created_at: string | null }>;
+}
+
+/** Ids to keep on a count sheet for a receipt day. Empty date means no filter. */
+export async function resolveReceivedInventoryIds(outletId: string, receivedOn: string): Promise<Set<string> | null> {
+  if (!receivedOn) return null;
+  const [movementIds, created] = await Promise.all([
+    fetchOutletInventoryIdsReceivedOn(outletId, receivedOn),
+    fetchOutletInventoryCreatedAts(outletId),
+  ]);
+  const movements = new Set(movementIds);
+  const keep = new Set<string>();
+  for (const row of created) {
+    if (inventoryRowReceivedOn(row.created_at, row.id, receivedOn, movements)) keep.add(row.id);
+  }
+  for (const id of movements) keep.add(id);
+  return keep;
 }
 
 /** Build CSV for a posted session (header + lines with variance & remarks). */

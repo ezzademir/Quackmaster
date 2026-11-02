@@ -9,6 +9,7 @@ import {
   getBlindStockTakeSheet,
   getOutletStockTakeSessionDetail,
   listOutletStockTakeSessions,
+  resolveReceivedInventoryIds,
   startBlindStockTake,
   submitBlindStockTake,
   type OutletStockTakeLineRow,
@@ -73,6 +74,29 @@ function downloadCsv(filename: string, csv: string) {
   URL.revokeObjectURL(url);
 }
 
+const RECEIPT_FILTER_PREFIX = 'qm-stock-take-receipt:';
+
+function saveReceiptFilter(sessionId: string, receivedOn: string, ids: string[]) {
+  sessionStorage.setItem(RECEIPT_FILTER_PREFIX + sessionId, JSON.stringify({ receivedOn, ids }));
+}
+
+function loadReceiptFilter(sessionId: string): { receivedOn: string; ids: string[] } | null {
+  try {
+    const raw = sessionStorage.getItem(RECEIPT_FILTER_PREFIX + sessionId);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { receivedOn?: unknown; ids?: unknown };
+    if (typeof parsed.receivedOn !== 'string' || !Array.isArray(parsed.ids)) return null;
+    const ids = parsed.ids.filter((id): id is string => typeof id === 'string');
+    return { receivedOn: parsed.receivedOn, ids };
+  } catch {
+    return null;
+  }
+}
+
+function clearReceiptFilter(sessionId: string) {
+  sessionStorage.removeItem(RECEIPT_FILTER_PREFIX + sessionId);
+}
+
 function sessionStatusLabel(s: OutletStockTakeSessionRow): { text: string; cls: string } {
   if (s.status === 'open') return { text: 'Open', cls: 'bg-amber-100 text-amber-900' };
   if (s.status === 'cancelled') return { text: 'Cancelled', cls: 'bg-stone-200 text-stone-700' };
@@ -94,6 +118,8 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const { isAdmin } = useAuth();
   const [outletId, setOutletId] = useState('');
   const [countDate, setCountDate] = useState(() => malaysiaCalendarDate());
+  /** Blank lists every current line. Set to the day the outlet received the goods. */
+  const [receivedOn, setReceivedOn] = useState('');
   const [sessionNotes, setSessionNotes] = useState('');
   const [session, setSession] = useState<{ id: string; count_date: string } | null>(null);
   const [rows, setRows] = useState<BlindCountRow[]>([]);
@@ -136,7 +162,14 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           return;
         }
         setSession({ id: sheet.session_id, count_date: sheet.count_date });
-        setRows(sheetToCountRows(sheet.lines));
+        const saved = loadReceiptFilter(sheet.session_id);
+        const sheetRows = sheetToCountRows(sheet.lines);
+        if (saved) {
+          setReceivedOn(saved.receivedOn);
+          setRows(sheetRows.filter((r) => saved.ids.includes(r.id)));
+        } else {
+          setRows(sheetRows);
+        }
       } finally {
         setLoadingSheet(false);
       }
@@ -189,18 +222,40 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     setMessage(null);
     setAdminVariance(null);
     try {
+      let receiptIds: Set<string> | null = null;
+      if (receivedOn) {
+        receiptIds = await resolveReceivedInventoryIds(outletId, receivedOn);
+        if (receiptIds.size === 0) {
+          setMessage({
+            tone: 'err',
+            text: `No lines received on ${receivedOn}. Clear the date to count every current line.`,
+          });
+          return;
+        }
+      }
       const res = await startBlindStockTake(outletId, countDate, sessionNotes);
       if (!res.success) {
         setMessage({ tone: 'err', text: describeError(res.error) });
         return;
       }
+      let sheetRows = sheetToCountRows(res.lines);
+      const saved = !receiptIds ? loadReceiptFilter(res.session_id) : null;
+      if (receiptIds) {
+        saveReceiptFilter(res.session_id, receivedOn, [...receiptIds]);
+        sheetRows = sheetRows.filter((r) => receiptIds?.has(r.id));
+      } else if (saved) {
+        setReceivedOn(saved.receivedOn);
+        sheetRows = sheetRows.filter((r) => saved.ids.includes(r.id));
+      }
       setSession({ id: res.session_id, count_date: res.count_date });
-      setRows(sheetToCountRows(res.lines));
+      setRows(sheetRows);
       setMessage({
         tone: 'ok',
         text: res.resumed
           ? 'Resumed the count already open for this outlet.'
-          : 'Blind count started. Count every line; system quantities stay hidden until an admin reviews the result.',
+          : receiptIds
+            ? `Blind count started for goods received on ${receivedOn}. System quantities stay hidden until an admin reviews the result.`
+            : 'Blind count started. Count every line; system quantities stay hidden until an admin reviews the result.',
       });
       void refreshSessions(outletId, { silent: true });
     } finally {
@@ -218,6 +273,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         setMessage({ tone: 'err', text: describeError(res.error) });
         return;
       }
+      clearReceiptFilter(session.id);
       setSession(null);
       setRows([]);
       setMessage({ tone: 'ok', text: 'Count cancelled.' });
@@ -270,6 +326,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           ? 'Count submitted and stock updated. Variance is shown below.'
           : 'Count submitted and stock updated. Variance is reviewed by an admin.',
       });
+      clearReceiptFilter(session.id);
       setSession(null);
       setRows([]);
       setSessionNotes('');
@@ -412,7 +469,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           Outlet stock take — blind count
         </span>
         <p className="mt-1.5 leading-relaxed text-amber-900/90">
-          Count every batch physically and enter what you see. System quantities and variance are never shown while
+          Count every batch physically and enter what you see. Use Received on to list only goods the outlet took in that day, or leave it blank to list every current line. Only listed lines are submitted. System quantities and variance are never shown while
           counting; while a count is open, this outlet&apos;s stock levels are hidden from everyone except admins. Variance is
           worked out by the server when you submit and is visible to admins only.
         </p>
@@ -462,6 +519,34 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 />
               )}
             </div>
+          </div>
+          <div className="min-w-0">
+            <label className="mb-1 block text-xs font-medium text-stone-600" htmlFor="stock-take-received-on">
+              Received on
+            </label>
+            {session ? (
+              <p className="min-h-11 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5 text-base tabular-nums sm:min-h-0 sm:py-2 sm:text-sm">
+                {receivedOn || 'All current lines'}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  id="stock-take-received-on"
+                  type="date"
+                  value={receivedOn}
+                  onChange={(e) => setReceivedOn(e.target.value)}
+                  className="min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-base sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
+                />
+                {receivedOn ? (
+                  <button type="button" onClick={() => setReceivedOn('')} className="btn-secondary min-h-11 sm:min-h-0">
+                    All current lines
+                  </button>
+                ) : null}
+              </div>
+            )}
+            <p className="mt-1 text-xs leading-relaxed text-stone-500">
+              Day the outlet received the goods (hub supply or transfer). Blank lists every current line. Only listed lines are submitted.
+            </p>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-stone-600">Session notes (optional)</label>
@@ -530,7 +615,11 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             </div>
           ) : rows.length === 0 ? (
             <div className="space-y-3">
-              <p className="text-sm text-amber-800">No batches on this outlet&apos;s count sheet. Cancel this count.</p>
+              <p className="text-sm text-amber-800">
+                {receivedOn
+                  ? `No lines received on ${receivedOn} are on this count sheet. Cancel this count or clear the date and start again.`
+                  : "No batches on this outlet's count sheet. Cancel this count."}
+              </p>
               <button type="button" onClick={() => void handleCancel()} disabled={submitting} className="btn-secondary">
                 Cancel count
               </button>
