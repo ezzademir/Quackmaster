@@ -3,7 +3,7 @@
  */
 
 import { supabase } from './supabase';
-import { malaysiaCalendarDate } from './dateRange';
+import { lastDayOfMonthIso, malaysiaCalendarDate } from './dateRange';
 import { isLegacyBatchCode, skuForDisplay } from './lotLabel';
 import { compareHubBatches } from './hubBatchPick';
 import type { Outlet } from '../types';
@@ -396,45 +396,67 @@ function csvCell(v: string | number | null | undefined): string {
   return s;
 }
 
-/**
- * True when this outlet line was received on `receivedOn` (YYYY-MM-DD).
- * A blank date keeps every line. A line matches when a supply or transfer receipt
- * movement is dated that day, or when the inventory row was first created that
- * Malaysia calendar day (first time the goods landed, if no movement was written).
- */
-export function inventoryRowReceivedOn(
-  createdAt: string | null | undefined,
-  inventoryId: string,
-  receivedOn: string,
-  receiptInventoryIds: ReadonlySet<string>
-): boolean {
-  if (!receivedOn) return true;
-  if (receiptInventoryIds.has(inventoryId)) return true;
-  if (!createdAt) return false;
-  const t = Date.parse(createdAt);
-  if (!Number.isFinite(t)) return false;
-  return malaysiaCalendarDate(new Date(t)) === receivedOn;
+/** `YYYY-MM` from a month value or a full calendar date. */
+export function receiptYearMonth(value: string): string {
+  return value.slice(0, 7);
 }
 
-/** Inventory rows that received stock at this outlet on the given business date. */
-export async function fetchOutletInventoryIdsReceivedOn(
-  outletId: string,
-  receivedOn: string
-): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('outlet_stock_movements')
-    .select('outlet_inventory_id')
-    .eq('outlet_id', outletId)
-    .eq('business_date', receivedOn)
-    .in('movement_type', [...RECEIPT_MOVEMENT_TYPES])
-    .limit(5000);
+/** Inclusive first and last calendar days of `YYYY-MM`. */
+export function receiptMonthBounds(yearMonth: string): { from: string; to: string } | null {
+  const ym = receiptYearMonth(yearMonth);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return null;
+  return { from: `${ym}-01`, to: lastDayOfMonthIso(ym) };
+}
 
-  if (error) throw error;
+/**
+ * True when this outlet line was received during `yearMonth` (`YYYY-MM`).
+ * A blank month keeps every line. A line matches when a supply or transfer receipt
+ * movement falls in that month, or when the inventory row was first created in that
+ * Malaysia calendar month (first time the goods landed, if no movement was written).
+ */
+export function inventoryRowReceivedInMonth(
+  createdAt: string | null | undefined,
+  inventoryId: string,
+  yearMonth: string,
+  receiptInventoryIds: ReadonlySet<string>
+): boolean {
+  if (!yearMonth) return true;
+  if (receiptInventoryIds.has(inventoryId)) return true;
+  const bounds = receiptMonthBounds(yearMonth);
+  if (!bounds || !createdAt) return false;
+  const t = Date.parse(createdAt);
+  if (!Number.isFinite(t)) return false;
+  const day = malaysiaCalendarDate(new Date(t));
+  return day >= bounds.from && day <= bounds.to;
+}
+
+/** Inventory rows that received stock at this outlet during the given month. */
+export async function fetchOutletInventoryIdsReceivedInMonth(
+  outletId: string,
+  yearMonth: string
+): Promise<string[]> {
+  const bounds = receiptMonthBounds(yearMonth);
+  if (!bounds) return [];
 
   const ids = new Set<string>();
-  for (const row of data ?? []) {
-    const id = (row as { outlet_inventory_id?: string | null }).outlet_inventory_id;
-    if (id) ids.add(id);
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('outlet_stock_movements')
+      .select('outlet_inventory_id')
+      .eq('outlet_id', outletId)
+      .gte('business_date', bounds.from)
+      .lte('business_date', bounds.to)
+      .in('movement_type', [...RECEIPT_MOVEMENT_TYPES])
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+    const page = data ?? [];
+    for (const row of page) {
+      const id = (row as { outlet_inventory_id?: string | null }).outlet_inventory_id;
+      if (id) ids.add(id);
+    }
+    if (page.length < pageSize) break;
   }
   return [...ids];
 }
@@ -451,17 +473,17 @@ export async function fetchOutletInventoryCreatedAts(
   return (data ?? []) as Array<{ id: string; created_at: string | null }>;
 }
 
-/** Ids to keep on a count sheet for a receipt day. Empty date means no filter. */
-export async function resolveReceivedInventoryIds(outletId: string, receivedOn: string): Promise<Set<string> | null> {
-  if (!receivedOn) return null;
+/** Ids to keep on a count sheet for a receipt month (`YYYY-MM`). Empty means no filter. */
+export async function resolveReceivedInventoryIds(outletId: string, yearMonth: string): Promise<Set<string> | null> {
+  if (!yearMonth) return null;
   const [movementIds, created] = await Promise.all([
-    fetchOutletInventoryIdsReceivedOn(outletId, receivedOn),
+    fetchOutletInventoryIdsReceivedInMonth(outletId, yearMonth),
     fetchOutletInventoryCreatedAts(outletId),
   ]);
   const movements = new Set(movementIds);
   const keep = new Set<string>();
   for (const row of created) {
-    if (inventoryRowReceivedOn(row.created_at, row.id, receivedOn, movements)) keep.add(row.id);
+    if (inventoryRowReceivedInMonth(row.created_at, row.id, yearMonth, movements)) keep.add(row.id);
   }
   for (const id of movements) keep.add(id);
   return keep;

@@ -93,6 +93,13 @@ function loadReceiptFilter(sessionId: string): { receivedOn: string; ids: string
   }
 }
 
+function formatReceiptMonth(value: string): string {
+  const ym = value.slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return value || 'All current lines';
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+}
+
 function clearReceiptFilter(sessionId: string) {
   sessionStorage.removeItem(RECEIPT_FILTER_PREFIX + sessionId);
 }
@@ -118,7 +125,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   const { isAdmin } = useAuth();
   const [outletId, setOutletId] = useState('');
   const [countDate, setCountDate] = useState(() => malaysiaCalendarDate());
-  /** Blank lists every current line. Set to the day the outlet received the goods. */
+  /** Blank lists every current line. `YYYY-MM` is the month the outlet received the goods. */
   const [receivedOn, setReceivedOn] = useState('');
   const [sessionNotes, setSessionNotes] = useState('');
   const [session, setSession] = useState<{ id: string; count_date: string } | null>(null);
@@ -228,7 +235,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         if (receiptIds.size === 0) {
           setMessage({
             tone: 'err',
-            text: `No lines received on ${receivedOn}. Clear the date to count every current line.`,
+            text: `No lines received in ${formatReceiptMonth(receivedOn)}. Clear the month to count every current line.`,
           });
           return;
         }
@@ -254,7 +261,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         text: res.resumed
           ? 'Resumed the count already open for this outlet.'
           : receiptIds
-            ? `Blind count started for goods received on ${receivedOn}. System quantities stay hidden until an admin reviews the result.`
+            ? `Blind count started for goods received in ${formatReceiptMonth(receivedOn)}. System quantities stay hidden until an admin reviews the result.`
             : 'Blind count started. Count every line; system quantities stay hidden until an admin reviews the result.',
       });
       void refreshSessions(outletId, { silent: true });
@@ -469,7 +476,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           Outlet stock take — blind count
         </span>
         <p className="mt-1.5 leading-relaxed text-amber-900/90">
-          Count every batch physically and enter what you see. Use Received on to list only goods the outlet took in that day, or leave it blank to list every current line. Only listed lines are submitted. System quantities and variance are never shown while
+          Count every batch physically and enter what you see. Use Received in to list only goods the outlet took in that month, or leave it blank to list every current line. Only listed lines are submitted. System quantities and variance are never shown while
           counting; while a count is open, this outlet&apos;s stock levels are hidden from everyone except admins. Variance is
           worked out by the server when you submit and is visible to admins only.
         </p>
@@ -521,19 +528,19 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             </div>
           </div>
           <div className="min-w-0">
-            <label className="mb-1 block text-xs font-medium text-stone-600" htmlFor="stock-take-received-on">
-              Received on
+            <label className="mb-1 block text-xs font-medium text-stone-600" htmlFor="stock-take-received-in">
+              Received in
             </label>
             {session ? (
-              <p className="min-h-11 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5 text-base tabular-nums sm:min-h-0 sm:py-2 sm:text-sm">
-                {receivedOn || 'All current lines'}
+              <p className="min-h-11 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5 text-base sm:min-h-0 sm:py-2 sm:text-sm">
+                {receivedOn ? formatReceiptMonth(receivedOn) : 'All current lines'}
               </p>
             ) : (
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <input
-                  id="stock-take-received-on"
-                  type="date"
-                  value={receivedOn}
+                  id="stock-take-received-in"
+                  type="month"
+                  value={receivedOn.slice(0, 7)}
                   onChange={(e) => setReceivedOn(e.target.value)}
                   className="min-h-11 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-base sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
                 />
@@ -545,7 +552,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               </div>
             )}
             <p className="mt-1 text-xs leading-relaxed text-stone-500">
-              Day the outlet received the goods (hub supply or transfer). Blank lists every current line. Only listed lines are submitted.
+              Month the outlet received the goods (hub supply or transfer), from the 1st through the last day. Blank lists every current line. Only listed lines are submitted.
             </p>
           </div>
           <div>
@@ -617,7 +624,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <div className="space-y-3">
               <p className="text-sm text-amber-800">
                 {receivedOn
-                  ? `No lines received on ${receivedOn} are on this count sheet. Cancel this count or clear the date and start again.`
+                  ? `No lines received in ${formatReceiptMonth(receivedOn)} are on this count sheet. Cancel this count or clear the month and start again.`
                   : "No batches on this outlet's count sheet. Cancel this count."}
               </p>
               <button type="button" onClick={() => void handleCancel()} disabled={submitting} className="btn-secondary">
