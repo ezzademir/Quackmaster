@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Ban, Banknote, Check, Circle, Plus, Receipt, Tag, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Ban, Banknote, Check, Circle, Plus, Receipt, Search, Tag, type LucideIcon } from 'lucide-react';
 import { Button, EmptyState, ListRow, PageHeader, Status, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
@@ -69,6 +69,7 @@ export function Bills() {
   const [msg, setMsg] = useState<string | null>(null);
   const [tab, setTab] = useState<BillsTab>('bills');
   const [showBillForm, setShowBillForm] = useState(false);
+  const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
     const [b, s, e, priceRows] = await Promise.all([
@@ -138,6 +139,20 @@ export function Bills() {
   }
 
   const valid = form.supplier_id && form.entity_code && form.bill_number.trim() && form.bill_date && Number(form.amount_rm) >= 0 && form.amount_rm !== '';
+  const needle = query.trim().toLowerCase();
+  const visibleBills = useMemo(() => rows.filter((bill) => {
+    if (!needle) return true;
+    const orderNo = bill.purchase_order_id ? orderNumbers[bill.purchase_order_id] : null;
+    const invoices = bill.purchase_order_id ? (invoiceNumbers[bill.purchase_order_id] ?? []) : [];
+    const status = billStatus(bill.payment_status);
+    const haystack = [bill.supplier_name, bill.bill_number, bill.entity_code, orderNo, status.label, bill.due_date, ...invoices];
+    return haystack.some((part) => (part ?? '').toLowerCase().includes(needle));
+  }), [rows, orderNumbers, invoiceNumbers, needle]);
+  const visiblePrices = useMemo(() => prices.filter((price) => {
+    if (!needle) return true;
+    const haystack = [price.supplier_name, price.item_name, price.order_number, price.unit_of_measure, price.price_source];
+    return haystack.some((part) => (part ?? '').toLowerCase().includes(needle));
+  }), [prices, needle]);
 
   if (!isAdmin && !isProcurement) {
     return <EmptyState title="No access" description="Supplier bills are visible to admins and procurement only." />;
@@ -195,12 +210,24 @@ export function Bills() {
           },
         ]}
       />
+      <div className="relative" data-no-swipe>
+        <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" aria-hidden />
+        <input
+          aria-label="Search bills"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search supplier, invoice, or PO"
+          className="min-h-11 w-full rounded-xl border border-stone-200 bg-white py-2 pl-9 pr-3 text-sm"
+        />
+      </div>
       {tab === 'prices' ? (
         prices.length === 0 ? (
           <EmptyState title="No item prices" description="Prices appear here after an order is accepted, one price for each item from each supplier." />
+        ) : visiblePrices.length === 0 ? (
+          <EmptyState title="No matches" description="Try a supplier, item, or order number." />
         ) : (
           <div className="ios-group">
-            {prices.map((price) => (
+            {visiblePrices.map((price) => (
               <ListRow
                 key={`${price.supplier_name}-${price.item_name}-${price.order_number}`}
                 title={
@@ -217,9 +244,11 @@ export function Bills() {
         )
       ) : rows.length === 0 ? (
         <EmptyState title="No bills" description="Accept a purchase order, or record a supplier invoice that is not an order." />
+      ) : visibleBills.length === 0 ? (
+        <EmptyState title="No matches" description="Try a supplier, invoice number, or purchase order number." />
       ) : (
         <div className="ios-group">
-          {rows.map((r) => {
+          {visibleBills.map((r) => {
             const orderNo = r.purchase_order_id ? orderNumbers[r.purchase_order_id] : null;
             const invoices = r.purchase_order_id ? (invoiceNumbers[r.purchase_order_id] ?? []) : [];
             const invoiceText = invoices.join(', ');
