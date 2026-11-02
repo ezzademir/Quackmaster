@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Ban, Banknote, Check, Circle, Plus, Receipt, Search, Tag, type LucideIcon } from 'lucide-react';
+import { DateFilter } from '../components/DateFilter';
 import { Button, EmptyState, ListRow, PageHeader, Status, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/auth';
+import { isCalendarDateInRange, type DateRange } from '../utils/dateRange';
 import { defaultEntityCode, type MyEntity } from '../utils/procurementPayloads';
 import { useRegisterRefresh } from '../utils/pageRefresh';
 
@@ -70,6 +72,9 @@ export function Bills() {
   const [tab, setTab] = useState<BillsTab>('bills');
   const [showBillForm, setShowBillForm] = useState(false);
   const [query, setQuery] = useState('');
+  const [showUnpaid, setShowUnpaid] = useState(true);
+  const [showPaid, setShowPaid] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
 
   const load = useCallback(async () => {
     const [b, s, e, priceRows] = await Promise.all([
@@ -141,17 +146,20 @@ export function Bills() {
   const valid = form.supplier_id && form.entity_code && form.bill_number.trim() && form.bill_date && Number(form.amount_rm) >= 0 && form.amount_rm !== '';
   const needle = query.trim().toLowerCase();
   const visibleBills = useMemo(() => rows.filter((bill) => {
-    if (!needle) return true;
     const orderNo = bill.purchase_order_id ? orderNumbers[bill.purchase_order_id] : null;
     const invoices = bill.purchase_order_id ? (invoiceNumbers[bill.purchase_order_id] ?? []) : [];
+    if (dateRange && !isCalendarDateInRange(bill.bill_date, dateRange)) return false;
     const status = billStatus(bill.payment_status);
+    const settled = bill.payment_status === 'paid' || bill.payment_status === 'void';
+    if (settled ? !showPaid : !showUnpaid) return false;
+    if (!needle) return true;
     const haystack = [
       bill.supplier_name, bill.bill_number, bill.entity_code, orderNo, status.label, bill.due_date,
       Number(bill.amount_rm).toFixed(2), Number(bill.balance_rm).toFixed(2), Number(bill.paid_rm).toFixed(2),
       ...invoices,
     ];
     return haystack.some((part) => (part ?? '').toLowerCase().includes(needle));
-  }), [rows, orderNumbers, invoiceNumbers, needle]);
+  }), [rows, orderNumbers, invoiceNumbers, needle, showUnpaid, showPaid, dateRange]);
   const visiblePrices = useMemo(() => prices.filter((price) => {
     if (!needle) return true;
     const haystack = [price.supplier_name, price.item_name, price.order_number, price.unit_of_measure, price.price_source, Number(price.unit_price_rm).toFixed(2)];
@@ -200,20 +208,40 @@ export function Bills() {
           </div>
         </div>
       ) : null}
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        items={[
-          {
-            id: 'bills',
-            label: <span className="inline-flex items-center gap-1.5"><Receipt size={14} aria-hidden /> Bills</span>,
-          },
-          {
-            id: 'prices',
-            label: <span className="inline-flex items-center gap-1.5"><Tag size={14} aria-hidden /> Item prices</span>,
-          },
-        ]}
-      />
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={[
+            {
+              id: 'bills',
+              label: <span className="inline-flex items-center gap-1.5"><Receipt size={14} aria-hidden /> Bills</span>,
+            },
+            {
+              id: 'prices',
+              label: <span className="inline-flex items-center gap-1.5"><Tag size={14} aria-hidden /> Item prices</span>,
+            },
+          ]}
+        />
+        {tab === 'bills' ? (
+          <DateFilter
+            onFilterChange={(range) => setDateRange(range)}
+            hint="Filters bills by bill date."
+          />
+        ) : null}
+      </div>
+      {tab === 'bills' ? (
+        <div className="flex flex-wrap gap-x-4" data-no-swipe>
+          <label className="inline-flex min-h-11 items-center gap-2 text-sm text-stone-700">
+            <input type="checkbox" checked={showUnpaid} onChange={(event) => setShowUnpaid(event.target.checked)} />
+            Unpaid
+          </label>
+          <label className="inline-flex min-h-11 items-center gap-2 text-sm text-stone-700">
+            <input type="checkbox" checked={showPaid} onChange={(event) => setShowPaid(event.target.checked)} />
+            Paid
+          </label>
+        </div>
+      ) : null}
       <div className="relative" data-no-swipe>
         <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" aria-hidden />
         <input
@@ -249,7 +277,14 @@ export function Bills() {
       ) : rows.length === 0 ? (
         <EmptyState title="No bills" description="Accept a purchase order, or record a supplier invoice that is not an order." />
       ) : visibleBills.length === 0 ? (
-        <EmptyState title="No matches" description="Try a supplier, invoice number, purchase order number, or amount." />
+        <EmptyState
+          title="No matches"
+          description={needle
+            ? 'Try a supplier, invoice number, purchase order number, or amount.'
+            : !showUnpaid && !showPaid
+              ? 'Tick Unpaid or Paid to show those bills.'
+              : 'Nothing in this view.'}
+        />
       ) : (
         <div className="ios-group">
           {visibleBills.map((r) => {
