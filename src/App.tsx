@@ -8,6 +8,7 @@ import { Layout } from './components/Layout';
 import { isPathAllowedForRole, homePathForRole } from './utils/roleAccess';
 import { Receiving } from './pages/Receiving';
 import { Bills } from './pages/Bills';
+import { BillDetail } from './pages/BillDetail';
 import { SectionHome } from './pages/SectionHome';
 
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
@@ -226,6 +227,7 @@ function App() {
                 <Route path="/distribution/*" element={<Distribution />} />
                 <Route path="/receiving" element={<Receiving />} />
                 <Route path="/bills" element={<Bills />} />
+                <Route path="/bills/:billId" element={<BillDetail />} />
                 <Route path="/costing" element={<CostingGate />} />
                 <Route path="/buy" element={<SectionHome />} />
                 <Route path="/kitchen" element={<SectionHome />} />

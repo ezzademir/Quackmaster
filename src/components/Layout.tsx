@@ -43,7 +43,7 @@ const supervisorBottomNav = [
 const procurementNav = [
   { path: '/procurement', label: 'Purchase orders', icon: ShoppingCart, exact: false },
   { path: '/receiving', label: 'Receiving', icon: PackageCheck, exact: true },
-  { path: '/bills', label: 'Bills', icon: Receipt, exact: true },
+  { path: '/bills', label: 'Bills', icon: Receipt, exact: false },
   { path: '/suppliers', label: 'Suppliers', icon: Truck, exact: true },
 ];
 
@@ -272,7 +272,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   path: task.path,
                   label: task.label,
                   icon: TASK_ICON[task.path] ?? SECTION_ICON[section.id],
-                  exact: task.path === '/' || task.path === '/bills' || task.path === '/receiving',
+                  exact: task.path === '/' || task.path === '/receiving',
                 }))}
               />
             ))

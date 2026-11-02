@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Ban, Banknote, Check, Circle, Plus, Receipt, Tag, type LucideIcon } from 'lucide-react';
 import { Button, EmptyState, ListRow, PageHeader, Status, Tabs } from '../components/ui';
 import { supabase } from '../utils/supabase';
@@ -20,16 +21,6 @@ interface BillRow {
   payment_status: 'paid' | 'overdue' | 'part_paid' | 'unpaid' | 'void';
 }
 
-interface BillLine {
-  id: string;
-  purchase_order_id: string;
-  raw_material_id: string;
-  quantity_ordered: number;
-  quantity_received: number | null;
-  unit_price: number;
-  line_total: number | null;
-}
-
 interface ItemPrice {
   supplier_name: string | null;
   item_name: string | null;
@@ -37,13 +28,6 @@ interface ItemPrice {
   unit_price_rm: number;
   price_source: string;
   order_number: string | null;
-}
-
-interface PaymentRow {
-  id: string;
-  bill_id: string;
-  amount_rm: number;
-  paid_on: string;
 }
 
 type BillsTab = 'bills' | 'prices';
@@ -71,74 +55,57 @@ function billStatus(status: BillRow['payment_status']): {
   }
 }
 
-function voidFailure(message: string): string {
-  if (message.includes('bill_has_payments')) return 'This bill has payments. Remove them first, then void it.';
-  if (message.includes('bill_already_void')) return 'This bill is already void.';
-  if (message.includes('reason_required')) return 'A reason is required.';
-  if (message.includes('forbidden')) return 'Only an admin can void a bill.';
-  return message;
-}
-
 /** Supplier bills. Procurement records bills and sees payment status read-only; only admins record (part) payments into supplier_payments (DB-enforced). */
 export function Bills() {
+  const navigate = useNavigate();
   const { isAdmin, isProcurement } = useAuth();
   const [rows, setRows] = useState<BillRow[]>([]);
-  const [lines, setLines] = useState<BillLine[]>([]);
   const [prices, setPrices] = useState<ItemPrice[]>([]);
   const [orderNumbers, setOrderNumbers] = useState<Record<string, string>>({});
-  const [itemNames, setItemNames] = useState<Record<string, { name: string; unit: string | null }>>({});
+  const [invoiceNumbers, setInvoiceNumbers] = useState<Record<string, string[]>>({});
   const [suppliers, setSuppliers] = useState<Array<{ id: string; name: string }>>([]);
   const [entities, setEntities] = useState<MyEntity[]>([]);
   const [form, setForm] = useState({ supplier_id: '', entity_code: '', bill_number: '', bill_date: '', due_date: '', amount_rm: '' });
   const [msg, setMsg] = useState<string | null>(null);
-  const emptyPay = { bill_id: '', amount_rm: '', paid_on: '', method: 'bank_transfer', reference: '', document_path: '', notes: '' };
-  const [pay, setPay] = useState(emptyPay);
-  const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const [voidReason, setVoidReason] = useState<Record<string, string>>({});
-  const [voidingId, setVoidingId] = useState<string | null>(null);
-  const voidingRef = useRef<string | null>(null);
   const [tab, setTab] = useState<BillsTab>('bills');
-  const [openBillId, setOpenBillId] = useState<string | null>(null);
   const [showBillForm, setShowBillForm] = useState(false);
-  const [showPayForm, setShowPayForm] = useState(false);
 
   const load = useCallback(async () => {
-    const [b, s, e, p, priceRows, catalog] = await Promise.all([
+    const [b, s, e, priceRows] = await Promise.all([
       supabase.from('v_supplier_bill_status').select('*').order('bill_date', { ascending: false }),
       // only approved suppliers can be billed (085 _supplier_is_active)
       supabase.from('suppliers').select('id, name').eq('status', 'active').order('name'),
       // procurement cannot read business_entities; this view returns only the caller's own entities
       supabase.from('v_my_entities').select('code, name, procurement_tag').order('code'),
-      supabase.from('supplier_payments').select('id, bill_id, amount_rm, paid_on').order('paid_on', { ascending: false }),
       supabase.from('v_supplier_order_prices').select('supplier_name, item_name, unit_of_measure, unit_price_rm, price_source, order_number').order('supplier_name').order('item_name'),
-      supabase.from('v_raw_material_catalog').select('id, name, unit_of_measure'),
     ]);
     if (b.error) setMsg(b.error.message);
     else if (priceRows.error) setMsg(priceRows.error.message);
     const bills = (b.data ?? []) as BillRow[];
     setRows(bills);
     setPrices((priceRows.data ?? []) as ItemPrice[]);
-    setPayments((p.data ?? []) as PaymentRow[]);
-    setItemNames(Object.fromEntries(
-      ((catalog.data ?? []) as Array<{ id: string; name: string; unit_of_measure: string | null }>).map((item) => [
-        item.id,
-        { name: item.name, unit: item.unit_of_measure },
-      ]),
-    ));
     const poIds = [...new Set(bills.map((bill) => bill.purchase_order_id).filter((id): id is string => Boolean(id)))];
     if (poIds.length === 0) {
-      setLines([]);
       setOrderNumbers({});
+      setInvoiceNumbers({});
     } else {
-      const [lineRows, orderRows] = await Promise.all([
-        supabase.from('purchase_order_items').select('id, purchase_order_id, raw_material_id, quantity_ordered, quantity_received, unit_price, line_total').in('purchase_order_id', poIds),
+      const [orderRows, receiptRows] = await Promise.all([
         supabase.from('purchase_orders').select('id, order_number').in('id', poIds),
+        supabase.from('po_receipt_records').select('purchase_order_id, invoice_number, entered_at').in('purchase_order_id', poIds).order('entered_at'),
       ]);
-      if (lineRows.error) setMsg(lineRows.error.message);
-      setLines((lineRows.data ?? []) as BillLine[]);
+      if (receiptRows.error) setMsg(receiptRows.error.message);
       setOrderNumbers(Object.fromEntries(
         ((orderRows.data ?? []) as Array<{ id: string; order_number: string | null }>).map((order) => [order.id, order.order_number ?? order.id.slice(0, 8)]),
       ));
+      const invoices: Record<string, string[]> = {};
+      for (const receipt of (receiptRows.data ?? []) as Array<{ purchase_order_id: string; invoice_number: string | null }>) {
+        const number = receipt.invoice_number?.trim();
+        if (!number) continue;
+        const seen = invoices[receipt.purchase_order_id] ?? [];
+        if (!seen.includes(number)) seen.push(number);
+        invoices[receipt.purchase_order_id] = seen;
+      }
+      setInvoiceNumbers(invoices);
     }
     setSuppliers((s.data ?? []) as Array<{ id: string; name: string }>);
     const ents = (e.data ?? []) as MyEntity[];
@@ -170,58 +137,6 @@ export function Bills() {
     void load();
   }
 
-  async function recordPayment() {
-    const { error } = await supabase.from('supplier_payments').insert({
-      bill_id: pay.bill_id,
-      amount_rm: Number(pay.amount_rm),
-      paid_on: pay.paid_on,
-      method: pay.method,
-      reference: pay.reference.trim() || null,
-      document_path: pay.document_path.trim() || null,
-      notes: pay.notes.trim() || null,
-    });
-    if (error) {
-      setMsg(error.message.includes('payment_exceeds_bill_balance') ? 'Payment is more than the bill balance.' : error.message);
-      return;
-    }
-    setMsg('Payment recorded.');
-    setShowPayForm(false);
-    setPay(emptyPay);
-    void load();
-  }
-
-  async function voidBill(bill: BillRow) {
-    if (voidingRef.current) return;
-    const reason = (voidReason[bill.id] ?? '').trim();
-    if (!reason) {
-      setMsg('A reason is required.');
-      return;
-    }
-    voidingRef.current = bill.id;
-    setVoidingId(bill.id);
-    const { error } = await supabase.rpc('void_supplier_bill', { p_bill_id: bill.id, p_reason: reason });
-    voidingRef.current = null;
-    setVoidingId(null);
-    if (error) {
-      setMsg(voidFailure(error.message));
-      return;
-    }
-    setMsg(`${bill.bill_number} voided. The purchase order can now be cancelled.`);
-    void load();
-  }
-
-  async function removePayment(payment: PaymentRow) {
-    if (!confirm(`Remove the RM ${Number(payment.amount_rm).toFixed(2)} payment from ${payment.paid_on}?`)) return;
-    const { error } = await supabase.from('supplier_payments').delete().eq('id', payment.id);
-    if (error) {
-      setMsg(error.message);
-      return;
-    }
-    setMsg('Payment removed.');
-    void load();
-  }
-
-  const payValid = pay.bill_id && Number(pay.amount_rm) > 0 && pay.paid_on;
   const valid = form.supplier_id && form.entity_code && form.bill_number.trim() && form.bill_date && Number(form.amount_rm) >= 0 && form.amount_rm !== '';
 
   if (!isAdmin && !isProcurement) {
@@ -233,33 +148,16 @@ export function Bills() {
       <PageHeader
         title="Bills"
         description={isAdmin
-          ? 'An accepted purchase order becomes a bill. Payment status is unpaid until you record a payment.'
+          ? 'Open a bill to record a payment, edit it, or void it.'
           : 'An accepted purchase order becomes a bill. Payment status is read-only.'}
         actions={
-          <>
-            <Button
-              variant={showBillForm ? 'primary' : 'secondary'}
-              onClick={() => {
-                setShowBillForm((open) => !open);
-                setShowPayForm(false);
-              }}
-            >
-              <Plus size={16} aria-hidden />
-              Record bill
-            </Button>
-            {isAdmin ? (
-              <Button
-                variant={showPayForm ? 'primary' : 'secondary'}
-                onClick={() => {
-                  setShowPayForm((open) => !open);
-                  setShowBillForm(false);
-                }}
-              >
-                <Banknote size={16} aria-hidden />
-                Record payment
-              </Button>
-            ) : null}
-          </>
+          <Button
+            variant={showBillForm ? 'primary' : 'secondary'}
+            onClick={() => setShowBillForm((open) => !open)}
+          >
+            <Plus size={16} aria-hidden />
+            Record bill
+          </Button>
         }
       />
       {msg && <div className="rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700">{msg}</div>}
@@ -280,28 +178,6 @@ export function Bills() {
           <div className="flex gap-2">
             <Button disabled={!valid} onClick={() => void addBill()}>Record bill</Button>
             <Button variant="ghost" onClick={() => setShowBillForm(false)}>Close</Button>
-          </div>
-        </div>
-      ) : null}
-      {isAdmin && showPayForm ? (
-        <div className="grid gap-2 rounded-xl border border-stone-200 bg-white p-3 text-sm sm:grid-cols-4" data-no-swipe>
-          <select aria-label="Bill to pay" className="min-h-11 rounded-xl border border-stone-200 px-3" value={pay.bill_id} onChange={(e) => setPay({ ...pay, bill_id: e.target.value })}>
-            <option value="">Bill…</option>
-            {rows.filter((r) => r.payment_status !== 'void' && Number(r.balance_rm) > 0).map((r) => (
-              <option key={r.id} value={r.id}>{r.supplier_name} {r.bill_number} (bal {Number(r.balance_rm).toFixed(2)})</option>
-            ))}
-          </select>
-          <input aria-label="Payment amount RM" inputMode="decimal" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Amount RM" value={pay.amount_rm} onChange={(e) => setPay({ ...pay, amount_rm: e.target.value })} />
-          <input aria-label="Paid on" type="date" className="min-h-11 rounded-xl border border-stone-200 px-3" value={pay.paid_on} onChange={(e) => setPay({ ...pay, paid_on: e.target.value })} />
-          <select aria-label="Method" className="min-h-11 rounded-xl border border-stone-200 px-3" value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })}>
-            {['bank_transfer', 'cash', 'cheque', 'card', 'duitnow', 'other'].map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
-          </select>
-          <input aria-label="Reference" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Reference" value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} />
-          <input aria-label="Attachment path" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Attachment (storage path)" value={pay.document_path} onChange={(e) => setPay({ ...pay, document_path: e.target.value })} />
-          <input aria-label="Notes" className="min-h-11 rounded-xl border border-stone-200 px-3" placeholder="Notes" value={pay.notes} onChange={(e) => setPay({ ...pay, notes: e.target.value })} />
-          <div className="flex gap-2">
-            <Button disabled={!payValid} onClick={() => void recordPayment()}>Record payment</Button>
-            <Button variant="ghost" onClick={() => setShowPayForm(false)}>Close</Button>
           </div>
         </div>
       ) : null}
@@ -345,21 +221,21 @@ export function Bills() {
         <div className="ios-group">
           {rows.map((r) => {
             const orderNo = r.purchase_order_id ? orderNumbers[r.purchase_order_id] : null;
-            const billLines = r.purchase_order_id ? lines.filter((line) => line.purchase_order_id === r.purchase_order_id) : [];
+            const invoices = r.purchase_order_id ? (invoiceNumbers[r.purchase_order_id] ?? []) : [];
+            const invoiceText = invoices.join(', ');
             const status = billStatus(r.payment_status);
             const StatusIcon = status.icon;
-            const open = openBillId === r.id;
             return (
               <ListRow
                 key={r.id}
-                onClick={() => setOpenBillId(open ? null : r.id)}
+                onClick={() => navigate(`/bills/${r.id}`)}
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Receipt size={16} className="shrink-0 text-stone-400" aria-hidden />
                     {r.supplier_name}
                   </span>
                 }
-                meta={`${orderNo ?? r.bill_number} · due ${r.due_date ?? '—'}`}
+                meta={`${orderNo ?? r.bill_number}${invoiceText ? ` · ${invoiceText}` : ''} · due ${r.due_date ?? '—'}`}
                 aside={
                   <span className="flex flex-col items-end gap-1">
                     <span className="font-medium tabular-nums">{Number(r.balance_rm).toFixed(2)}</span>
@@ -369,62 +245,6 @@ export function Bills() {
                     </Status>
                   </span>
                 }
-                body={open ? (
-                  <div className="space-y-2">
-                    <p className="text-[13px] text-stone-500">
-                      Amount {Number(r.amount_rm).toFixed(2)} · paid {Number(r.paid_rm).toFixed(2)}
-                      {orderNo && orderNo !== r.bill_number ? ` · ${r.bill_number}` : ''}
-                    </p>
-                    {billLines.length > 0 ? (
-                      <ul className="space-y-1 text-[13px] text-stone-600">
-                        {billLines.map((line) => {
-                          const item = itemNames[line.raw_material_id];
-                          const qty = Number(line.quantity_ordered) || 0;
-                          const price = Number(line.unit_price) || 0;
-                          const total = line.line_total != null ? Number(line.line_total) : qty * price;
-                          const received = Number(line.quantity_received) || 0;
-                          return (
-                            <li key={line.id}>
-                              {item?.name ?? 'Item'} · {qty}{item?.unit ? ` ${item.unit}` : ''} × {price.toFixed(2)} = {total.toFixed(2)}
-                              {received > 0 && received !== qty ? ` · received ${received}` : ''}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : null}
-                    {isAdmin && r.payment_status === 'void' ? <p className="text-[13px] text-stone-400">Void</p> : null}
-                    {isAdmin && r.payment_status !== 'void' && Number(r.paid_rm) > 0 ? (
-                      <div className="space-y-1">
-                        <p className="text-[13px] text-stone-500">Remove payments before voiding.</p>
-                        {payments.filter((payment) => payment.bill_id === r.id).map((payment) => (
-                          <button
-                            key={payment.id}
-                            type="button"
-                            className="inline-flex min-h-11 items-center text-[15px] font-medium text-red-700"
-                            onClick={() => void removePayment(payment)}
-                          >
-                            Remove {Number(payment.amount_rm).toFixed(2)} ({payment.paid_on})
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    {isAdmin && r.payment_status !== 'void' && Number(r.paid_rm) <= 0 ? (
-                      <div className="flex flex-col gap-2" data-no-swipe>
-                        <input
-                          aria-label={`Void reason for ${r.bill_number}`}
-                          className="min-h-11 rounded-xl border border-stone-200 px-3 text-[15px]"
-                          placeholder="Reason"
-                          value={voidReason[r.id] ?? ''}
-                          onChange={(event) => setVoidReason((current) => ({ ...current, [r.id]: event.target.value }))}
-                        />
-                        <Button variant="danger" disabled={voidingId !== null} onClick={() => void voidBill(r)}>
-                          <Ban size={16} aria-hidden />
-                          Void
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
               />
             );
           })}
