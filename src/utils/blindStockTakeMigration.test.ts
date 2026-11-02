@@ -5,6 +5,8 @@ import { BATCH_TRACE_BASE } from '../test/batchTraceBase';
 import SCHEMA from '../../supabase/migrations/20261019140000_078_batch_trace_schema.sql?raw';
 import FUNCS from '../../supabase/migrations/20261019140100_079_batch_trace_functions.sql?raw';
 import BLIND from '../../supabase/migrations/20261019140200_080_blind_stock_take.sql?raw';
+import RECEIPT_MONTH from '../../supabase/migrations/20261102120000_093_stock_take_receipt_month.sql?raw';
+import RB093 from '../../supabase/rollbacks/093_rollback.sql?raw';
 import RB079 from '../../supabase/rollbacks/079_rollback.sql?raw';
 import RB080 from '../../supabase/rollbacks/080_rollback.sql?raw';
 import LIVE_DEPS from '../../supabase/tests/fixtures/batch_trace_live_deps.sql?raw';
@@ -509,5 +511,153 @@ describe('080 guards and rollback', () => {
     expect(pol.rows).toHaveLength(0);
     const src = await pg.query<{ s: string }>(`SELECT prosrc s FROM pg_proc WHERE proname = 'get_outlet_balance_as_of'`);
     expect(src.rows[0].s).not.toContain('stock_qty_hidden_for_outlet');
+  });
+});
+
+describe('093 receipt month stays on the count while quantities are hidden', () => {
+  async function lot(pg: PGlite, outlet: string, createdAt: string) {
+    run += 1;
+    const r = await pg.query<{ id: string }>(`
+      WITH pr AS (INSERT INTO production_runs (run_number) VALUES ('RUN-M-${run}') RETURNING id),
+      il AS (INSERT INTO inventory_lots (product_batch_label, expiry_date, manufactured_at, production_run_id)
+             SELECT 'KT-M-${run}', (timezone('Asia/Kuala_Lumpur', now()))::date + 5, now(), id FROM pr RETURNING id)
+      INSERT INTO outlet_inventory (outlet_id, product_batch, lot_id, quantity_on_hand, reserved_quantity, available_quantity, last_updated, created_at)
+      SELECT '${outlet}', 'KT', id, 4, 0, 4, now(), '${createdAt}'::timestamptz FROM il
+      RETURNING id`);
+    return r.rows[0].id;
+  }
+
+  it('lists supply and transfer receipts for the whole Malaysia month, and a failed empty month opens nothing', async () => {
+    const pg = await db();
+    await pg.exec(RECEIPT_MONTH);
+    const restocked = await lot(pg, OUTLET, '2020-01-01T00:00:00Z');
+    const firstLanded = await lot(pg, OUTLET, '2026-09-30T16:30:00Z');
+    const nextMonth = await lot(pg, OUTLET, '2026-10-31T16:30:00Z');
+    const leapDay = await lot(pg, OUTLET, '2024-02-29T15:30:00Z');
+    const afterLeap = await lot(pg, OUTLET, '2024-02-29T16:30:00Z');
+    await pg.exec(`
+      INSERT INTO outlet_stock_movements (outlet_id, outlet_inventory_id, movement_type, signed_qty, business_date, qoh_after)
+      VALUES
+        ('${OUTLET}', '${restocked}', 'supply_in', 4, '2026-10-15', 4),
+        ('${OUTLET}', '${nextMonth}', 'sale', -1, '2026-10-02', 3);
+    `);
+
+    const opened = await rpc<{
+      success: boolean;
+      session_id: string;
+      receipt_month: string;
+      received_ids: string[];
+      resumed: boolean;
+    }>(pg, STAFF, `public.begin_outlet_stock_take('${OUTLET}', NULL, NULL, '2026-10')`);
+    expect(opened.success).toBe(true);
+    expect(opened.resumed).toBe(false);
+    expect(opened.receipt_month).toBe('2026-10');
+    expect(new Set(opened.received_ids)).toEqual(new Set([restocked, firstLanded]));
+
+    expect(await readAs(pg, STAFF, `SELECT id FROM outlet_stock_movements WHERE outlet_id = '${OUTLET}'`)).toHaveLength(0);
+    await as(pg, STAFF);
+    await pg.exec('SET ROLE authenticated');
+    try {
+      const listed = await pg.query<{ j: { success: boolean; ids: string[] } }>(
+        `SELECT public.list_outlet_inventory_received_in_month('${OUTLET}', '2026-10') j`
+      );
+      expect(listed.rows[0].j.success).toBe(true);
+      expect(listed.rows[0].j.ids).toEqual(expect.arrayContaining([restocked, firstLanded]));
+      expect(listed.rows[0].j.ids).not.toEqual(expect.arrayContaining([nextMonth]));
+    } finally {
+      await pg.exec('RESET ROLE');
+    }
+
+    const feb = await rpc<{ ids: string[] }>(pg, STAFF, `public.list_outlet_inventory_received_in_month('${OUTLET}', '2024-02')`);
+    expect(feb.ids).toContain(leapDay);
+    expect(feb.ids).not.toContain(afterLeap);
+
+    const again = await rpc<{ success: boolean; resumed: boolean; receipt_month: string; received_ids: string[] }>(
+      pg,
+      SUP,
+      `public.begin_outlet_stock_take('${OUTLET}', NULL, NULL, '2026-11')`
+    );
+    expect(again).toMatchObject({ success: true, resumed: true, receipt_month: '2026-10' });
+    expect(again.received_ids).toEqual(expect.arrayContaining([restocked, firstLanded]));
+    expect(again.received_ids).not.toContain(nextMonth);
+
+    const locked = await rpc<{ success: boolean; error?: string; receipt_month?: string }>(
+      pg,
+      STAFF,
+      `public.set_outlet_stock_take_receipt_month('${opened.session_id}', '2026-11')`
+    );
+    expect(locked).toMatchObject({ success: false, error: 'receipt_month_locked', receipt_month: '2026-10' });
+
+    const posted = await rpc<{ success: boolean }>(
+      pg,
+      STAFF,
+      `public.submit_outlet_stock_take('${opened.session_id}', '[{"outlet_inventory_id":"${restocked}","counted_qty":1}]'::jsonb)`
+    );
+    expect(posted.success).toBe(true);
+    const untouched = await pg.query<{ q: number }>(
+      `SELECT quantity_on_hand::float q FROM outlet_inventory WHERE id = '${nextMonth}'`
+    );
+    expect(untouched.rows[0].q).toBe(4);
+
+    const denied = await rpc<{ success: boolean; error: string }>(
+      pg,
+      SUP,
+      `public.list_outlet_inventory_received_in_month('${OTHER}', '2026-10')`
+    );
+    expect(denied).toEqual({ success: false, error: 'not_authenticated_or_inactive' });
+
+    const other = await rpc<{ success: boolean; error: string }>(
+      pg,
+      STAFF,
+      `public.begin_outlet_stock_take('${OTHER}', NULL, NULL, '2026-10')`
+    );
+    expect(other).toEqual({ success: false, error: 'no_lines' });
+    const leftover = await pg.query(`SELECT id FROM outlet_stock_take_sessions WHERE outlet_id = '${OTHER}'`);
+    expect(leftover.rows).toHaveLength(0);
+
+    const cfg = await pg.query<{ proname: string; proconfig: string[] | null }>(
+      `SELECT proname, proconfig FROM pg_proc
+       WHERE pronamespace = 'public'::regnamespace
+         AND proname IN ('begin_outlet_stock_take', 'list_outlet_inventory_received_in_month', 'set_outlet_stock_take_receipt_month', '_outlet_inventory_received_in_month')
+       ORDER BY 1`
+    );
+    expect(cfg.rows.map((r) => r.proconfig)).toEqual([
+      ['search_path=public, pg_temp'],
+      ['search_path=public, pg_temp'],
+      ['search_path=public, pg_temp'],
+      ['search_path=public, pg_temp'],
+    ]);
+    const helper = await pg.query<{ ok: boolean }>(
+      `SELECT has_function_privilege('authenticated', 'public._outlet_inventory_received_in_month(uuid, text)', 'EXECUTE') ok`
+    );
+    expect(helper.rows[0].ok).toBe(false);
+  });
+
+  it('a count of every line stores no month, and an invalid month does not open a session', async () => {
+    const pg = await db();
+    await pg.exec(RECEIPT_MONTH);
+    await lot(pg, OUTLET, '2026-10-15T04:00:00Z');
+    const full = await rpc<{ success: boolean; receipt_month: string | null; received_ids: string[] | null }>(
+      pg,
+      STAFF,
+      `public.begin_outlet_stock_take('${OUTLET}', NULL, NULL, NULL)`
+    );
+    expect(full).toMatchObject({ success: true, receipt_month: null, received_ids: null });
+    const bad = await rpc<{ success: boolean; error: string }>(
+      pg,
+      STAFF,
+      `public.begin_outlet_stock_take('${OTHER}', NULL, NULL, '2026-13')`
+    );
+    expect(bad).toEqual({ success: false, error: 'invalid_month' });
+    const sessions = await pg.query(`SELECT id FROM outlet_stock_take_sessions WHERE outlet_id = '${OTHER}'`);
+    expect(sessions.rows).toHaveLength(0);
+
+    await pg.exec(RB093);
+    const gone = await pg.query(`SELECT 1 FROM pg_proc WHERE proname = 'begin_outlet_stock_take'`);
+    expect(gone.rows).toHaveLength(0);
+    const column = await pg.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = 'outlet_stock_take_sessions' AND column_name = 'receipt_month'`
+    );
+    expect(column.rows).toHaveLength(0);
   });
 });
