@@ -4,12 +4,17 @@ import type { Outlet } from '../../types';
 import { supabase } from '../../utils/supabase';
 import { useAuth } from '../../utils/auth';
 import {
+  beginBlindStockTake,
   buildOutletStockTakeCsv,
   cancelBlindStockTake,
+  filterSheetToReceiptIds,
   getBlindStockTakeSheet,
   getOutletStockTakeSessionDetail,
+  isMissingRpcError,
   listOutletStockTakeSessions,
+  lockedReceiptMonth,
   resolveReceivedInventoryIds,
+  setStockTakeReceiptMonth,
   startBlindStockTake,
   submitBlindStockTake,
   type OutletStockTakeLineRow,
@@ -59,6 +64,12 @@ function describeError(code: string | undefined): string {
       return 'Count session not found.';
     case 'forbidden':
       return 'Only the person who started this count or an admin can cancel it.';
+    case 'no_lines':
+      return 'No lines were received in that month.';
+    case 'invalid_month':
+      return 'Choose a valid month, or count every current line.';
+    case 'receipt_month_locked':
+      return 'This count is already limited to a different month.';
     default:
       return code ?? 'Stock take could not be saved.';
   }
@@ -170,12 +181,34 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         }
         setSession({ id: sheet.session_id, count_date: sheet.count_date });
         const saved = loadReceiptFilter(sheet.session_id);
-        const sheetRows = sheetToCountRows(sheet.lines);
-        if (saved) {
-          setReceivedOn(saved.receivedOn);
-          setRows(sheetRows.filter((r) => saved.ids.includes(r.id)));
-        } else {
-          setRows(sheetRows);
+        const serverMonth = 'receipt_month' in open ? (open.receipt_month ?? null) : undefined;
+        const month = lockedReceiptMonth(serverMonth, saved?.receivedOn);
+        if (!month) {
+          setReceivedOn('');
+          setRows(sheetToCountRows(sheet.lines));
+          return;
+        }
+        setReceivedOn(month);
+        if (serverMonth === null) {
+          await setStockTakeReceiptMonth(sheet.session_id, month);
+        }
+        try {
+          const ids = await resolveReceivedInventoryIds(open.outlet_id, month);
+          saveReceiptFilter(sheet.session_id, month, [...ids]);
+          setRows(sheetToCountRows(filterSheetToReceiptIds(sheet.lines, [...ids])));
+        } catch {
+          // A failed lookup must not fall through to every line: submitting that sheet
+          // writes quantity_on_hand, including zeros, for batches this count did not include.
+          const sameSave = saved && saved.receivedOn.slice(0, 7) === month ? saved.ids : null;
+          if (sameSave) {
+            setRows(sheetToCountRows(filterSheetToReceiptIds(sheet.lines, sameSave)));
+            return;
+          }
+          setRows([]);
+          setMessage({
+            tone: 'err',
+            text: 'Could not load which lines were received that month. Cancel this count rather than counting every line.',
+          });
         }
       } finally {
         setLoadingSheet(false);
@@ -229,42 +262,54 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     setMessage(null);
     setAdminVariance(null);
     try {
-      let receiptIds: Set<string> | null = null;
-      if (receivedOn) {
-        receiptIds = await resolveReceivedInventoryIds(outletId, receivedOn);
-        if (receiptIds.size === 0) {
-          setMessage({
-            tone: 'err',
-            text: `No lines received in ${formatReceiptMonth(receivedOn)}. Clear the month to count every current line.`,
-          });
-          return;
-        }
-      }
-      const res = await startBlindStockTake(outletId, countDate, sessionNotes);
-      if (!res.success) {
-        setMessage({ tone: 'err', text: describeError(res.error) });
+      const requested = receivedOn ? receivedOn.slice(0, 7) : null;
+      let res = await beginBlindStockTake(outletId, countDate, sessionNotes, requested);
+      if (!res.success && requested && isMissingRpcError(res.error)) {
+        setMessage({
+          tone: 'err',
+          text: 'Filtering by the month goods were received needs the latest database update. Count every line, or try again after that update is applied.',
+        });
         return;
       }
-      let sheetRows = sheetToCountRows(res.lines);
-      const saved = !receiptIds ? loadReceiptFilter(res.session_id) : null;
-      if (receiptIds) {
-        saveReceiptFilter(res.session_id, receivedOn, [...receiptIds]);
-        sheetRows = sheetRows.filter((r) => receiptIds?.has(r.id));
-      } else if (saved) {
-        setReceivedOn(saved.receivedOn);
-        sheetRows = sheetRows.filter((r) => saved.ids.includes(r.id));
+      if (!res.success && !requested && isMissingRpcError(res.error)) {
+        res = await startBlindStockTake(outletId, countDate, sessionNotes);
       }
+      if (!res.success) {
+        setMessage({
+          tone: 'err',
+          text: res.error === 'no_lines' ? `No lines received in ${formatReceiptMonth(requested ?? '')}.` : describeError(res.error),
+        });
+        return;
+      }
+      const month = 'receipt_month' in res && res.receipt_month ? res.receipt_month : '';
+      const receivedIds = 'received_ids' in res ? res.received_ids : undefined;
+      let lines = res.lines;
+      if (month) {
+        const ids = receivedIds ?? [...(await resolveReceivedInventoryIds(outletId, month))];
+        saveReceiptFilter(res.session_id, month, ids);
+        lines = filterSheetToReceiptIds(lines, ids);
+      } else {
+        clearReceiptFilter(res.session_id);
+      }
+      setReceivedOn(month);
       setSession({ id: res.session_id, count_date: res.count_date });
-      setRows(sheetRows);
+      setRows(sheetToCountRows(lines));
+      const monthIgnored = Boolean(requested) && !month && Boolean(res.resumed);
       setMessage({
-        tone: 'ok',
-        text: res.resumed
-          ? 'Resumed the count already open for this outlet.'
-          : receiptIds
-            ? `Blind count started for goods received in ${formatReceiptMonth(receivedOn)}. System quantities stay hidden until an admin reviews the result.`
-            : 'Blind count started. Count every line; system quantities stay hidden until an admin reviews the result.',
+        tone: monthIgnored ? 'err' : 'ok',
+        text: monthIgnored
+          ? 'A count of every current line is already open. Cancel it before starting one for a single month.'
+          : res.resumed
+            ? month
+              ? `Resumed the count for goods received in ${formatReceiptMonth(month)}. System quantities stay hidden until an admin reviews the result.`
+              : 'Resumed the count already open for this outlet.'
+            : month
+              ? `Blind count started for goods received in ${formatReceiptMonth(month)}. System quantities stay hidden until an admin reviews the result.`
+              : 'Blind count started. Count every line; system quantities stay hidden until an admin reviews the result.',
       });
       void refreshSessions(outletId, { silent: true });
+    } catch (e) {
+      setMessage({ tone: 'err', text: e instanceof Error ? describeError(e.message) : 'Stock take could not be started.' });
     } finally {
       setSubmitting(false);
     }
@@ -552,7 +597,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               </div>
             )}
             <p className="mt-1 text-xs leading-relaxed text-stone-500">
-              Month the outlet received the goods (hub supply or transfer), from the 1st through the last day. Blank lists every current line. Only listed lines are submitted.
+              Month the outlet received the goods (hub supply or transfer), from the 1st through the last day. The month is saved with the count, so reopening it lists the same lines. Blank lists every current line. Only listed lines are submitted.
             </p>
           </div>
           <div>
@@ -624,7 +669,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             <div className="space-y-3">
               <p className="text-sm text-amber-800">
                 {receivedOn
-                  ? `No lines received in ${formatReceiptMonth(receivedOn)} are on this count sheet. Cancel this count or clear the month and start again.`
+                  ? `No lines received in ${formatReceiptMonth(receivedOn)} are on this count sheet. Cancel this count.`
                   : "No batches on this outlet's count sheet. Cancel this count."}
               </p>
               <button type="button" onClick={() => void handleCancel()} disabled={submitting} className="btn-secondary">

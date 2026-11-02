@@ -8,9 +8,6 @@ import { isLegacyBatchCode, skuForDisplay } from './lotLabel';
 import { compareHubBatches } from './hubBatchPick';
 import type { Outlet } from '../types';
 
-/** Hub supply and outlet-to-outlet transfer both land stock at the outlet. */
-const RECEIPT_MOVEMENT_TYPES = ['supply_in', 'transfer_in'] as const;
-
 export interface OutletStockTakeLineInput {
   outlet_inventory_id: string;
   counted_qty: number;
@@ -117,6 +114,48 @@ export function startBlindStockTake(outletId: string, countDate?: string | null,
   });
 }
 
+export type BeginBlindCountResult =
+  | (Extract<BlindCountSheetResult, { success: true }> & {
+      /** Null when this count lists every current line. */
+      receipt_month?: string | null;
+      /** Null when there is no month filter. An empty array matches nothing — it is not "every line". */
+      received_ids?: string[] | null;
+    })
+  | { success: false; error: string };
+
+/**
+ * Open or resume a blind count. A receipt month is stored on the session in the
+ * same transaction, so another device reloads the same lines. Blank month lists
+ * every current line.
+ */
+export function beginBlindStockTake(
+  outletId: string,
+  countDate?: string | null,
+  notes?: string | null,
+  receiptMonth?: string | null
+) {
+  const month = receiptMonth ? receiptYearMonth(receiptMonth) : null;
+  return callJsonRpc<BeginBlindCountResult>('begin_outlet_stock_take', {
+    p_outlet_id: outletId,
+    p_count_date: countDate ?? null,
+    p_notes: notes?.trim() || null,
+    p_receipt_month: month,
+  });
+}
+
+export function setStockTakeReceiptMonth(sessionId: string, yearMonth: string) {
+  return callJsonRpc<{ success: boolean; error?: string; receipt_month?: string }>('set_outlet_stock_take_receipt_month', {
+    p_session_id: sessionId,
+    p_year_month: receiptYearMonth(yearMonth),
+  });
+}
+
+/** True when PostgREST has not loaded this function yet (migration not applied). */
+export function isMissingRpcError(message: string | undefined): boolean {
+  if (!message) return false;
+  return /schema cache|PGRST202|could not find the function|does not exist/i.test(message);
+}
+
 export function getBlindStockTakeSheet(sessionId: string) {
   return callJsonRpc<BlindCountSheetResult>('get_outlet_stock_take_sheet', { p_session_id: sessionId });
 }
@@ -182,6 +221,8 @@ export interface OutletStockTakeSessionRow {
   status?: 'open' | 'posted' | 'cancelled' | null;
   opened_at?: string | null;
   opened_by?: string | null;
+  /** YYYY-MM when this count lists only goods received that month. Null = every line. Absent until migration 093. */
+  receipt_month?: string | null;
   notes: string | null;
   idempotency_key: string | null;
   created_by: string | null;
@@ -401,11 +442,37 @@ export function receiptYearMonth(value: string): string {
   return value.slice(0, 7);
 }
 
-/** Inclusive first and last calendar days of `YYYY-MM`. */
+/** Inclusive first and last calendar days of `YYYY-MM`. Invalid months are null. */
 export function receiptMonthBounds(yearMonth: string): { from: string; to: string } | null {
   const ym = receiptYearMonth(yearMonth);
-  if (!/^\d{4}-\d{2}$/.test(ym)) return null;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return null;
   return { from: `${ym}-01`, to: lastDayOfMonthIso(ym) };
+}
+
+/**
+ * Month an open count is locked to.
+ * `undefined` means migration 093 is not on this database yet (keep the same-browser save).
+ * A stored month wins. A null column plus a same-browser save is an in-flight filtered count to heal.
+ */
+export function lockedReceiptMonth(serverMonth: string | null | undefined, savedMonth: string | null | undefined): string {
+  const saved = savedMonth ? receiptYearMonth(savedMonth) : '';
+  if (serverMonth === undefined) return /^\d{4}-(0[1-9]|1[0-2])$/.test(saved) ? saved : '';
+  if (serverMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(serverMonth)) return serverMonth;
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(saved) ? saved : '';
+}
+
+/**
+ * Keep lines whose ids are in `receivedIds`.
+ * Null means there is no filter, so every line stays. An empty array matches nothing
+ * and must not be treated as every line.
+ */
+export function filterSheetToReceiptIds<T extends { outlet_inventory_id: string }>(
+  lines: T[],
+  receivedIds: readonly string[] | null | undefined
+): T[] {
+  if (receivedIds == null) return lines;
+  const ids = new Set(receivedIds);
+  return lines.filter((line) => ids.has(line.outlet_inventory_id));
 }
 
 /**
@@ -430,63 +497,19 @@ export function inventoryRowReceivedInMonth(
   return day >= bounds.from && day <= bounds.to;
 }
 
-/** Inventory rows that received stock at this outlet during the given month. */
-export async function fetchOutletInventoryIdsReceivedInMonth(
-  outletId: string,
-  yearMonth: string
-): Promise<string[]> {
-  const bounds = receiptMonthBounds(yearMonth);
-  if (!bounds) return [];
-
-  const ids = new Set<string>();
-  const pageSize = 1000;
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from('outlet_stock_movements')
-      .select('outlet_inventory_id')
-      .eq('outlet_id', outletId)
-      .gte('business_date', bounds.from)
-      .lte('business_date', bounds.to)
-      .in('movement_type', [...RECEIPT_MOVEMENT_TYPES])
-      .range(from, from + pageSize - 1);
-
-    if (error) throw error;
-    const page = data ?? [];
-    for (const row of page) {
-      const id = (row as { outlet_inventory_id?: string | null }).outlet_inventory_id;
-      if (id) ids.add(id);
-    }
-    if (page.length < pageSize) break;
-  }
-  return [...ids];
-}
-
-/** Identity only: when each outlet line was first created. Call before a blind count opens. */
-export async function fetchOutletInventoryCreatedAts(
-  outletId: string
-): Promise<Array<{ id: string; created_at: string | null }>> {
-  const { data, error } = await supabase
-    .from('outlet_inventory')
-    .select('id, created_at')
-    .eq('outlet_id', outletId);
-  if (error) throw error;
-  return (data ?? []) as Array<{ id: string; created_at: string | null }>;
-}
-
-/** Ids to keep on a count sheet for a receipt month (`YYYY-MM`). Empty means no filter. */
-export async function resolveReceivedInventoryIds(outletId: string, yearMonth: string): Promise<Set<string> | null> {
-  if (!yearMonth) return null;
-  const [movementIds, created] = await Promise.all([
-    fetchOutletInventoryIdsReceivedInMonth(outletId, yearMonth),
-    fetchOutletInventoryCreatedAts(outletId),
-  ]);
-  const movements = new Set(movementIds);
-  const keep = new Set<string>();
-  for (const row of created) {
-    if (inventoryRowReceivedInMonth(row.created_at, row.id, yearMonth, movements)) keep.add(row.id);
-  }
-  for (const id of movements) keep.add(id);
-  return keep;
+/**
+ * Ids received in `yearMonth`, via the definer RPC (works while a blind count hides the tables).
+ * Throws if the lookup cannot be trusted. Never returns an empty set for a failed read.
+ */
+export async function resolveReceivedInventoryIds(outletId: string, yearMonth: string): Promise<Set<string>> {
+  const ym = receiptYearMonth(yearMonth);
+  if (!receiptMonthBounds(ym)) throw new Error('invalid_month');
+  const res = await callJsonRpc<{ success: boolean; error?: string; ids?: string[] }>('list_outlet_inventory_received_in_month', {
+    p_outlet_id: outletId,
+    p_year_month: ym,
+  });
+  if (!res.success) throw new Error(res.error || 'receipts_unavailable');
+  return new Set(res.ids ?? []);
 }
 
 /** Build CSV for a posted session (header + lines with variance & remarks). */
