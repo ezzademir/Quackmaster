@@ -8,7 +8,7 @@ import { useAuth } from '../utils/auth';
 import { supabase } from '../utils/supabase';
 
 export function StockTake() {
-  const { isSupervisor, profile } = useAuth();
+  const { isAdmin, isSupervisor, profile } = useAuth();
   const [searchParams] = useSearchParams();
   const initialOutletId = searchParams.get('outlet') ?? undefined;
   const [outlets, setOutlets] = useState<Outlet[]>([]);
@@ -91,7 +91,12 @@ export function StockTake() {
       ) : (
         <CloseDayChecklist compact />
       )}
-      <OutletStockTakeTab outlets={outlets} lockedOutletId={lockedId} initialOutletId={initialOutletId} />
+      <OutletStockTakeTab
+        outlets={outlets}
+        lockedOutletId={lockedId}
+        initialOutletId={initialOutletId}
+        showVariance={isAdmin}
+      />
     </div>
   );
 }

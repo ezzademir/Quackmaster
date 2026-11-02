@@ -6,9 +6,11 @@ import { hubRowAvailableQuantity } from '../../utils/hubInventoryMath';
 import {
   allocateSkuCountToLots,
   buildOutletStockTakeCsv,
+  fetchOutletInventoryIdsReceivedOn,
   fetchOutletInventoryRowsForStockTake,
   getOutletStockTakeSessionDetail,
   groupRowsForSkuCount,
+  inventoryRowReceivedOn,
   listOutletStockTakeSessions,
   postOutletStockTake,
   type OutletStockTakeSessionRow,
@@ -170,11 +172,23 @@ interface Props {
   lockedOutletId?: string | null;
   /** Pre-select outlet from deep link (e.g. reconciliation / audit). */
   initialOutletId?: string;
+  /** Numeric variance is admin-only. Staff still count and recount without seeing the difference. */
+  showVariance?: boolean;
 }
 
-export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initialOutletId }: Props) {
+export function OutletStockTakeTab({
+  outlets,
+  onApplied,
+  lockedOutletId,
+  initialOutletId,
+  showVariance = false,
+}: Props) {
   const [outletId, setOutletId] = useState('');
   const [countDate, setCountDate] = useState(() => malaysiaCalendarDate());
+  /** Blank lists every current line. Set to the day the outlet received the goods. */
+  const [receivedOn, setReceivedOn] = useState('');
+  const [receivedIds, setReceivedIds] = useState<Set<string> | null>(null);
+  const [loadingReceived, setLoadingReceived] = useState(false);
   const [sessionNotes, setSessionNotes] = useState('');
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [loadingInv, setLoadingInv] = useState(false);
@@ -371,6 +385,35 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
   }, [outletId, loadOutletStockTakeData]);
 
   useEffect(() => {
+    if (!outletId || !receivedOn) {
+      setReceivedIds(null);
+      setLoadingReceived(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingReceived(true);
+    setReceivedIds(null);
+    void fetchOutletInventoryIdsReceivedOn(outletId, receivedOn)
+      .then((ids) => {
+        if (!cancelled) setReceivedIds(new Set(ids));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setReceivedIds(new Set());
+        setMessage({
+          tone: 'err',
+          text: e instanceof Error ? e.message : 'Could not load receipts for that date.',
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReceived(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [outletId, receivedOn]);
+
+  useEffect(() => {
     void (async () => {
       const t = await fetchStockTakeVarianceThreshold();
       setVarianceThreshold(t);
@@ -410,10 +453,21 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     return c - r.quantity_on_hand;
   };
 
-  const visibleRows = useMemo(
-    () => filterByStockView(rows, stockView, (r) => r.quantity_on_hand),
-    [rows, stockView]
-  );
+  const visibleRows = useMemo(() => {
+    let dated = rows;
+    if (receivedOn) {
+      dated =
+        receivedIds === null
+          ? []
+          : rows.filter((r) => inventoryRowReceivedOn(r.created_at, r.id, receivedOn, receivedIds));
+    }
+    return filterByStockView(dated, stockView, (r) => r.quantity_on_hand);
+  }, [receivedIds, receivedOn, rows, stockView]);
+
+  const receiptMatchCount = useMemo(() => {
+    if (!receivedOn || receivedIds === null) return rows.length;
+    return rows.filter((r) => inventoryRowReceivedOn(r.created_at, r.id, receivedOn, receivedIds)).length;
+  }, [receivedIds, receivedOn, rows]);
 
   const skuGroups = useMemo(() => {
     if (blindSupervisor || countMode !== 'sku') return [];
@@ -445,7 +499,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
     setSkuRemarks({});
     setRecountPhase(false);
     setRecountStr({});
-  }, [countMode, outletId, rows.length]); // eslint-disable-line react-hooks/exhaustive-deps -- reset when inventory reloads
+  }, [countMode, outletId, receivedOn, rows.length]); // eslint-disable-line react-hooks/exhaustive-deps -- reset when inventory or receipt day changes
 
   useEffect(() => {
     if (countMode !== 'sku') return;
@@ -556,7 +610,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           variance: Number(l.variance),
           line_remark: l.line_remark,
         }));
-        const csv = buildOutletStockTakeCsv(detail, csvLines);
+        const csv = buildOutletStockTakeCsv(detail, csvLines, { includeVariance: showVariance });
         const safeDate = (detail.count_date ?? countDate).replace(/[^\d-]/g, '');
         downloadCsv(`outlet-stock-take-${detail.id.slice(0, 8)}-${safeDate}.csv`, csv);
       }
@@ -582,7 +636,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           setRecountStr(Object.fromEntries(need.map((n) => [n.key, ''])));
           setMessage({
             tone: 'err',
-            text: `${need.length} line(s) exceed the variance threshold (±${varianceThreshold}). Enter a matching recount to confirm before posting.`,
+            text: showVariance
+              ? `${need.length} line(s) exceed the variance threshold (±${varianceThreshold}). Enter a matching recount to confirm before posting.`
+              : `${need.length} line(s) need a matching recount before posting. Re-enter the same counted quantity to confirm.`,
           });
           return;
         }
@@ -655,7 +711,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         variance: Number(l.variance),
         line_remark: l.line_remark,
       }));
-      const csv = buildOutletStockTakeCsv(detail, csvLines);
+      const csv = buildOutletStockTakeCsv(detail, csvLines, { includeVariance: showVariance });
       const safeDate = (detail.count_date ?? '').replace(/[^\d-]/g, '');
       downloadCsv(`outlet-stock-take-${detail.id.slice(0, 8)}-${safeDate}.csv`, csv);
       setMessage({ tone: 'ok', text: 'CSV downloaded.' });
@@ -710,16 +766,18 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Reserved</dt>
                 <dd className="tabular-nums text-right text-gray-600">{r.reserved_quantity}</dd>
               </div>
-              <div>
-                <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Variance</dt>
-                <dd
-                  className={`tabular-nums text-right ${
-                    v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'
-                  }`}
-                >
-                  {v === null ? '—' : v}
-                </dd>
-              </div>
+              {showVariance ? (
+                <div>
+                  <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Variance</dt>
+                  <dd
+                    className={`tabular-nums text-right ${
+                      v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'
+                    }`}
+                  >
+                    {v === null ? '—' : v}
+                  </dd>
+                </div>
+              ) : null}
             </dl>
           ) : null}
           <div className="mt-3">
@@ -801,7 +859,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               className="w-full max-w-[7rem] rounded-lg border border-gray-300 px-2 py-1.5 text-right text-sm tabular-nums md:w-24 md:rounded md:py-1"
             />
           </td>
-          {!blind ? (
+          {!blind && showVariance ? (
             <td className={`px-3 py-2 text-right tabular-nums ${v != null && v !== 0 ? 'font-semibold text-amber-800' : 'text-gray-600'}`}>
               {v === null ? '—' : v}
             </td>
@@ -837,7 +895,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 <th className="hidden md:table-cell px-3 py-2 text-right font-semibold text-gray-700">Reserved</th>
               ) : null}
               <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
-              {!blind ? <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th> : null}
+              {!blind && showVariance ? (
+                <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th>
+              ) : null}
               <th className="min-w-[8rem] px-3 py-2 text-left font-semibold text-gray-700">Line remark</th>
             </tr>
           </thead>
@@ -859,8 +919,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
         </span>
         <p className="mt-1.5 leading-relaxed text-amber-900/90">
           {lockedOutletId
-            ? 'Blind count: use the Ingredients and Finished goods tabs. System quantities, lots, reservations, and variance are hidden. Enter every counted quantity for the active tab, then post. Admin and staff can export full session detail from Stock take.'
-            : 'Count physical stock per lot row or by SKU. Submitting updates on-hand via the server. Lines exceeding the variance threshold require a matching recount before post. Counted quantity cannot be below reserved.'}
+            ? 'Blind count: use the Ingredients and Finished goods tabs. System quantities, lots, reservations, and variance are hidden. Use Received on to list only goods the outlet took in that day, or leave it blank to list every current line. Enter every counted quantity for the lines shown, then post.'
+            : showVariance
+              ? 'Count physical stock per lot row or by SKU. Use Received on to list only goods the outlet took in that day, or leave it blank to list every current line. Only listed lines are posted. Lines exceeding the variance threshold require a matching recount before post.'
+              : 'Count physical stock per lot row or by SKU. Use Received on to list only goods the outlet took in that day, or leave it blank to list every current line. Only listed lines are posted. Some lines require a matching recount before post.'}
         </p>
       </div>
 
@@ -934,13 +996,54 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
               )}
             </div>
             <div className="min-w-0">
-              <label className="mb-1 block text-xs font-medium text-gray-600">Count date</label>
+              <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="stock-take-count-date">
+                Count date
+              </label>
               <input
+                id="stock-take-count-date"
                 type="date"
                 value={countDate}
                 onChange={(e) => setCountDate(e.target.value)}
                 className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
               />
+            </div>
+            <div className="min-w-0 sm:col-span-2">
+              <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="stock-take-received-on">
+                Received on
+              </label>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  id="stock-take-received-on"
+                  type="date"
+                  value={receivedOn}
+                  onChange={(e) => {
+                    setReceivedOn(e.target.value);
+                    setReceivedIds(null);
+                    setLoadingReceived(Boolean(e.target.value));
+                    setRecountPhase(false);
+                    setRecountStr({});
+                  }}
+                  className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-base focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
+                />
+                {receivedOn ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReceivedOn('');
+                      setReceivedIds(null);
+                      setLoadingReceived(false);
+                      setRecountPhase(false);
+                      setRecountStr({});
+                    }}
+                    className="min-h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:min-h-0 sm:py-2"
+                  >
+                    All current lines
+                  </button>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                Day the outlet received the goods (hub supply or transfer). Blank lists every current line. Only listed lines are posted.
+              </p>
             </div>
           </div>
           <div>
@@ -972,14 +1075,16 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
             </p>
           )}
 
-          {loadingInv ? (
+          {loadingInv || loadingReceived ? (
             <div className="py-8 text-center text-sm text-gray-400">Loading inventory…</div>
           ) : !outletId ? (
             <p className="text-sm text-gray-500">Choose an outlet to load rows.</p>
           ) : (countMode === 'sku' && !blindSupervisor ? skuGroups.length === 0 : visibleRows.length === 0) ? (
             <div className="space-y-1 text-sm text-amber-800">
               <p>
-                {rows.length > 0 && stockView === 'in_stock'
+                {rows.length > 0 && receivedOn && receiptMatchCount === 0
+                  ? `No lines received on ${receivedOn}. Clear the date to list every current line.`
+                  : rows.length > 0 && stockView === 'in_stock'
                   ? 'No in-stock lots. Switch to All lots for empty / audit.'
                   : lockedOutletId
                     ? supervisorTab === 'ingredients'
@@ -1022,7 +1127,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                           <th className="px-3 py-2 text-right font-semibold text-gray-700">Lots</th>
                           <th className="px-3 py-2 text-right font-semibold text-gray-700">System QoH</th>
                           <th className="px-3 py-2 text-right font-semibold text-gray-700">Counted</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th>
+                          {showVariance ? (
+                            <th className="px-3 py-2 text-right font-semibold text-gray-700">Variance</th>
+                          ) : null}
                           <th className="px-3 py-2 text-left font-semibold text-gray-700">Remark</th>
                         </tr>
                       </thead>
@@ -1049,13 +1156,15 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                                   className="w-24 rounded border border-gray-300 px-2 py-1 text-right text-sm tabular-nums"
                                 />
                               </td>
-                              <td
-                                className={`px-3 py-2 text-right tabular-nums ${
-                                  v != null && Math.abs(v) > varianceThreshold ? 'font-semibold text-amber-800' : 'text-gray-600'
-                                }`}
-                              >
-                                {v === null ? '—' : v}
-                              </td>
+                              {showVariance ? (
+                                <td
+                                  className={`px-3 py-2 text-right tabular-nums ${
+                                    v != null && Math.abs(v) > varianceThreshold ? 'font-semibold text-amber-800' : 'text-gray-600'
+                                  }`}
+                                >
+                                  {v === null ? '—' : v}
+                                </td>
+                              ) : null}
                               <td className="px-3 py-2">
                                 <input
                                   value={skuRemarks[g.key] ?? ''}
@@ -1079,7 +1188,7 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                           <p className="font-medium text-gray-900">{g.label}</p>
                           <p className="text-xs text-gray-500">
                             {g.lots.length} lot(s) · System {g.system_qoh}
-                            {v != null ? ` · Var ${v}` : ''}
+                            {showVariance && v != null ? ` · Var ${v}` : ''}
                           </p>
                           <input
                             type="number"
@@ -1110,7 +1219,9 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
                 <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
                   <p className="text-sm font-semibold text-amber-950">Recount required</p>
                   <p className="text-xs text-amber-900">
-                    Re-enter the same counted quantity for each line below (threshold ±{varianceThreshold}).
+                    {showVariance
+                      ? `Re-enter the same counted quantity for each line below (threshold ±${varianceThreshold}).`
+                      : 'Re-enter the same counted quantity for each line below.'}
                   </p>
                   {linesNeedingRecount().map((n) => (
                     <div key={n.key} className="flex flex-wrap items-center gap-2 text-sm">
@@ -1165,8 +1276,10 @@ export function OutletStockTakeTab({ outlets, onApplied, lockedOutletId, initial
           <p className="text-xs leading-relaxed text-gray-500">
             {outletId ? 'Filtered to the selected outlet. ' : 'All outlets (latest 100). '}
             {blindSupervisor
-              ? 'Your posted sessions appear here for reference. Admin or staff can export CSV from Inventory → Outlet stock take.'
-              : 'Export CSV includes session metadata, variance, and line remarks.'}
+              ? 'Your posted sessions appear here for reference. An admin can export the full session.'
+              : showVariance
+                ? 'Export CSV includes session metadata, variance, and line remarks.'
+                : 'Export CSV includes session metadata and line remarks.'}
           </p>
           <ul className="max-h-[min(28rem,55vh)] space-y-2 overflow-y-auto overscroll-y-contain text-sm sm:max-h-[28rem]">
             {sessions.length === 0 ? (
