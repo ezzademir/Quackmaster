@@ -9,6 +9,7 @@ import MIG088 from '../../supabase/migrations/20261024100200_088_stock_entity_ta
 import MIG089 from '../../supabase/migrations/20261024100400_089_po_cancel_request.sql?raw';
 import MIG091 from '../../supabase/migrations/20261026091332_091_void_supplier_bill.sql?raw';
 import MIG092 from '../../supabase/migrations/20261102170000_092_po_bills_and_prices.sql?raw';
+import MIG094 from '../../supabase/migrations/20261103120000_094_po_bill_follows_receipt_adjustment.sql?raw';
 import MIG090 from '../../supabase/migrations/20261024100300_090_profile_role_tag_guards.sql?raw';
 import LIVE_CANCEL from './__fixtures__/live_cancel_purchase_order.sql?raw';
 import RB088 from '../../supabase/rollbacks/088_rollback.sql?raw';
@@ -193,7 +194,7 @@ const UP_TO_088: [string, string][] = [
 ];
 
 const db = pgliteTemplate(async (pg) => {
-  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091], ['092', MIG092]]) {
+  for (const [n, sql] of [...UP_TO_088, ['089', MIG089], ['091', MIG091], ['092', MIG092], ['094', MIG094]]) {
     try {
       await pg.exec(sql);
     } catch (e) {
@@ -357,6 +358,44 @@ describe('089: request then approve, reject, admin direct, guards, RLS, atomicit
       .toMatchObject({ success: false, error: 'forbidden' });
     expect(await as(pg, BUYER_MH, () => err(pg.exec(`select request_cancel_purchase_order('${PO_QT}', 'other tag')`)))).toMatch(/not_authorized/);
     expect(await reqs(pg)).toHaveLength(1);
+  });
+
+  it('a receipt correction updates the auto bill, and keeping the invoice total does not', async () => {
+    const pg = await db();
+    const bill = () => rows(pg, `select amount_rm::float a, payment_status from v_supplier_bill_status where purchase_order_id='${PO_QT}' and voided_at is null`);
+    expect(await bill()).toEqual([{ a: 30, payment_status: 'unpaid' }]);
+
+    await as(pg, BUYER_QT, () => deliver(pg, 6));
+    expect(await poState(pg)).toEqual([{ status: 'partial', rcv: 6 }]);
+    expect(await bill()).toEqual([{ a: 30, payment_status: 'unpaid' }]);
+    expect((await as(pg, ADMIN, () => rpc(pg, `select close_po_short('${PO_QT}', 'short delivery') r`)))).toMatchObject({ success: true, status: 'closed_short' });
+    expect(await bill()).toEqual([{ a: 18, payment_status: 'unpaid' }]);
+    expect((await as(pg, ADMIN, () => rpc(pg, `select adjust_po_receipt('${L_QT}', 7, 'found another kg') r`)))).toMatchObject({ success: true, status: 'closed_short' });
+    expect(await bill()).toEqual([{ a: 21, payment_status: 'unpaid' }]);
+
+    const pg2 = await db();
+    const bill2 = () => rows(pg2, `select amount_rm::float a from v_supplier_bill_status where purchase_order_id='${PO_QT}' and voided_at is null`);
+    await as(pg2, BUYER_QT, () => deliver(pg2, 10));
+    expect((await as(pg2, ADMIN, () => rpc(pg2, `select adjust_po_receipt('${L_QT}', 12, 'extra arrived') r`)))).toMatchObject({ success: true, status: 'received' });
+    expect(await bill2()).toEqual([{ a: 36 }]);
+    expect((await as(pg2, ADMIN, () => rpc(pg2, `select adjust_po_receipt('${L_QT}', 11, 'recount') r`)))).toMatchObject({ success: true, status: 'received' });
+    expect(await bill2()).toEqual([{ a: 33 }]);
+    expect((await as(pg2, ADMIN, () => rpc(pg2, `select adjust_po_receipt('${L_QT}', 12, 'invoice total unchanged', true) r`)))).toMatchObject({ success: true, status: 'received' });
+    expect(await bill2()).toEqual([{ a: 33 }]);
+
+    const pg3 = await db();
+    await as(pg3, BUYER_QT, () => deliver(pg3, 10));
+    await as(pg3, ADMIN, () => rpc(pg3, `select adjust_po_receipt('${L_QT}', 12, 'extra arrived') r`));
+    expect((await as(pg3, ADMIN, () => rpc(pg3, `select adjust_po_receipt('${L_QT}', 8, 'only eight') r`)))).toMatchObject({ success: true, status: 'partial' });
+    expect(await rows(pg3, `select amount_rm::float a from v_supplier_bill_status where purchase_order_id='${PO_QT}' and voided_at is null`)).toEqual([{ a: 30 }]);
+
+    const paid = await rows(pg2, `select id from supplier_bills where purchase_order_id='${PO_QT}' and voided_at is null`);
+    await as(pg2, ADMIN, () => pg2.exec(`INSERT INTO supplier_payments (bill_id, amount_rm, paid_on, method) VALUES ('${paid[0].id}', 33, '2026-11-03', 'cash')`));
+    expect((await as(pg2, ADMIN, () => rpc(pg2, `select adjust_po_receipt('${L_QT}', 10, 'back to ordered') r`)))).toMatchObject({ success: true, status: 'received' });
+    expect(await bill2()).toEqual([{ a: 33 }]);
+    expect((await as(pg2, ADMIN, () => rpc(pg2, `select adjust_po_receipt('${L_QT}', 8, 'short after all') r`)))).toMatchObject({ success: true, status: 'partial' });
+    expect(await rows(pg2, `select quantity_received::float q from purchase_order_items where id='${L_QT}'`)).toEqual([{ q: 8 }]);
+    expect(await bill2()).toEqual([{ a: 33 }]);
   });
 
   it('an accepted order has an unpaid bill and a price for that supplier and item', async () => {
