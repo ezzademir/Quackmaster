@@ -556,7 +556,10 @@ function NewRunModal({
           .update({ status: 'cancelled' })
           .eq('id', run.id);
 
-        setError(`QC Evaluation Failed: ${result.error}`);
+        const qcRejected = result.qcReport?.qcResult.passed === false;
+        setError(
+          `${qcRejected ? 'QC Evaluation Failed' : 'Production failed'}: ${result.error ?? result.message}`
+        );
         setSaving(false);
         return;
       }
