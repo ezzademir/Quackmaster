@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import MIG from '../../supabase/migrations/20261105100000_093_fix_production_for_update_aggregate.sql?raw';
+import FENCE from '../../supabase/migrations/20261105110000_095_lot_inputs_procurement_fence.sql?raw';
 import { pgliteTemplate } from '../test/pgliteTemplate';
 
 const RECIPE = '00000000-0000-0000-0000-0000000000a1';
@@ -17,10 +18,16 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;
 END $$;
 CREATE SCHEMA IF NOT EXISTS auth;
-CREATE TABLE test_ctx (uid uuid, staff boolean);
-INSERT INTO test_ctx VALUES ('00000000-0000-0000-0000-0000000000e1', true);
+CREATE TABLE test_ctx (uid uuid, staff boolean, procurement boolean DEFAULT false);
+INSERT INTO test_ctx VALUES ('00000000-0000-0000-0000-0000000000e1', true, false);
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT uid FROM test_ctx $$;
 CREATE FUNCTION public.is_authenticated_active_staff() RETURNS boolean LANGUAGE sql AS $$ SELECT staff FROM test_ctx $$;
+CREATE FUNCTION public.is_procurement_user() RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT COALESCE((SELECT procurement FROM test_ctx), false)
+$$;
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT SELECT ON test_ctx TO authenticated;
 CREATE TABLE data_ledger (
   action text, entity_type text, entity_id text, module text, operation text,
   reference_id text, before_data jsonb, after_data jsonb, delta_data jsonb, metadata jsonb
@@ -164,5 +171,32 @@ describe('093 production completion FOR UPDATE + aggregate', () => {
     expect(result.error).toBe('insufficient_raw_material');
     const status = await pg.query<{ status: string }>(`SELECT status FROM production_runs WHERE id = '${RUN}'`);
     expect(status.rows[0].status).toBe('in_progress');
+  });
+
+  it('hides finished-lot ingredient quantities from procurement', async () => {
+    const pg = await fresh();
+    const result = await post(pg, 360);
+    expect(result.success).toBe(true);
+    await pg.exec(FENCE);
+
+    const asUser = async (procurement: boolean) => {
+      await pg.exec(`UPDATE test_ctx SET procurement = ${procurement}`);
+      await pg.exec('SET ROLE authenticated');
+      try {
+        const seen = await pg.query<{ n: number }>(`SELECT count(*)::int n FROM inventory_lot_inputs`);
+        return seen.rows[0].n;
+      } finally {
+        await pg.exec('RESET ROLE');
+      }
+    };
+
+    expect(await asUser(false)).toBe(2);
+    expect(await asUser(true)).toBe(0);
+
+    await pg.exec('DROP POLICY inventory_lot_inputs_deny_procurement ON inventory_lot_inputs');
+    expect(await asUser(true)).toBe(2);
+    await pg.exec(FENCE);
+    expect(await asUser(true)).toBe(0);
+    expect(await asUser(false)).toBe(2);
   });
 });
