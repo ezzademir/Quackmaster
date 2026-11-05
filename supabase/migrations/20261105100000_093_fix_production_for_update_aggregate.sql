@@ -38,6 +38,27 @@ CREATE POLICY "Authenticated users can view inventory_lot_inputs"
 REVOKE ALL ON TABLE public.inventory_lot_inputs FROM PUBLIC, anon;
 GRANT SELECT ON TABLE public.inventory_lot_inputs TO authenticated;
 
+-- 085 denies procurement on every public table unless a later migration classifies the new one.
+-- This table records the raw-material lots and quantities inside a finished lot (the recipe).
+-- Skip when 085 is not installed; 095 repeats the fence for a database that already ran this file.
+DO $lot_inputs_fence$
+BEGIN
+  IF to_regprocedure('public.is_procurement_user()') IS NULL THEN
+    RETURN;
+  END IF;
+  EXECUTE 'DROP POLICY IF EXISTS inventory_lot_inputs_deny_procurement ON public.inventory_lot_inputs';
+  EXECUTE $policy$
+    CREATE POLICY inventory_lot_inputs_deny_procurement
+      ON public.inventory_lot_inputs
+      AS RESTRICTIVE
+      FOR ALL
+      TO authenticated
+      USING (NOT public.is_procurement_user())
+      WITH CHECK (NOT public.is_procurement_user())
+  $policy$;
+END
+$lot_inputs_fence$;
+
 CREATE OR REPLACE FUNCTION public.post_production_completion_inventory(
   p_production_run_id uuid,
   p_product_batch text,
@@ -262,3 +283,19 @@ $$;
 
 REVOKE ALL ON FUNCTION public.post_production_completion_inventory(uuid, text, numeric) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.post_production_completion_inventory(uuid, text, numeric) TO authenticated;
+
+-- Same body as before 093: active staff only. Classify the replacement so it is not a new exposure.
+DO $lot_inputs_exposure$
+BEGIN
+  IF to_regclass('public.procurement_exposure_allow') IS NULL THEN
+    RETURN;
+  END IF;
+  INSERT INTO public.procurement_exposure_allow (kind, name, note)
+  VALUES (
+    'function',
+    'post_production_completion_inventory',
+    'staff-gated: returns not_authenticated_or_inactive unless is_authenticated_active_staff(); procurement is not staff'
+  )
+  ON CONFLICT (kind, name) DO UPDATE SET note = EXCLUDED.note;
+END
+$lot_inputs_exposure$;
