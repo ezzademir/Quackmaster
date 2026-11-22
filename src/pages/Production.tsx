@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { saveRunMaterialsOrRollback, type MaterialsClient } from '../utils/productionRunMaterials';
+import {
+  canCompleteRunWithMaterials,
+  isCurrentRecipeLoad,
+  runMaterialsFromInventory,
+  type RecipeMaterialsLoad,
+} from '../utils/productionRecipeMaterials';
 import { Plus, CreditCard as Edit2, Trash2, ChevronRight, AlertCircle, Shield, Printer, RotateCcw, Ban } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Modal } from '../components/Modal';
@@ -325,7 +331,7 @@ async function allocateNextRunNumber(): Promise<string> {
 
 type RecipeWithIngredients = Recipe & { ingredients?: (RecipeIngredient & { material?: RawMaterial })[] };
 
-function NewRunModal({
+export function NewRunModal({
   recipes,
   onClose,
   onSave,
@@ -352,6 +358,10 @@ function NewRunModal({
   const [actual_output, setActual] = useState('');
   const [notes, setNotes] = useState('');
   const [runMaterials, setRunMaterials] = useState<RunMaterial[]>([]);
+  const [materialsLoad, setMaterialsLoad] = useState<RecipeMaterialsLoad>(
+    initialRecipeId ? 'loading' : 'idle',
+  );
+  const recipeLoadRef = useRef(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [printLabel, setPrintLabel] = useState<FinishedGoodsLotLabelData | null>(null);
@@ -362,44 +372,55 @@ function NewRunModal({
   }, []);
 
   async function selectRecipe(id: string) {
+    const requestId = recipeLoadRef.current + 1;
+    recipeLoadRef.current = requestId;
     setRecipeId(id);
+    setRunMaterials([]);
+    setError('');
     const recipe = recipes.find((r) => r.id === id);
     if (!recipe) {
-      setRunMaterials([]);
       setPlanned('');
+      setMaterialsLoad('idle');
       return;
     }
 
+    setMaterialsLoad('loading');
     const standardBatch = recipe.standard_batch_size;
     setPlanned(standardBatch.toString());
 
-    // Fetch available quantities for raw materials
-    const materialIds = (recipe.ingredients ?? []).map((ing) => ing.raw_material_id);
-    const { data: inventoryData, error: invError } = await supabase
-      .from('hub_inventory')
-      .select('raw_material_id, quantity_on_hand')
-      .in('raw_material_id', materialIds);
+    const ingredients = recipe.ingredients ?? [];
+    const materialIds = ingredients.map((ing) => ing.raw_material_id);
+    let inventoryRows: { raw_material_id: string; quantity_on_hand: number }[] = [];
+    if (materialIds.length > 0) {
+      const { data: inventoryData, error: invError } = await supabase
+        .from('hub_inventory')
+        .select('raw_material_id, quantity_on_hand')
+        .in('raw_material_id', materialIds);
 
-    if (invError) {
-      console.error('Error fetching inventory:', invError);
-      setError('Failed to load raw material inventory. Please try again.');
-      return;
+      if (!isCurrentRecipeLoad(requestId, recipeLoadRef.current)) return;
+      if (invError) {
+        console.error('Error fetching inventory:', invError);
+        setRunMaterials([]);
+        setMaterialsLoad('error');
+        setError('Failed to load raw material inventory. Please try again.');
+        return;
+      }
+      inventoryRows = inventoryData ?? [];
     }
 
-    const availableQuantities = new Map(
-      (inventoryData ?? []).map((item) => [item.raw_material_id, item.quantity_on_hand])
-    );
-
+    if (!isCurrentRecipeLoad(requestId, recipeLoadRef.current)) return;
     setRunMaterials(
-      (recipe.ingredients ?? []).map((ing) => ({
-        raw_material_id: ing.raw_material_id,
-        quantity_consumed: ing.quantity_required.toString(),
-        required: ing.quantity_required, // Base requirement for 1 batch
-        material_name: ing.material?.name ?? '—',
-        unit: ing.material?.unit_of_measure ?? '',
-        available_qty: availableQuantities.get(ing.raw_material_id) ?? 0,
-      }))
+      runMaterialsFromInventory(
+        ingredients.map((ing) => ({
+          raw_material_id: ing.raw_material_id,
+          quantity_required: ing.quantity_required,
+          material_name: ing.material?.name ?? '—',
+          unit: ing.material?.unit_of_measure ?? '',
+        })),
+        inventoryRows,
+      ),
     );
+    setMaterialsLoad('ready');
   }
 
   function updatePlannedOutput(val: string) {
@@ -448,6 +469,14 @@ function NewRunModal({
 
   async function handleSave() {
     if (!recipe_id) { setError('Select a recipe'); return; }
+    if (!canCompleteRunWithMaterials(materialsLoad)) {
+      setError(
+        materialsLoad === 'error'
+          ? 'Failed to load raw material inventory. Please try again.'
+          : 'Raw material inventory is still loading. Wait for this recipe, then complete the run.',
+      );
+      return;
+    }
     if (!actual_output || parseFloat(actual_output) < 0) { setError('Enter actual output'); return; }
 
     // Validate sufficient stock
@@ -625,6 +654,15 @@ function NewRunModal({
           <div>
             <p className="text-sm font-medium text-red-900">Error</p>
             <p className="text-sm text-red-700">{error}</p>
+            {materialsLoad === 'error' && recipe_id && (
+              <button
+                type="button"
+                onClick={() => void selectRecipe(recipe_id)}
+                className="mt-2 text-sm font-medium text-red-800 underline"
+              >
+                Try again
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -762,8 +800,12 @@ function NewRunModal({
       </div>
       <div className="mt-6 flex justify-end gap-3">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <button onClick={handleSave} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors">
-          {saving ? 'Processing…' : 'Complete Run & Update Stock'}
+        <button
+          onClick={handleSave}
+          disabled={saving || (recipe_id !== '' && !canCompleteRunWithMaterials(materialsLoad))}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+        >
+          {saving ? 'Processing…' : materialsLoad === 'loading' ? 'Loading materials…' : 'Complete Run & Update Stock'}
         </button>
       </div>
     </Modal>
