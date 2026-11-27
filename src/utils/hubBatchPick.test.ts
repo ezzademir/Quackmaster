@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./supabase', () => ({ supabase: { rpc: vi.fn(), from: vi.fn(), auth: { getSession: vi.fn() } } }));
-import { allocateHubProductItems, compareHubBatches, isBatchExpired, nestedRunNumber, runSequence } from './hubBatchPick';
+import {
+  allocateHubProductItems,
+  compareHubBatches,
+  isBatchExpired,
+  nestedRunNumber,
+  planFinishedGoodsSupply,
+  runSequence,
+  supplyProductKeyForPar,
+} from './hubBatchPick';
 import { malaysiaCalendarDate } from './dateRange';
 import { allocateSkuCountToLots } from './outletStockTakeService';
 import { expiredDispatchWarning } from './distributionService';
@@ -64,6 +72,45 @@ describe('creation-time preview (a)', () => {
 
   it('returns null on shortfall', () => {
     expect(allocateHubProductItems(lots, 10_000, today)).toBeNull();
+  });
+});
+
+describe('finished-goods supply stays on one product', () => {
+  const today = '2026-11-27';
+  const batches = [
+    { id: 'sauce-soon', product_batch: 'SAUCE', available: 6, expiry_date: '2026-11-28', run_number: 'RUN-0002', lot_label: 'SAUCE-1', recipe_sku: 'SAUCE' },
+    { id: 'noodle-a', product_batch: 'QUACKTEOW', available: 4, expiry_date: '2026-12-01', run_number: 'RUN-0009', lot_label: 'QT-1', recipe_sku: 'QUACKTEOW' },
+    { id: 'noodle-b', product_batch: 'QUACKTEOW', available: 20, expiry_date: '2026-12-05', run_number: 'RUN-0010', lot_label: 'QT-2', recipe_sku: 'QUACKTEOW' },
+  ];
+
+  it('does not take an earlier-expiring different product when the requested SKU can cover the quantity', () => {
+    const mixed = allocateHubProductItems(batches, 10, today);
+    expect(mixed?.map((line) => [line.hubInventoryId, line.quantity])).toEqual([
+      ['sauce-soon', 6],
+      ['noodle-a', 4],
+    ]);
+
+    const plan = planFinishedGoodsSupply(batches, 'QUACKTEOW', 10, today);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.available).toBe(24);
+    expect(plan.items.map((line) => [line.hubInventoryId, line.quantity, line.product_batch])).toEqual([
+      ['noodle-a', 4, 'QUACKTEOW'],
+      ['noodle-b', 6, 'QUACKTEOW'],
+    ]);
+  });
+
+  it('refuses a quantity the chosen product cannot cover even when other products have stock', () => {
+    const plan = planFinishedGoodsSupply(batches, 'SAUCE', 10, today);
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.error).toContain('6');
+  });
+
+  it('maps a PAR key to that product only', () => {
+    expect(supplyProductKeyForPar(batches, 'QUACKTEOW')).toBe('QUACKTEOW');
+    expect(supplyProductKeyForPar(batches, 'SAUCE')).toBe('SAUCE');
+    expect(supplyProductKeyForPar(batches, 'MISSING')).toBeNull();
   });
 });
 

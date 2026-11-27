@@ -7,7 +7,13 @@ import { HubAtpCompact } from '../components/HubAtpCompact';
 import { supabase } from '../utils/supabase';
 import { logActivity } from '../utils/activityLog';
 import { isDateInRange, isCalendarDateInRange, malaysiaCalendarDate, type DateRange } from '../utils/dateRange';
-import { allocateHubProductItems, compareHubBatches, isBatchExpired } from '../utils/hubBatchPick';
+import {
+  compareHubBatches,
+  isBatchExpired,
+  planFinishedGoodsSupply,
+  supplyProductKey,
+  supplyProductKeyForPar,
+} from '../utils/hubBatchPick';
 import {
   dispatchSupplyOrder,
   confirmSupplyOrderReceipt,
@@ -143,13 +149,11 @@ function OutletModal({
 // ---- New Supply Order Modal ----
 function NewSupplyOrderModal({
   outlets,
-  hubProductQty,
   hubProductLines,
   onClose,
   onSave,
 }: {
   outlets: Outlet[];
-  hubProductQty: number;
   hubProductLines: {
     id: string;
     product_batch: string | null;
@@ -158,17 +162,38 @@ function NewSupplyOrderModal({
     expiry_date?: string | null;
     lot_label?: string | null;
     run_number?: string | null;
+    recipe_sku?: string | null;
   }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
 }) {
   const [outlet_id, setOutletId] = useState('');
   const [supply_date, setSupplyDate] = useState(() => malaysiaCalendarDate());
+  const [productKey, setProductKey] = useState<string | null>(null);
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [parSuggestions, setParSuggestions] = useState<ReorderSuggestion[]>([]);
+
+  const productOptions = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; available: number }>();
+    for (const line of hubProductLines) {
+      if (line.available <= 0) continue;
+      const key = supplyProductKey(line.product_batch);
+      const label = (line.recipe_sku ?? '').trim() || key || 'Unlabeled product';
+      const existing = map.get(key);
+      if (existing) {
+        existing.available += line.available;
+      } else {
+        map.set(key, { key, label, available: line.available });
+      }
+    }
+    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [hubProductLines]);
+
+  const selectedProductKey = productKey ?? (productOptions.length === 1 ? productOptions[0].key : null);
+  const selectedProduct = productOptions.find((option) => option.key === selectedProductKey) ?? null;
 
   useEffect(() => {
     if (!outlet_id) {
@@ -191,9 +216,21 @@ function NewSupplyOrderModal({
   const qtyParsed = parseFloat(quantity);
   const allocationPreview = useMemo(() => {
     const q = parseFloat(quantity);
-    if (!Number.isFinite(q) || q <= 0) return null;
-    return allocateHubProductItems(hubProductLines, q, malaysiaCalendarDate());
-  }, [quantity, hubProductLines]);
+    if (selectedProductKey == null || !Number.isFinite(q) || q <= 0) return null;
+    const plan = planFinishedGoodsSupply(hubProductLines, selectedProductKey, q, malaysiaCalendarDate());
+    return plan.ok ? plan.items : null;
+  }, [quantity, hubProductLines, selectedProductKey]);
+
+  function applyParSuggestion(suggestion: ReorderSuggestion) {
+    const key = supplyProductKeyForPar(hubProductLines, suggestion.par_key);
+    if (key == null) {
+      setError(`No hub stock for ${suggestion.label}. That suggestion stays on its own product.`);
+      return;
+    }
+    setError('');
+    setProductKey(key);
+    setQuantity(String(suggestion.suggested_qty));
+  }
 
   async function handleSave() {
     const qty = parseFloat(quantity);
@@ -209,28 +246,28 @@ function NewSupplyOrderModal({
       return;
     }
 
-    if (qty > hubProductQty) {
-      setError(`Insufficient hub stock (${hubProductQty} units available)`);
+    if (selectedProductKey == null) {
+      setError(
+        productOptions.length === 0
+          ? 'No finished goods in hub inventory. Complete a production run first.'
+          : 'Choose which product to send. A supply order cannot mix products.'
+      );
+      return;
+    }
+
+    const plan = planFinishedGoodsSupply(hubProductLines, selectedProductKey, qty, malaysiaCalendarDate());
+    if (!plan.ok) {
+      setError(plan.error);
       return;
     }
 
     setSaving(true);
 
     try {
-      const items = allocateHubProductItems(hubProductLines, qty, malaysiaCalendarDate());
-      if (!items?.length) {
-        setError(
-          hubProductQty <= 0
-            ? 'No finished goods in hub inventory. Complete a production run first.'
-            : `Insufficient hub stock (${hubProductQty} units available across batches)`
-        );
-        return;
-      }
-
       const result = await createSupplyOrder({
         outletId: outlet_id,
         supplyDate: supply_date,
-        items,
+        items: plan.items,
         notes,
       });
 
@@ -260,7 +297,11 @@ function NewSupplyOrderModal({
       )}
       <div className="space-y-4">
         <div className="rounded-lg bg-teal-50 px-4 py-3 text-sm text-teal-700">
-          Hub product stock available: <strong>{hubProductQty} units</strong>
+          {selectedProduct
+            ? <>{selectedProduct.label} available: <strong>{selectedProduct.available} units</strong></>
+            : productOptions.length === 0
+              ? 'No finished goods in hub inventory.'
+              : 'Choose a product. Stock is held for that product only.'}
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-stone-700">Outlet *</label>
@@ -281,7 +322,7 @@ function NewSupplyOrderModal({
                     <button
                       type="button"
                       className="font-medium text-teal-800 underline"
-                      onClick={() => setQuantity(String(s.suggested_qty))}
+                      onClick={() => applyParSuggestion(s)}
                     >
                       Use qty
                     </button>
@@ -297,6 +338,23 @@ function NewSupplyOrderModal({
             className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20" />
           <p className="mt-1 text-xs text-stone-500">Shown in the supply orders list; unchanged when the order is later dispatched.</p>
         </div>
+        {productOptions.length > 1 && (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-stone-700">Product *</label>
+            <select
+              value={selectedProductKey ?? ''}
+              onChange={(e) => setProductKey(e.target.value === '' ? null : e.target.value)}
+              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20"
+            >
+              <option value="">Select product…</option>
+              {productOptions.map((option) => (
+                <option key={option.key || 'unlabeled'} value={option.key}>
+                  {option.label} ({option.available} available)
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="mb-1 block text-sm font-medium text-stone-700">Quantity *</label>
           <input type="number" min="0" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)}
@@ -305,7 +363,7 @@ function NewSupplyOrderModal({
             <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">FEFO allocation preview</p>
               <p className="mt-1 text-xs text-stone-500">
-                Preview only. Batches are picked again at dispatch: oldest expiry first, then lowest run number.
+                Preview only, for this product. Batches are picked again at dispatch: oldest expiry first, then lowest run number.
               </p>
               <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm">
                 {allocationPreview.map((line, i) => (
@@ -329,9 +387,9 @@ function NewSupplyOrderModal({
               Warning: this preview includes expired batches. Dispatch will not be blocked, but the expired lines will be flagged.
             </p>
           )}
-          {Number.isFinite(qtyParsed) && qtyParsed > 0 && allocationPreview === null && (
+          {selectedProductKey != null && Number.isFinite(qtyParsed) && qtyParsed > 0 && allocationPreview === null && (
             <p className="mt-2 text-xs text-amber-700">
-              This quantity cannot be covered by FEFO allocation across current hub batches (insufficient available).
+              This quantity cannot be covered by this product&apos;s hub batches.
             </p>
           )}
         </div>
@@ -1313,7 +1371,6 @@ export function Distribution() {
   const [tab, setTab] = useState<DistributionTab>('orders');
   const [orders, setOrders] = useState<SOWithOutlet[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
-  const [hubProductQty, setHubProductQty] = useState(0);
   /** Finished-goods hub rows for reservations (real UUIDs). */
   const [hubProductLines, setHubProductLines] = useState<HubLotLine[]>([]);
   const [outletLots, setOutletLots] = useState<OutletLotRow[]>([]);
@@ -1525,7 +1582,6 @@ export function Distribution() {
     setTransfers((ots ?? []) as OTWithOutlets[]);
     setHubProductLines(hubLines);
     setOutletLots(lotRows);
-    setHubProductQty(currentAvailable);
     setStockMetrics({
       totalGenerated,
       totalDispatched,
@@ -1995,7 +2051,6 @@ export function Distribution() {
       {showNewSO && (
         <NewSupplyOrderModal
           outlets={outlets}
-          hubProductQty={hubProductQty}
           hubProductLines={hubProductLines}
           onClose={() => setShowNewSO(false)}
           onSave={async () => {
