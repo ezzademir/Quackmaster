@@ -55,8 +55,76 @@ export interface PreviewLine {
 }
 
 /**
+ * Dispatch re-picks finished goods by trimmed `hub_inventory.product_batch`.
+ * A supply order has to use that same key, or a quantity meant for one product
+ * is held against whichever other product expires first.
+ */
+export function supplyProductKey(productBatch: string | null | undefined): string {
+  return (productBatch ?? '').trim();
+}
+
+export type FinishedGoodsSupplyPlan =
+  | { ok: true; items: PreviewLine[]; available: number }
+  | { ok: false; error: string };
+
+/** FEFO preview and hold for one product only. Other SKUs in `batches` are ignored. */
+export function planFinishedGoodsSupply(
+  batches: PreviewBatch[],
+  productKey: string,
+  quantity: number,
+  todayMyt: string
+): FinishedGoodsSupplyPlan {
+  const selected = batches.filter(
+    (batch) => supplyProductKey(batch.product_batch) === productKey && batch.available > 0
+  );
+  const available = selected.reduce((sum, batch) => sum + batch.available, 0);
+  if (selected.length === 0) {
+    return { ok: false, error: 'Choose a product that has hub stock.' };
+  }
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return { ok: false, error: 'Enter a quantity greater than zero.' };
+  }
+  if (quantity > available + 1e-9) {
+    return {
+      ok: false,
+      error: `Insufficient hub stock (${available} units available for this product)`,
+    };
+  }
+  const items = allocateHubProductItems(selected, quantity, todayMyt);
+  if (!items) {
+    return {
+      ok: false,
+      error: `Insufficient hub stock (${available} units available for this product)`,
+    };
+  }
+  return { ok: true, items, available };
+}
+
+/**
+ * Hub row key for a PAR suggestion. Matches `product_batch` or the lot's recipe SKU.
+ * Returns null when no stocked row matches, or when the suggestion hits more than one product.
+ */
+export function supplyProductKeyForPar(
+  batches: Array<Pick<PreviewBatch, 'product_batch' | 'available'> & { recipe_sku?: string | null }>,
+  parKey: string
+): string | null {
+  const want = parKey.trim();
+  if (!want) return null;
+  const keys = new Set<string>();
+  for (const batch of batches) {
+    if (batch.available <= 0) continue;
+    const key = supplyProductKey(batch.product_batch);
+    const recipe = (batch.recipe_sku ?? '').trim();
+    if (key === want || recipe === want) keys.add(key);
+  }
+  if (keys.size !== 1) return null;
+  return [...keys][0];
+}
+
+/**
  * Creation-time PREVIEW (and quantity hold) of which hub batches would ship.
  * The real pick happens again at dispatch; expired batches are included and flagged, not skipped.
+ * Callers must pass one product's batches. This function does not separate SKUs.
  */
 export function allocateHubProductItems(
   batches: PreviewBatch[],
